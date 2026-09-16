@@ -1,0 +1,17 @@
+{
+  "role": "agent",
+  "node_id": "agt_replace",
+  "controller_url": "https://panel.example.com",
+  "credential": "replace_with_enrollment_result",
+  "poll_interval": "15s",
+  "status_interval": "10s",
+  "gateway": {
+    "socks_listen": "127.0.0.1:18080",
+    "tunnel_listen": "127.0.0.1:18081",
+    "tunnel_path": "/tunnel",
+    "xray_binary": "/usr/local/bin/xray",
+    "xray_config_path": "/var/lib/xmesh/xray.json",
+    "udp_idle_timeout": "2m",
+    "max_udp_associations": 1024
+  }
+}

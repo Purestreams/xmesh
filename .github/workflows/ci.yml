@@ -1,0 +1,19 @@
+name: ci
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: jdx/mise-action@v3
+        with:
+          install: true
+          cache: true
+      - run: mise exec -- go test ./...
+      - run: mise exec -- go vet ./...
+      - run: mise exec -- go build ./cmd/xmesh
+      - run: sh -n scripts/install.sh scripts/package.sh

@@ -1,0 +1,513 @@
+package controller
+
+import (
+	"fmt"
+	"net/http"
+	"strconv"
+	"strings"
+	"time"
+
+	"xmesh/internal/auth"
+	"xmesh/internal/identity"
+	"xmesh/internal/model"
+)
+
+func (s *Server) createUser(w http.ResponseWriter, r *http.Request) {
+	name := strings.TrimSpace(r.FormValue("name"))
+	if name == "" {
+		http.Error(w, "name is required", http.StatusBadRequest)
+		return
+	}
+	id, err := newID("usr")
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	token, err := identity.Token(32)
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	err = s.store.Update(func(state *model.State) error {
+		state.Users[id] = model.User{ID: id, Name: name, Enabled: true, SubscriptionToken: token, CreatedAt: s.now().UTC()}
+		return nil
+	})
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+func (s *Server) toggleUser(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	err := s.store.Update(func(state *model.State) error {
+		user, ok := state.Users[id]
+		if !ok {
+			return fmt.Errorf("user not found")
+		}
+		user.Enabled = !user.Enabled
+		state.Users[id] = user
+		for grantID, grant := range state.Grants {
+			if grant.UserID == id {
+				grant.Published = false
+				state.Grants[grantID] = grant
+				bumpGatewayForAttachment(state, grant.AttachmentID)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		http.Error(w, err.Error(), 404)
+		return
+	}
+	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+func (s *Server) resetSubscription(w http.ResponseWriter, r *http.Request) {
+	token, err := identity.Token(32)
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	err = s.store.Update(func(state *model.State) error {
+		user, ok := state.Users[r.PathValue("id")]
+		if !ok {
+			return fmt.Errorf("user not found")
+		}
+		user.SubscriptionToken = token
+		state.Users[user.ID] = user
+		return nil
+	})
+	if err != nil {
+		http.Error(w, err.Error(), 404)
+		return
+	}
+	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+func (s *Server) createGateway(w http.ResponseWriter, r *http.Request) {
+	name := strings.TrimSpace(r.FormValue("name"))
+	host := strings.TrimSpace(r.FormValue("public_host"))
+	path := strings.TrimSpace(r.FormValue("vmess_path"))
+	port, err := parsePositive(r.FormValue("vmess_port"), 8080)
+	if err != nil || port > 65535 || name == "" || host == "" {
+		http.Error(w, "valid name, public host, and port are required", 400)
+		return
+	}
+	if path == "" {
+		path = "/proxy"
+	}
+	if !strings.HasPrefix(path, "/") {
+		http.Error(w, "VMess path must start with /", 400)
+		return
+	}
+	id, err := newID("gw")
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	err = s.store.Update(func(state *model.State) error {
+		state.Gateways[id] = model.Gateway{ID: id, Name: name, PublicHost: host, VMessPort: port, VMessPath: path, VMessHost: strings.TrimSpace(r.FormValue("vmess_host")), Enabled: true, DesiredVersion: 1, CreatedAt: s.now().UTC()}
+		return nil
+	})
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	http.Redirect(w, r, "/", 303)
+}
+
+func (s *Server) createAgent(w http.ResponseWriter, r *http.Request) {
+	name := strings.TrimSpace(r.FormValue("name"))
+	if name == "" {
+		http.Error(w, "name is required", 400)
+		return
+	}
+	id, err := newID("agt")
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	err = s.store.Update(func(state *model.State) error {
+		allowedCIDRs := splitCSV(r.FormValue("allowed_cidrs"))
+		if len(allowedCIDRs) == 0 {
+			allowedCIDRs = []string{"0.0.0.0/0", "::/0"}
+		}
+		state.Agents[id] = model.Agent{ID: id, Name: name, Enabled: true, AllowedCIDRs: allowedCIDRs, DeniedCIDRs: splitCSV(r.FormValue("denied_cidrs")), DesiredVersion: 1, CreatedAt: s.now().UTC()}
+		return nil
+	})
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	http.Redirect(w, r, "/", 303)
+}
+
+func (s *Server) toggleGateway(w http.ResponseWriter, r *http.Request) {
+	err := s.store.Update(func(state *model.State) error {
+		gateway, ok := state.Gateways[r.PathValue("id")]
+		if !ok {
+			return fmt.Errorf("gateway not found")
+		}
+		gateway.Enabled = !gateway.Enabled
+		gateway.DesiredVersion++
+		state.Gateways[gateway.ID] = gateway
+		if !gateway.Enabled {
+			for id, grant := range state.Grants {
+				attachment := state.Attachments[grant.AttachmentID]
+				if attachment.GatewayID == gateway.ID {
+					grant.Published = false
+					state.Grants[id] = grant
+				}
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		http.Error(w, err.Error(), 404)
+		return
+	}
+	http.Redirect(w, r, "/", 303)
+}
+
+func (s *Server) toggleAgent(w http.ResponseWriter, r *http.Request) {
+	err := s.store.Update(func(state *model.State) error {
+		agent, ok := state.Agents[r.PathValue("id")]
+		if !ok {
+			return fmt.Errorf("agent not found")
+		}
+		agent.Enabled = !agent.Enabled
+		agent.DesiredVersion++
+		state.Agents[agent.ID] = agent
+		for _, attachment := range state.Attachments {
+			if attachment.AgentID != agent.ID {
+				continue
+			}
+			bumpGateway(state, attachment.GatewayID)
+			if !agent.Enabled {
+				for id, grant := range state.Grants {
+					if grant.AttachmentID == attachment.ID {
+						grant.Published = false
+						state.Grants[id] = grant
+					}
+				}
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		http.Error(w, err.Error(), 404)
+		return
+	}
+	http.Redirect(w, r, "/", 303)
+}
+
+func (s *Server) toggleAttachment(w http.ResponseWriter, r *http.Request) {
+	err := s.store.Update(func(state *model.State) error {
+		attachment, ok := state.Attachments[r.PathValue("id")]
+		if !ok {
+			return fmt.Errorf("attachment not found")
+		}
+		attachment.Enabled = !attachment.Enabled
+		state.Attachments[attachment.ID] = attachment
+		bumpGateway(state, attachment.GatewayID)
+		bumpAgent(state, attachment.AgentID)
+		if !attachment.Enabled {
+			for id, grant := range state.Grants {
+				if grant.AttachmentID == attachment.ID {
+					grant.Published = false
+					state.Grants[id] = grant
+				}
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		http.Error(w, err.Error(), 404)
+		return
+	}
+	http.Redirect(w, r, "/", 303)
+}
+
+func (s *Server) toggleLink(w http.ResponseWriter, r *http.Request) {
+	err := s.store.Update(func(state *model.State) error {
+		link, ok := state.Links[r.PathValue("id")]
+		if !ok {
+			return fmt.Errorf("link not found")
+		}
+		link.Enabled = !link.Enabled
+		state.Links[link.ID] = link
+		attachment := state.Attachments[link.AttachmentID]
+		bumpGateway(state, attachment.GatewayID)
+		bumpAgent(state, attachment.AgentID)
+		return nil
+	})
+	if err != nil {
+		http.Error(w, err.Error(), 404)
+		return
+	}
+	http.Redirect(w, r, "/", 303)
+}
+
+func (s *Server) updateLinkPolicy(w http.ResponseWriter, r *http.Request) {
+	priority, err := strconv.Atoi(r.FormValue("priority"))
+	if err != nil || priority < 0 {
+		http.Error(w, "invalid priority", 400)
+		return
+	}
+	weight, err := parsePositive(r.FormValue("weight"), 1)
+	if err != nil {
+		http.Error(w, "invalid weight", 400)
+		return
+	}
+	connections, err := parsePositive(r.FormValue("connections"), 2)
+	if err != nil {
+		http.Error(w, "invalid connections", 400)
+		return
+	}
+	maxStreams, err := parsePositive(r.FormValue("max_streams"), 256)
+	if err != nil {
+		http.Error(w, "invalid max streams", 400)
+		return
+	}
+	err = s.store.Update(func(state *model.State) error {
+		link, ok := state.Links[r.PathValue("id")]
+		if !ok {
+			return fmt.Errorf("link not found")
+		}
+		link.Priority, link.Weight, link.Connections, link.MaxStreams = priority, weight, connections, maxStreams
+		state.Links[link.ID] = link
+		attachment := state.Attachments[link.AttachmentID]
+		bumpGateway(state, attachment.GatewayID)
+		bumpAgent(state, attachment.AgentID)
+		return nil
+	})
+	if err != nil {
+		http.Error(w, err.Error(), 404)
+		return
+	}
+	http.Redirect(w, r, "/", 303)
+}
+
+func (s *Server) createAttachment(w http.ResponseWriter, r *http.Request) {
+	gatewayID, agentID := r.FormValue("gateway_id"), r.FormValue("agent_id")
+	id, err := newID("node")
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	err = s.store.Update(func(state *model.State) error {
+		if _, ok := state.Gateways[gatewayID]; !ok {
+			return fmt.Errorf("gateway not found")
+		}
+		if _, ok := state.Agents[agentID]; !ok {
+			return fmt.Errorf("agent not found")
+		}
+		for _, attachment := range state.Attachments {
+			if attachment.GatewayID == gatewayID && attachment.AgentID == agentID {
+				return fmt.Errorf("attachment already exists")
+			}
+		}
+		state.Attachments[id] = model.Attachment{ID: id, GatewayID: gatewayID, AgentID: agentID, Enabled: true, CreatedAt: s.now().UTC()}
+		bumpGateway(state, gatewayID)
+		bumpAgent(state, agentID)
+		return nil
+	})
+	if err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	http.Redirect(w, r, "/", 303)
+}
+
+func (s *Server) createLink(w http.ResponseWriter, r *http.Request) {
+	attachmentID := r.FormValue("attachment_id")
+	name, linkURL := strings.TrimSpace(r.FormValue("name")), strings.TrimSpace(r.FormValue("url"))
+	priority, err := strconv.Atoi(r.FormValue("priority"))
+	if err != nil || priority < 0 {
+		http.Error(w, "priority must be zero or greater", 400)
+		return
+	}
+	weight, err := parsePositive(r.FormValue("weight"), 1)
+	if err != nil {
+		http.Error(w, "invalid weight", 400)
+		return
+	}
+	connections, err := parsePositive(r.FormValue("connections"), 2)
+	if err != nil {
+		http.Error(w, "invalid connections", 400)
+		return
+	}
+	maxStreams, err := parsePositive(r.FormValue("max_streams"), 256)
+	if err != nil {
+		http.Error(w, "invalid max streams", 400)
+		return
+	}
+	if name == "" {
+		http.Error(w, "name is required", 400)
+		return
+	}
+	if err := validateURL(linkURL); err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	id, err := newID("lnk")
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	tunnelToken := auth.Derive(s.cfg.sessionKey(), "tunnel", id)
+	err = s.store.Update(func(state *model.State) error {
+		attachment, ok := state.Attachments[attachmentID]
+		if !ok {
+			return fmt.Errorf("attachment not found")
+		}
+		state.Links[id] = model.Link{ID: id, AttachmentID: attachmentID, Name: name, URL: linkURL, HTTPHost: strings.TrimSpace(r.FormValue("http_host")), TLSServerName: strings.TrimSpace(r.FormValue("tls_server_name")), TLSVerify: r.FormValue("tls_verify") == "on", Priority: priority, Weight: weight, Connections: connections, MaxStreams: maxStreams, Enabled: true, TunnelTokenHash: auth.SecretHash(tunnelToken), CreatedAt: s.now().UTC()}
+		bumpGateway(state, attachment.GatewayID)
+		bumpAgent(state, attachment.AgentID)
+		return nil
+	})
+	if err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	http.Redirect(w, r, "/", 303)
+}
+
+func (s *Server) createGrant(w http.ResponseWriter, r *http.Request) {
+	userID, attachmentID := r.FormValue("user_id"), r.FormValue("attachment_id")
+	id, err := newID("grt")
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	uuid, err := identity.UUID()
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	password, err := identity.Token(24)
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	err = s.store.Update(func(state *model.State) error {
+		if _, ok := state.Users[userID]; !ok {
+			return fmt.Errorf("user not found")
+		}
+		if _, ok := state.Attachments[attachmentID]; !ok {
+			return fmt.Errorf("attachment not found")
+		}
+		for _, grant := range state.Grants {
+			if grant.UserID == userID && grant.AttachmentID == attachmentID {
+				return fmt.Errorf("grant already exists")
+			}
+		}
+		state.Grants[id] = model.Grant{ID: id, UserID: userID, AttachmentID: attachmentID, VMessUUID: uuid, SOCKSUsername: id, SOCKSPassword: password, Enabled: true, Published: false, CreatedAt: s.now().UTC()}
+		bumpGatewayForAttachment(state, attachmentID)
+		return nil
+	})
+	if err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	http.Redirect(w, r, "/", 303)
+}
+
+func (s *Server) toggleGrant(w http.ResponseWriter, r *http.Request) {
+	err := s.store.Update(func(state *model.State) error {
+		grant, ok := state.Grants[r.PathValue("id")]
+		if !ok {
+			return fmt.Errorf("grant not found")
+		}
+		grant.Enabled = !grant.Enabled
+		grant.Published = false
+		state.Grants[grant.ID] = grant
+		bumpGatewayForAttachment(state, grant.AttachmentID)
+		return nil
+	})
+	if err != nil {
+		http.Error(w, err.Error(), 404)
+		return
+	}
+	http.Redirect(w, r, "/", 303)
+}
+
+func (s *Server) createEnrollment(w http.ResponseWriter, r *http.Request) {
+	role := model.Role(r.FormValue("role"))
+	nodeID := r.FormValue("node_id")
+	if role != model.RoleGateway && role != model.RoleAgent {
+		http.Error(w, "invalid role", 400)
+		return
+	}
+	state := s.store.Snapshot()
+	if role == model.RoleGateway {
+		if _, ok := state.Gateways[nodeID]; !ok {
+			http.Error(w, "gateway not found", 404)
+			return
+		}
+	}
+	if role == model.RoleAgent {
+		if _, ok := state.Agents[nodeID]; !ok {
+			http.Error(w, "agent not found", 404)
+			return
+		}
+	}
+	if s.cfg.ReleaseBaseURL == "" || s.cfg.ReleaseVersion == "" {
+		http.Error(w, "release_base_url and release_version must be configured before generating installers", 409)
+		return
+	}
+	token, err := identity.Token(32)
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	id, err := newID("enr")
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	err = s.store.Update(func(state *model.State) error {
+		state.Enrollments[id] = model.Enrollment{ID: id, NodeID: nodeID, Role: role, TokenHash: auth.SecretHash(token), ExpiresAt: s.now().Add(30 * time.Minute).UTC(), CreatedAt: s.now().UTC()}
+		return nil
+	})
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	releaseBase := strings.TrimSuffix(s.cfg.ReleaseBaseURL, "/")
+	scriptURL := releaseBase + "/" + s.cfg.ReleaseVersion + "/install.sh"
+	command := fmt.Sprintf("curl -fsSL %s | sudo sh -s -- --controller %s --role %s --enrollment-token %s --version %s --release-base-url %s", shellQuote(scriptURL), shellQuote(s.cfg.PublicURL), shellQuote(string(role)), shellQuote(token), shellQuote(s.cfg.ReleaseVersion), shellQuote(releaseBase))
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	_, _ = fmt.Fprintf(w, "This one-time enrollment token expires in 30 minutes.\n\n%s\n", command)
+}
+
+func bumpGatewayForAttachment(state *model.State, attachmentID string) {
+	if attachment, ok := state.Attachments[attachmentID]; ok {
+		bumpGateway(state, attachment.GatewayID)
+	}
+}
+func bumpGateway(state *model.State, id string) {
+	gateway := state.Gateways[id]
+	gateway.DesiredVersion++
+	state.Gateways[id] = gateway
+}
+func bumpAgent(state *model.State, id string) {
+	agent := state.Agents[id]
+	agent.DesiredVersion++
+	state.Agents[id] = agent
+}
+
+func shellQuote(value string) string { return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'" }
+
+func splitCSV(value string) []string {
+	var result []string
+	for _, part := range strings.Split(value, ",") {
+		if item := strings.TrimSpace(part); item != "" {
+			result = append(result, item)
+		}
+	}
+	return result
+}

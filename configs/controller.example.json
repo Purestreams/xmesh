@@ -1,0 +1,11 @@
+{
+  "listen": "127.0.0.1:8088",
+  "public_url": "https://panel.example.com",
+  "state_path": "/var/lib/xmesh/controller-state.json",
+  "admin_username": "admin",
+  "admin_password_hash": "$2a$10$replace.with.output.from.xmesh.hash-password",
+  "session_secret": "replace_with_output_from_xmesh_generate-secret",
+  "release_base_url": "https://github.com/OWNER/xmesh/releases/download",
+  "release_version": "v0.1.0",
+  "node_offline_after_seconds": 45
+}

@@ -1,0 +1,40 @@
+package controller
+
+import "xmesh/internal/model"
+
+type GatewayConfig struct {
+	Revision uint64              `json:"revision"`
+	Gateway  model.Gateway       `json:"gateway"`
+	Grants   []model.Grant       `json:"grants"`
+	Links    []GatewayLinkConfig `json:"links"`
+}
+
+type GatewayLinkConfig struct {
+	model.Link
+	AgentID     string `json:"agent_id"`
+	TunnelToken string `json:"tunnel_token"`
+}
+
+type AgentConfig struct {
+	Revision uint64            `json:"revision"`
+	Agent    model.Agent       `json:"agent"`
+	Links    []AgentLinkConfig `json:"links"`
+	GrantIDs []string          `json:"grant_ids"`
+}
+
+type AgentLinkConfig struct {
+	model.Link
+	GatewayID   string `json:"gateway_id"`
+	TunnelToken string `json:"tunnel_token"`
+}
+
+type EnrollmentRequest struct {
+	Token string `json:"token"`
+}
+
+type EnrollmentResponse struct {
+	Role       model.Role `json:"role"`
+	NodeID     string     `json:"node_id"`
+	Credential string     `json:"credential"`
+	ConfigURL  string     `json:"config_url"`
+}
