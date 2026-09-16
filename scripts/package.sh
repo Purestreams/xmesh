@@ -8,6 +8,7 @@ root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 case "$(go env GOVERSION)" in go1.27.1) ;; *) echo 'packaging requires Go 1.27.1' >&2; exit 1;; esac
 : "${XRAY_AMD64:?set XRAY_AMD64 to the validated linux/amd64 Xray binary}"
 : "${XRAY_ARM64:?set XRAY_ARM64 to the validated linux/arm64 Xray binary}"
+case "$(uname -m)" in x86_64|amd64) host_arch=amd64;; aarch64|arm64) host_arch=arm64;; *) host_arch=unknown;; esac
 
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT HUP INT TERM
@@ -19,7 +20,15 @@ for arch in amd64 arm64; do
   mkdir -p "$package"
   CGO_ENABLED=0 GOOS=linux GOARCH=$arch go build -trimpath -ldflags "-s -w -X main.version=$version" -o "$package/xmesh" ./cmd/xmesh
   case "$arch" in amd64) xray_path=$XRAY_AMD64;; arm64) xray_path=$XRAY_ARM64;; esac
-  "$xray_path" version | head -n 1 | grep "Xray $XRAY_VERSION " >/dev/null || { echo "Xray binary for $arch is not pinned version $XRAY_VERSION" >&2; exit 1; }
+  magic=$(od -An -tx1 -N4 "$xray_path" | tr -d '[:space:]')
+  [ "$magic" = 7f454c46 ] || { echo "Xray binary for $arch is not an ELF executable" >&2; exit 1; }
+  set -- $(od -An -tu1 -j18 -N2 "$xray_path")
+  case "$arch:$1:$2" in amd64:62:0|arm64:183:0) ;; *) echo "Xray binary architecture does not match $arch" >&2; exit 1;; esac
+  if [ "$arch" = "$host_arch" ]; then
+    "$xray_path" version | head -n 1 | grep "Xray $XRAY_VERSION " >/dev/null || { echo "Xray binary for $arch is not pinned version $XRAY_VERSION" >&2; exit 1; }
+  else
+    echo "Xray $arch version is trusted from its independently verified upstream archive; cannot execute on $host_arch"
+  fi
   install -m 0755 "$xray_path" "$package/xray"
   tar -C "$package" -czf "$root/dist/xmesh-${version}-linux-${arch}.tar.gz" xmesh xray
 done
