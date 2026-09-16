@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"xmesh/internal/identity"
-	"xmesh/internal/model"
 	"xmesh/internal/protocol"
 	"xmesh/internal/relay"
 )
@@ -60,6 +59,7 @@ func (r *Runtime) handleSOCKS(conn net.Conn, udpSem chan struct{}) {
 	if !ok {
 		return
 	}
+	stats := r.grantCounters(grant.ID)
 	command, target, err := readSOCKSRequest(reader)
 	if err != nil {
 		_ = writeSOCKSReply(conn, 1, nil)
@@ -76,17 +76,16 @@ func (r *Runtime) handleSOCKS(conn net.Conn, udpSem chan struct{}) {
 		defer lease.Release()
 		r.tcpConnections.Add(1)
 		defer r.tcpConnections.Add(-1)
-		r.updateGrant(grant.ID, func(status *model.GrantStatus) { status.TCPConnections++ })
-		defer r.updateGrant(grant.ID, func(status *model.GrantStatus) { status.TCPConnections-- })
+		stats.tcp.Add(1)
+		defer stats.tcp.Add(-1)
 		if err := writeSOCKSReply(conn, 0, &net.TCPAddr{IP: net.IPv4zero, Port: 0}); err != nil {
 			stream.Close()
 			return
 		}
 		_ = conn.SetDeadline(time.Time{})
-		relay.Bidirectional(conn, stream, func(n int) {
-			r.updateGrant(grant.ID, func(status *model.GrantStatus) { status.UploadBytes += uint64(n) })
-		}, func(n int) {
-			r.updateGrant(grant.ID, func(status *model.GrantStatus) { status.DownloadBytes += uint64(n) })
+		relay.Bidirectional(conn, stream, func(n int) { stats.upload.Add(uint64(n)) }, func(n int) { stats.download.Add(uint64(n)) }, relay.Options{
+			WriteStallTimeout:  r.local.WriteStallTimeout.Value(30 * time.Second),
+			OnLeftToRightWrite: lease.Session.ObserveWrite,
 		})
 	case socksCommandUDPAssociate:
 		select {
@@ -98,9 +97,9 @@ func (r *Runtime) handleSOCKS(conn net.Conn, udpSem chan struct{}) {
 		}
 		r.udpAssociations.Add(1)
 		defer r.udpAssociations.Add(-1)
-		r.updateGrant(grant.ID, func(status *model.GrantStatus) { status.UDPAssociations++ })
-		defer r.updateGrant(grant.ID, func(status *model.GrantStatus) { status.UDPAssociations-- })
-		r.handleUDPAssociation(conn, reader, grant.ID, agentID)
+		stats.udp.Add(1)
+		defer stats.udp.Add(-1)
+		r.handleUDPAssociation(conn, reader, grant.ID, agentID, stats)
 	default:
 		_ = writeSOCKSReply(conn, 7, nil)
 	}
@@ -253,7 +252,7 @@ func mapSOCKSError(err error) byte {
 	return 1
 }
 
-func (r *Runtime) handleUDPAssociation(control net.Conn, reader *bufio.Reader, grantID, agentID string) {
+func (r *Runtime) handleUDPAssociation(control net.Conn, reader *bufio.Reader, grantID, agentID string, stats *grantCounters) {
 	udp, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0})
 	if err != nil {
 		_ = writeSOCKSReply(control, 1, nil)
@@ -267,7 +266,7 @@ func (r *Runtime) handleUDPAssociation(control net.Conn, reader *bufio.Reader, g
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go func() { one := make([]byte, 1); _, _ = reader.Read(one); cancel(); _ = udp.Close() }()
-	queue := make(chan protocol.Datagram, 64)
+	queue := newUDPQueue(r.local.Gateway.MaxUDPQueueBytes)
 	var client *net.UDPAddr
 	go func() {
 		buffer := make([]byte, 65535)
@@ -287,18 +286,17 @@ func (r *Runtime) handleUDPAssociation(control net.Conn, reader *bufio.Reader, g
 			if err != nil {
 				continue
 			}
-			select {
-			case queue <- datagram:
-			default:
-				r.logger.Warn("gateway UDP queue full; dropping datagram", "grant", grantID, "bytes", len(datagram.Payload))
+			if !queue.offer(datagram) {
+				drops := r.udpQueueDrops.Add(1)
+				if drops&(drops-1) == 0 {
+					r.logger.Warn("gateway UDP queue full; dropping datagrams", "grant", grantID, "drops", drops)
+				}
 			}
 		}
 	}()
-	var first protocol.Datagram
-	select {
-	case <-ctx.Done():
+	first, ok := queue.take(ctx)
+	if !ok {
 		return
-	case first = <-queue:
 	}
 	requestID, _ := identity.Token(12)
 	stream, lease, err := r.openStream(agentID, protocol.Message{Type: protocol.TypeUDP, Version: protocol.Version, GrantID: grantID, RequestID: requestID})
@@ -316,11 +314,11 @@ func (r *Runtime) handleUDPAssociation(control net.Conn, reader *bufio.Reader, g
 				errCh <- err
 				return
 			}
-			r.updateGrant(grantID, func(status *model.GrantStatus) { status.UploadBytes += uint64(len(datagram.Payload)) })
-			select {
-			case <-ctx.Done():
+			stats.upload.Add(uint64(len(datagram.Payload)))
+			var ok bool
+			datagram, ok = queue.take(ctx)
+			if !ok {
 				return
-			case datagram = <-queue:
 			}
 		}
 	}()
@@ -339,7 +337,7 @@ func (r *Runtime) handleUDPAssociation(control net.Conn, reader *bufio.Reader, g
 				errCh <- err
 				return
 			}
-			r.updateGrant(grantID, func(status *model.GrantStatus) { status.DownloadBytes += uint64(len(reply.Payload)) })
+			stats.download.Add(uint64(len(reply.Payload)))
 		}
 	}()
 	select {

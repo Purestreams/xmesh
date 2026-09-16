@@ -4,6 +4,7 @@ import (
 	"errors"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/xtaci/smux"
@@ -12,21 +13,43 @@ import (
 var ErrNoPath = errors.New("no healthy path available")
 
 type Session struct {
-	ID            string
-	AgentID       string
-	LinkID        string
-	Priority      int
-	Weight        int
-	MaxStreams    int
-	SMux          *smux.Session
-	Generation    uint64
-	Ready         bool
-	LastOK        time.Time
-	LastError     string
-	RTTMillis     float64
-	ProbeTimeouts uint64
-	ActiveStreams int
-	active        int
+	ID                 string
+	AgentID            string
+	LinkID             string
+	Priority           int
+	Weight             int
+	MaxStreams         int
+	SMux               *smux.Session
+	Generation         uint64
+	Ready              bool
+	LastOK             time.Time
+	LastError          string
+	RTTMillis          float64
+	ProbeTimeouts      uint64
+	ActiveStreams      int
+	WriteBlockedMillis uint64
+	WriteStalls        uint64
+	active             int
+	load               *sessionLoad
+}
+
+type sessionLoad struct {
+	writeNanos atomic.Uint64
+	stalls     atomic.Uint64
+	lastStall  atomic.Int64
+}
+
+// ObserveWrite records actual WSS stream write time. A recent write longer
+// than 20 ms biases only new streams away from this session for five seconds.
+func (s *Session) ObserveWrite(duration time.Duration) {
+	if s.load == nil {
+		return
+	}
+	if duration >= 20*time.Millisecond {
+		s.load.writeNanos.Add(uint64(duration.Nanoseconds()))
+		s.load.stalls.Add(1)
+		s.load.lastStall.Store(time.Now().UnixNano())
+	}
 }
 
 type Pool struct {
@@ -44,6 +67,9 @@ func (p *Pool) Add(session *Session) *Session {
 	}
 	if session.MaxStreams <= 0 {
 		session.MaxStreams = 1
+	}
+	if session.load == nil {
+		session.load = &sessionLoad{}
 	}
 	previous := p.sessions[session.ID]
 	p.sessions[session.ID] = session
@@ -129,9 +155,10 @@ func (p *Pool) Acquire(agentID string) (*Lease, error) {
 	if len(candidates) == 0 {
 		return nil, ErrNoPath
 	}
+	now := time.Now()
 	sort.Slice(candidates, func(i, j int) bool {
-		left := float64(candidates[i].active+1) / float64(candidates[i].Weight)
-		right := float64(candidates[j].active+1) / float64(candidates[j].Weight)
+		left := loadScore(candidates[i], now)
+		right := loadScore(candidates[j], now)
 		if left == right {
 			return candidates[i].ID < candidates[j].ID
 		}
@@ -142,6 +169,17 @@ func (p *Pool) Acquire(agentID string) (*Lease, error) {
 	return &Lease{Session: chosen, pool: p}, nil
 }
 
+func loadScore(session *Session, now time.Time) float64 {
+	penalty := 0
+	if session.load != nil {
+		last := session.load.lastStall.Load()
+		if last > 0 && now.Sub(time.Unix(0, last)) < 5*time.Second {
+			penalty = 1
+		}
+	}
+	return float64(session.active+1+penalty) / float64(session.Weight)
+}
+
 func (p *Pool) Snapshot() []Session {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -150,6 +188,10 @@ func (p *Pool) Snapshot() []Session {
 		copy := *session
 		copy.active = session.active
 		copy.ActiveStreams = session.active
+		if session.load != nil {
+			copy.WriteBlockedMillis = session.load.writeNanos.Load() / uint64(time.Millisecond)
+			copy.WriteStalls = session.load.stalls.Load()
+		}
 		result = append(result, copy)
 	}
 	return result

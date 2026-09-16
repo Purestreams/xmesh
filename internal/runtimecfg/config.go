@@ -10,13 +10,15 @@ import (
 )
 
 type Config struct {
-	Role           model.Role `json:"role"`
-	NodeID         string     `json:"node_id"`
-	ControllerURL  string     `json:"controller_url"`
-	Credential     string     `json:"credential"`
-	PollInterval   Duration   `json:"poll_interval"`
-	StatusInterval Duration   `json:"status_interval"`
-	Gateway        Gateway    `json:"gateway,omitempty"`
+	Role              model.Role `json:"role"`
+	NodeID            string     `json:"node_id"`
+	ControllerURL     string     `json:"controller_url"`
+	Credential        string     `json:"credential"`
+	PollInterval      Duration   `json:"poll_interval"`
+	StatusInterval    Duration   `json:"status_interval"`
+	WriteStallTimeout Duration   `json:"write_stall_timeout,omitempty"`
+	MaxActiveStreams  int        `json:"max_active_streams,omitempty"`
+	Gateway           Gateway    `json:"gateway,omitempty"`
 }
 
 type Gateway struct {
@@ -27,6 +29,7 @@ type Gateway struct {
 	XrayConfigPath     string   `json:"xray_config_path"`
 	UDPIdleTimeout     Duration `json:"udp_idle_timeout"`
 	MaxUDPAssociations int      `json:"max_udp_associations"`
+	MaxUDPQueueBytes   int      `json:"max_udp_queue_bytes,omitempty"`
 }
 
 type Duration time.Duration
@@ -83,6 +86,12 @@ func Load(path string) (Config, error) {
 	}
 	if cfg.Gateway.MaxUDPAssociations <= 0 {
 		cfg.Gateway.MaxUDPAssociations = 1024
+	}
+	if cfg.Gateway.MaxUDPQueueBytes <= 0 {
+		cfg.Gateway.MaxUDPQueueBytes = 256 << 10
+	}
+	if cfg.MaxActiveStreams <= 0 {
+		cfg.MaxActiveStreams = 1024
 	}
 	return cfg, nil
 }

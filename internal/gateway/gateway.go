@@ -41,11 +41,19 @@ type Runtime struct {
 	xrayError           atomic.Value
 	xrayAppliedRevision atomic.Uint64
 	grantMu             sync.Mutex
-	grantStats          map[string]*model.GrantStatus
+	grantStats          map[string]*grantCounters
+	udpQueueDrops       atomic.Uint64
+}
+
+type grantCounters struct {
+	upload   atomic.Uint64
+	download atomic.Uint64
+	tcp      atomic.Int64
+	udp      atomic.Int64
 }
 
 func New(local runtimecfg.Config, logger *slog.Logger) *Runtime {
-	return &Runtime{local: local, client: nodeclient.New(local.ControllerURL, local.Credential), logger: logger, pool: scheduler.New(), started: time.Now(), xrayApply: make(chan struct{}, 1), grantStats: map[string]*model.GrantStatus{}}
+	return &Runtime{local: local, client: nodeclient.New(local.ControllerURL, local.Credential), logger: logger, pool: scheduler.New(), started: time.Now(), xrayApply: make(chan struct{}, 1), grantStats: map[string]*grantCounters{}}
 }
 
 func (r *Runtime) Run(ctx context.Context) error {
@@ -136,6 +144,8 @@ func (r *Runtime) report(ctx context.Context) error {
 			status.RTTMillis = session.RTTMillis
 		}
 		status.ProbeTimeouts += session.ProbeTimeouts
+		status.WriteBlockedMillis += session.WriteBlockedMillis
+		status.WriteStalls += session.WriteStalls
 		links[session.LinkID] = status
 	}
 	linkList := make([]model.LinkStatus, 0, len(links))
@@ -148,19 +158,19 @@ func (r *Runtime) report(ctx context.Context) error {
 	xrayError, _ := r.xrayError.Load().(string)
 	ready := lastError == "" && r.xrayReady.Load()
 	grantList, upload, download := r.grantSnapshot()
-	nodeStatus := model.NodeStatus{NodeID: r.local.NodeID, Role: model.RoleGateway, Online: true, Ready: ready, DesiredVersion: config.Revision, AppliedVersion: r.xrayAppliedRevision.Load(), XrayReady: r.xrayReady.Load(), XrayError: xrayError, LastSeen: time.Now().UTC(), TunnelConnections: tunnelCount, TCPConnections: int(r.tcpConnections.Load()), UDPAssociations: int(r.udpAssociations.Load()), UploadBytes: upload, DownloadBytes: download, LastError: lastError}
+	nodeStatus := model.NodeStatus{NodeID: r.local.NodeID, Role: model.RoleGateway, Online: true, Ready: ready, DesiredVersion: config.Revision, AppliedVersion: r.xrayAppliedRevision.Load(), XrayReady: r.xrayReady.Load(), XrayError: xrayError, LastSeen: time.Now().UTC(), TunnelConnections: tunnelCount, TCPConnections: int(r.tcpConnections.Load()), UDPAssociations: int(r.udpAssociations.Load()), UploadBytes: upload, DownloadBytes: download, LastError: lastError, FailureCounters: map[string]uint64{"udp_queue_drops": r.udpQueueDrops.Load()}}
 	return r.client.Report(ctx, nodeStatus, linkList, grantList)
 }
 
-func (r *Runtime) updateGrant(id string, fn func(*model.GrantStatus)) {
+func (r *Runtime) grantCounters(id string) *grantCounters {
 	r.grantMu.Lock()
 	defer r.grantMu.Unlock()
 	status := r.grantStats[id]
 	if status == nil {
-		status = &model.GrantStatus{GrantID: id}
+		status = &grantCounters{}
 		r.grantStats[id] = status
 	}
-	fn(status)
+	return status
 }
 
 func (r *Runtime) grantSnapshot() ([]model.GrantStatus, uint64, uint64) {
@@ -168,8 +178,8 @@ func (r *Runtime) grantSnapshot() ([]model.GrantStatus, uint64, uint64) {
 	defer r.grantMu.Unlock()
 	result := make([]model.GrantStatus, 0, len(r.grantStats))
 	var upload, download uint64
-	for _, status := range r.grantStats {
-		copy := *status
+	for id, status := range r.grantStats {
+		copy := model.GrantStatus{GrantID: id, UploadBytes: status.upload.Load(), DownloadBytes: status.download.Load(), TCPConnections: int(status.tcp.Load()), UDPAssociations: int(status.udp.Load())}
 		result = append(result, copy)
 		upload += copy.UploadBytes
 		download += copy.DownloadBytes

@@ -34,6 +34,7 @@ type Runtime struct {
 	configFingerprint string
 	workers           map[string]context.CancelFunc
 	statuses          map[string]*linkRuntimeStatus
+	streamSlots       chan struct{}
 	tcpConnections    atomic.Int64
 	udpAssociations   atomic.Int64
 	lastError         atomic.Value
@@ -45,7 +46,11 @@ type linkRuntimeStatus struct {
 }
 
 func New(local runtimecfg.Config, logger *slog.Logger) *Runtime {
-	return &Runtime{local: local, client: nodeclient.New(local.ControllerURL, local.Credential), logger: logger, workers: map[string]context.CancelFunc{}, statuses: map[string]*linkRuntimeStatus{}}
+	limit := local.MaxActiveStreams
+	if limit <= 0 {
+		limit = 1024
+	}
+	return &Runtime{local: local, client: nodeclient.New(local.ControllerURL, local.Credential), logger: logger, workers: map[string]context.CancelFunc{}, statuses: map[string]*linkRuntimeStatus{}, streamSlots: make(chan struct{}, limit)}
 }
 
 func (r *Runtime) Run(ctx context.Context) error {
@@ -231,9 +236,28 @@ func (r *Runtime) runSession(ctx context.Context, key string, link controller.Ag
 		if err != nil {
 			return err
 		}
-		go r.handleStream(ctx, link.ID, stream)
+		if r.acquireStreamSlot() {
+			go func() {
+				defer r.releaseStreamSlot()
+				r.handleStream(ctx, link.ID, stream)
+			}()
+		} else {
+			r.updateStatus(link.ID, func(s *model.LinkStatus) { s.QueueDrops++ })
+			_ = stream.Close()
+		}
 	}
 }
+
+func (r *Runtime) acquireStreamSlot() bool {
+	select {
+	case r.streamSlots <- struct{}{}:
+		return true
+	default:
+		return false
+	}
+}
+
+func (r *Runtime) releaseStreamSlot() { <-r.streamSlots }
 
 func (r *Runtime) handleStream(ctx context.Context, linkID string, stream *smux.Stream) {
 	defer stream.Close()
@@ -283,7 +307,7 @@ func (r *Runtime) handleTCP(ctx context.Context, linkID string, stream *smux.Str
 		return
 	}
 	_ = stream.SetDeadline(time.Time{})
-	relay.Bidirectional(stream, target, func(n int) { r.addTraffic(linkID, uint64(n), 0) }, func(n int) { r.addTraffic(linkID, 0, uint64(n)) })
+	relay.Bidirectional(stream, target, func(n int) { r.addTraffic(linkID, uint64(n), 0) }, func(n int) { r.addTraffic(linkID, 0, uint64(n)) }, relay.Options{WriteStallTimeout: r.local.WriteStallTimeout.Value(30 * time.Second)})
 }
 
 func (r *Runtime) handleUDP(ctx context.Context, linkID string, stream *smux.Stream, policy accessPolicy, request protocol.Message) {

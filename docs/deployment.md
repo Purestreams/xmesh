@@ -66,6 +66,15 @@ values under `/proc/sys/net/ipv4/tcp_rmem` and `/proc/sys/net/ipv4/tcp_wmem`. Fo
 only the Agent-side setting is under xmesh operator control. Increasing smux buffers alone cannot
 compensate for a smaller kernel TCP ceiling.
 
+Tunnel data is copied with backpressure. A write that makes no progress for 30 seconds closes
+that business stream; an idle stream with no pending write is not timed out by this protection.
+Set `write_stall_timeout` in a node config to adjust it. The Agent accepts at most 1024 active
+business streams across its WSS sessions by default (`max_active_streams`); excess streams are
+rejected immediately. The Gateway bounds each UDP association's pending queue to 64 datagrams
+and 256 KiB of payload (`gateway.max_udp_queue_bytes`), and reports UDP queue drops and WSS
+write-stall metrics. New streams are temporarily steered away from a same-priority WSS session
+whose writes recently stalled; established streams are never migrated.
+
 ## Runtime boundaries
 
 - The client manages its own DNS, routing, IPv6 choice, and Gateway selection.

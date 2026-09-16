@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net"
 	"testing"
+	"time"
 
 	"github.com/xtaci/smux"
 )
@@ -21,6 +22,39 @@ func smuxPair(t *testing.T) (*smux.Session, func()) {
 	}
 	server := <-serverCh
 	return client, func() { client.Close(); server.Close(); left.Close(); right.Close() }
+}
+
+func TestAcquireAvoidsRecentlyBlockedSession(t *testing.T) {
+	a, closeA := smuxPair(t)
+	defer closeA()
+	b, closeB := smuxPair(t)
+	defer closeB()
+	pool := New()
+	first := &Session{ID: "a", AgentID: "agent", Weight: 1, MaxStreams: 4, SMux: a, Ready: true}
+	second := &Session{ID: "b", AgentID: "agent", Weight: 1, MaxStreams: 4, SMux: b, Ready: true}
+	pool.Add(first)
+	pool.Add(second)
+	first.ObserveWrite(25 * time.Millisecond)
+	lease, err := pool.Acquire("agent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lease.Session != second {
+		t.Fatal("new stream was assigned to recently blocked session")
+	}
+	lease.Release()
+	first.load.lastStall.Store(time.Now().Add(-6 * time.Second).UnixNano())
+	lease, err = pool.Acquire("agent")
+	if err != nil || lease.Session != first {
+		t.Fatalf("expired write stall still affected routing: lease=%v err=%v", lease, err)
+	}
+	lease.Release()
+	result := pool.Snapshot()
+	for _, session := range result {
+		if session.ID == "a" && (session.WriteStalls != 1 || session.WriteBlockedMillis != 25) {
+			t.Fatalf("write metrics missing: %+v", session)
+		}
+	}
 }
 
 func TestAcquireUsesHighestPriorityHealthyGroup(t *testing.T) {

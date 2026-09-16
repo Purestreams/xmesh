@@ -111,23 +111,25 @@ type NodeStatus struct {
 }
 
 type LinkStatus struct {
-	LinkID          string    `json:"link_id"`
-	ReporterNodeID  string    `json:"reporter_node_id"`
-	Online          bool      `json:"online"`
-	Ready           bool      `json:"ready"`
-	Generation      uint64    `json:"generation"`
-	Connections     int       `json:"connections"`
-	ActiveStreams   int       `json:"active_streams"`
-	TCPConnections  int       `json:"tcp_connections"`
-	UDPAssociations int       `json:"udp_associations"`
-	UploadBytes     uint64    `json:"upload_bytes"`
-	DownloadBytes   uint64    `json:"download_bytes"`
-	RTTMillis       float64   `json:"rtt_millis"`
-	LastSuccess     time.Time `json:"last_success,omitempty"`
-	LastError       string    `json:"last_error,omitempty"`
-	ProbeTimeouts   uint64    `json:"probe_timeouts"`
-	QueueDrops      uint64    `json:"queue_drops"`
-	LastSeen        time.Time `json:"last_seen"`
+	LinkID             string    `json:"link_id"`
+	ReporterNodeID     string    `json:"reporter_node_id"`
+	Online             bool      `json:"online"`
+	Ready              bool      `json:"ready"`
+	Generation         uint64    `json:"generation"`
+	Connections        int       `json:"connections"`
+	ActiveStreams      int       `json:"active_streams"`
+	TCPConnections     int       `json:"tcp_connections"`
+	UDPAssociations    int       `json:"udp_associations"`
+	UploadBytes        uint64    `json:"upload_bytes"`
+	DownloadBytes      uint64    `json:"download_bytes"`
+	RTTMillis          float64   `json:"rtt_millis"`
+	LastSuccess        time.Time `json:"last_success,omitempty"`
+	LastError          string    `json:"last_error,omitempty"`
+	ProbeTimeouts      uint64    `json:"probe_timeouts"`
+	QueueDrops         uint64    `json:"queue_drops"`
+	WriteBlockedMillis uint64    `json:"write_blocked_millis,omitempty"`
+	WriteStalls        uint64    `json:"write_stalls,omitempty"`
+	LastSeen           time.Time `json:"last_seen"`
 }
 
 type GrantStatus struct {
