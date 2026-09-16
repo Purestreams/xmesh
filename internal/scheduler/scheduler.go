@@ -36,7 +36,7 @@ type Pool struct {
 
 func New() *Pool { return &Pool{sessions: map[string]*Session{}} }
 
-func (p *Pool) Add(session *Session) {
+func (p *Pool) Add(session *Session) *Session {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if session.Weight <= 0 {
@@ -45,13 +45,17 @@ func (p *Pool) Add(session *Session) {
 	if session.MaxStreams <= 0 {
 		session.MaxStreams = 1
 	}
+	previous := p.sessions[session.ID]
 	p.sessions[session.ID] = session
+	return previous
 }
 
-func (p *Pool) Remove(id string) {
+func (p *Pool) Remove(id string, expected *Session) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	delete(p.sessions, id)
+	if p.sessions[id] == expected {
+		delete(p.sessions, id)
+	}
 }
 
 func (p *Pool) SetReady(id string, ready bool, err string) {

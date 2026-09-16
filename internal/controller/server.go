@@ -176,8 +176,8 @@ func (s *Server) panel(w http.ResponseWriter, r *http.Request) {
 	data := panelData{
 		State: state, CSRF: auth.Derive(s.cfg.sessionKey(), "csrf", cookie.Value),
 		PublicURL: strings.TrimSuffix(s.cfg.PublicURL, "/"),
-		Users:     sortedUsers(state), Gateways: sortedGateways(state), Agents: sortedAgents(state),
-		Attachments: sortedAttachments(state), Links: sortedLinks(state), Grants: sortedGrants(state),
+		UserList:  sortedUsers(state), GatewayList: sortedGateways(state), AgentList: sortedAgents(state),
+		AttachmentList: sortedAttachments(state), LinkList: sortedLinks(state), GrantList: sortedGrants(state),
 		LinkSummary: summarizeLinks(state), LinkReports: sortedLinkReports(state), GrantSummary: summarizeGrants(state),
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -280,17 +280,17 @@ func newID(prefix string) (string, error) {
 
 type panelData struct {
 	model.State
-	CSRF         string
-	PublicURL    string
-	Users        []model.User
-	Gateways     []model.Gateway
-	Agents       []model.Agent
-	Attachments  []model.Attachment
-	Links        []model.Link
-	Grants       []model.Grant
-	LinkSummary  map[string]model.LinkStatus
-	LinkReports  []model.LinkStatus
-	GrantSummary map[string]model.GrantStatus
+	CSRF           string
+	PublicURL      string
+	UserList       []model.User
+	GatewayList    []model.Gateway
+	AgentList      []model.Agent
+	AttachmentList []model.Attachment
+	LinkList       []model.Link
+	GrantList      []model.Grant
+	LinkSummary    map[string]model.LinkStatus
+	LinkReports    []model.LinkStatus
+	GrantSummary   map[string]model.GrantStatus
 }
 
 func sortedUsers(s model.State) []model.User {

@@ -49,6 +49,23 @@ Agent Link URLs should normally be `wss://` addresses exposed by an external TLS
 and forwarded to the Gateway's loopback tunnel handler. Address, HTTP Host, and TLS server name
 are independent settings. Disable TLS verification only for a deliberately controlled test link.
 
+### High-latency links
+
+The tunnel's smux v2 receive windows are sized for at least 50 Mbps at 400 ms RTT, but the
+operating-system TCP auto-tuning ceiling must also exceed the path bandwidth-delay product. On a
+Linux Agent, and on a self-managed WSS edge or reverse proxy, use at least a 16 MiB ceiling for a
+100 Mbps / 400 ms path:
+
+```text
+net.ipv4.tcp_rmem = 4096 1048576 16777216
+net.ipv4.tcp_wmem = 4096 1048576 16777216
+```
+
+Apply these through the host's normal sysctl configuration management and verify the effective
+values under `/proc/sys/net/ipv4/tcp_rmem` and `/proc/sys/net/ipv4/tcp_wmem`. For a managed CDN,
+only the Agent-side setting is under xmesh operator control. Increasing smux buffers alone cannot
+compensate for a smaller kernel TCP ceiling.
+
 ## Runtime boundaries
 
 - The client manages its own DNS, routing, IPv6 choice, and Gateway selection.

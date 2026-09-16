@@ -294,44 +294,61 @@ func (r *Runtime) handleUDPAssociation(control net.Conn, reader *bufio.Reader, g
 			}
 		}
 	}()
+	var first protocol.Datagram
+	select {
+	case <-ctx.Done():
+		return
+	case first = <-queue:
+	}
+	requestID, _ := identity.Token(12)
+	stream, lease, err := r.openStream(agentID, protocol.Message{Type: protocol.TypeUDP, Version: protocol.Version, GrantID: grantID, RequestID: requestID})
+	if err != nil {
+		r.logger.Warn("gateway UDP stream open failed", "grant", grantID, "error", err)
+		return
+	}
+	defer stream.Close()
+	defer lease.Release()
+	errCh := make(chan error, 2)
 	go func() {
+		datagram := first
 		for {
+			if err := protocol.WriteDatagram(stream, datagram); err != nil {
+				errCh <- err
+				return
+			}
+			r.updateGrant(grantID, func(status *model.GrantStatus) { status.UploadBytes += uint64(len(datagram.Payload)) })
 			select {
 			case <-ctx.Done():
 				return
-			case datagram := <-queue:
-				requestID, _ := identity.Token(12)
-				stream, lease, err := r.openStream(agentID, protocol.Message{Type: protocol.TypeUDP, Version: protocol.Version, GrantID: grantID, RequestID: requestID})
-				if err != nil {
-					r.logger.Warn("gateway UDP stream open failed", "grant", grantID, "error", err)
-					continue
-				}
-				if err := protocol.WriteDatagram(stream, datagram); err != nil {
-					r.logger.Warn("gateway UDP stream write failed", "grant", grantID, "bytes", len(datagram.Payload), "error", err)
-					stream.Close()
-					lease.Release()
-					continue
-				}
-				r.updateGrant(grantID, func(status *model.GrantStatus) { status.UploadBytes += uint64(len(datagram.Payload)) })
-				reply, err := protocol.ReadDatagram(stream)
-				stream.Close()
-				lease.Release()
-				if err != nil {
-					r.logger.Warn("gateway UDP stream read failed", "grant", grantID, "error", err)
-					continue
-				}
-				packet, err := encodeSOCKSUDP(reply)
-				if err == nil && client != nil {
-					if _, err := udp.WriteToUDP(packet, client); err != nil {
-						r.logger.Warn("gateway UDP client write failed", "grant", grantID, "bytes", len(packet), "error", err)
-						continue
-					}
-					r.updateGrant(grantID, func(status *model.GrantStatus) { status.DownloadBytes += uint64(len(reply.Payload)) })
-				}
+			case datagram = <-queue:
 			}
 		}
 	}()
-	<-ctx.Done()
+	go func() {
+		for {
+			reply, err := protocol.ReadDatagram(stream)
+			if err != nil {
+				errCh <- err
+				return
+			}
+			packet, err := encodeSOCKSUDP(reply)
+			if err != nil {
+				continue
+			}
+			if _, err := udp.WriteToUDP(packet, client); err != nil {
+				errCh <- err
+				return
+			}
+			r.updateGrant(grantID, func(status *model.GrantStatus) { status.DownloadBytes += uint64(len(reply.Payload)) })
+		}
+	}()
+	select {
+	case <-ctx.Done():
+	case err := <-errCh:
+		if ctx.Err() == nil && !errors.Is(err, net.ErrClosed) && !errors.Is(err, io.EOF) {
+			r.logger.Warn("gateway UDP tunnel ended", "grant", grantID, "error", err)
+		}
+	}
 }
 
 func decodeSOCKSUDP(packet []byte) (protocol.Datagram, error) {

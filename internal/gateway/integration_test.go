@@ -69,7 +69,10 @@ func TestSOCKSTCPAndUDPOverTunnel(t *testing.T) {
 
 	udpTarget := startUDPEcho(t)
 	defer udpTarget.Close()
+	secondUDPTarget := startUDPEcho(t)
+	defer secondUDPTarget.Close()
 	control := dialSOCKS(t, socksAddress, grant.SOCKSUsername, grant.SOCKSPassword, 3, "0.0.0.0:0")
+	defer control.Close()
 	// dialSOCKS exposes the bound relay through the helper's wrapped connection.
 	bound := control.(*socksTestConn).bound
 	udpClient, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0})
@@ -78,8 +81,15 @@ func TestSOCKSTCPAndUDPOverTunnel(t *testing.T) {
 	}
 	defer udpClient.Close()
 	target := udpTarget.LocalAddr().(*net.UDPAddr)
-	assertUDPEcho(t, udpClient, bound, target, []byte("udp-through-xmesh"), 5*time.Second)
-	assertUDPEcho(t, udpClient, bound, target, bytes.Repeat([]byte{0x5a}, 4_000), 5*time.Second)
+	secondTarget := secondUDPTarget.LocalAddr().(*net.UDPAddr)
+	for _, payload := range [][]byte{
+		[]byte("udp-through-xmesh"),
+		bytes.Repeat([]byte{0x5a}, 8_000),
+		bytes.Repeat([]byte{0x6b}, 32_000),
+	} {
+		assertUDPEcho(t, udpClient, bound, target, payload, 5*time.Second)
+	}
+	assertUDPEcho(t, udpClient, bound, secondTarget, []byte("second-target-same-association"), 5*time.Second)
 }
 
 // These tiny test hooks keep the integration test in control of the controller-free runtime.
@@ -202,20 +212,30 @@ func assertUDPEcho(t *testing.T, client *net.UDPConn, relay, target *net.UDPAddr
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := client.WriteToUDP(packet, relay); err != nil {
-		t.Fatal(err)
-	}
-	_ = client.SetReadDeadline(time.Now().Add(timeout))
+	deadline := time.Now().Add(timeout)
 	buffer := make([]byte, 65535)
-	n, _, err := client.ReadFromUDP(buffer)
-	if err != nil {
-		t.Fatalf("read %d-byte UDP echo: %v", len(want), err)
+	for time.Now().Before(deadline) {
+		if _, err := client.WriteToUDP(packet, relay); err != nil {
+			t.Fatal(err)
+		}
+		attemptDeadline := time.Now().Add(500 * time.Millisecond)
+		if attemptDeadline.After(deadline) {
+			attemptDeadline = deadline
+		}
+		_ = client.SetReadDeadline(attemptDeadline)
+		for {
+			n, _, err := client.ReadFromUDP(buffer)
+			if err != nil {
+				if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+					break
+				}
+				t.Fatalf("read %d-byte UDP echo: %v", len(want), err)
+			}
+			got, err := decodeSOCKSUDPForTest(buffer[:n])
+			if err == nil && bytes.Equal(got, want) {
+				return
+			}
+		}
 	}
-	got, err := decodeSOCKSUDPForTest(buffer[:n])
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(got, want) {
-		t.Fatalf("UDP payload mismatch: got %d bytes, want %d", len(got), len(want))
-	}
+	t.Fatalf("read %d-byte UDP echo: timed out after %s", len(want), timeout)
 }

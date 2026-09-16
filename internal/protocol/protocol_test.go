@@ -22,7 +22,11 @@ func TestMessageRoundTrip(t *testing.T) {
 
 func TestDatagramPreservesBoundariesAndZeroPayload(t *testing.T) {
 	var b bytes.Buffer
-	want := []Datagram{{Host: "1.1.1.1", Port: 53, Payload: []byte{}}, {Host: "example.com", Port: 9999, Payload: []byte{0, 1, 2, 3}}}
+	want := []Datagram{
+		{Host: "1.1.1.1", Port: 53, Payload: []byte{}},
+		{Host: "example.com", Port: 9999, Payload: []byte{0, 1, 2, 3}},
+		{Host: "127.0.0.1", Port: 65535, Payload: bytes.Repeat([]byte{0x7c}, MaxDatagramPayload)},
+	}
 	for _, d := range want {
 		if err := WriteDatagram(&b, d); err != nil {
 			t.Fatal(err)

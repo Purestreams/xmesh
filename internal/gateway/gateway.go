@@ -220,21 +220,26 @@ func (r *Runtime) acceptTunnel(w http.ResponseWriter, request *http.Request) {
 	if err := protocol.WriteMessage(conn, protocol.Message{Type: protocol.TypeReady, Version: protocol.Version, Success: true}); err != nil {
 		return
 	}
-	smuxConfig := smux.DefaultConfig()
-	smuxConfig.Version = protocol.SMuxVersion
-	smuxConfig.KeepAliveInterval = 10 * time.Second
-	smuxConfig.KeepAliveTimeout = 35 * time.Second
+	smuxConfig, err := protocol.NewSMuxConfig()
+	if err != nil {
+		r.logger.Error("configure smux", "error", err)
+		return
+	}
 	session, err := smux.Server(conn, smuxConfig)
 	if err != nil {
 		return
 	}
-	sessionID := registration.SessionID
-	if sessionID == "" {
-		sessionID, _ = identity.Token(12)
+	clientSessionID := registration.SessionID
+	if clientSessionID == "" {
+		clientSessionID, _ = identity.Token(12)
 	}
+	sessionID := registration.AgentID + "/" + registration.LinkID + "/" + clientSessionID
 	entry := &scheduler.Session{ID: sessionID, AgentID: registration.AgentID, LinkID: registration.LinkID, Priority: link.Priority, Weight: link.Weight, MaxStreams: link.MaxStreams, SMux: session, Generation: registration.Generation, Ready: true, LastOK: time.Now()}
-	r.pool.Add(entry)
-	defer r.pool.Remove(sessionID)
+	previous := r.pool.Add(entry)
+	if previous != nil && previous.SMux != nil {
+		_ = previous.SMux.Close()
+	}
+	defer r.pool.Remove(sessionID, entry)
 	defer session.Close()
 	go r.probeSession(sessionID, session)
 	r.logger.Info("tunnel registered", "agent", registration.AgentID, "link", registration.LinkID, "session", sessionID)

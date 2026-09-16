@@ -1,6 +1,7 @@
 package scheduler
 
 import (
+	"errors"
 	"net"
 	"testing"
 
@@ -73,5 +74,37 @@ func TestAcquireUsesWeightsWithinPriorityGroup(t *testing.T) {
 	}()
 	if counts["a"] != 3 || counts["b"] != 1 {
 		t.Fatalf("unexpected weighted allocation %#v", counts)
+	}
+}
+
+func TestReplacingSessionIgnoresStaleRemoval(t *testing.T) {
+	oldSMux, closeOld := smuxPair(t)
+	defer closeOld()
+	newSMux, closeNew := smuxPair(t)
+	defer closeNew()
+
+	pool := New()
+	oldSession := &Session{ID: "agent/link/slot-0", AgentID: "agent", MaxStreams: 1, SMux: oldSMux, Ready: true}
+	newSession := &Session{ID: oldSession.ID, AgentID: "agent", MaxStreams: 1, SMux: newSMux, Ready: true}
+	if replaced := pool.Add(oldSession); replaced != nil {
+		t.Fatal("first session unexpectedly replaced another session")
+	}
+	if replaced := pool.Add(newSession); replaced != oldSession {
+		t.Fatal("replacement did not return the stale session")
+	}
+
+	pool.Remove(oldSession.ID, oldSession)
+	lease, err := pool.Acquire("agent")
+	if err != nil {
+		t.Fatalf("stale removal removed replacement: %v", err)
+	}
+	if lease.Session != newSession {
+		t.Fatal("acquired stale session after replacement")
+	}
+	lease.Release()
+
+	pool.Remove(newSession.ID, newSession)
+	if _, err := pool.Acquire("agent"); !errors.Is(err, ErrNoPath) {
+		t.Fatalf("current session removal returned %v", err)
 	}
 }

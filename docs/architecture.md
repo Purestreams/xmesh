@@ -5,7 +5,7 @@ VMess client -- cleartext WS :8080 --> Xray
                                       |
                                       | authenticated loopback SOCKS5
                                       v
-Controller HTTP <--- config/status --- Gateway <--- WSS + smux v1 --- Agent ---> target
+Controller HTTP <--- config/status --- Gateway <--- WSS + smux v2 --- Agent ---> target
    (no business traffic)               TCP/UDP                         system DNS/routes
 ```
 
@@ -20,10 +20,15 @@ when policy or health changes.
 
 Control messages are size-bounded, length-prefixed JSON. TCP payload is streamed without JSON or
 Base64 wrapping. UDP uses a length-bounded frame that preserves one datagram and its source/target
-address. The tunnel accepts payloads up to 4 KiB; larger SOCKS datagrams are rejected and logged
-instead of being truncated. Every SOCKS UDP association has a distinct loopback socket tied to its
-authenticated TCP control connection. Each accepted datagram uses a separate smux substream so a
-large or stalled datagram cannot block later traffic in the association.
+address. The tunnel accepts complete UDP payloads up to the IPv4 UDP limit; larger frames are
+rejected instead of truncated. Every SOCKS UDP association has a distinct loopback socket tied to
+its authenticated TCP control connection and one pinned smux stream. The Agent keeps one UDP
+socket for that association so multiple targets and their reply source addresses remain distinct.
+
+Both tunnel peers use smux v2 with 32 KiB frames, an 8 MiB per-stream receive window, and a
+32 MiB shared receive budget per WSS session. The half-window exceeds the approximately 2.5 MB
+bandwidth-delay product of a 50 Mbps flow at 400 ms RTT. Keepalive runs every 10 seconds with a
+60-second timeout; these values apply to new sessions and do not change TCP or TLS verification.
 
 The Controller persists desired state with atomic replacement. Node credentials, enrollment
 tokens, subscription tokens, VMess UUIDs, and tunnel credentials have separate purposes. A Grant

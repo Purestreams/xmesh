@@ -10,9 +10,9 @@ import (
 
 const (
 	Version            = 2
-	SMuxVersion        = 1
+	SMuxVersion        = 2
 	MaxControlFrame    = 64 << 10
-	MaxDatagramPayload = 4 << 10
+	MaxDatagramPayload = 65507
 	MaxDatagramFrame   = MaxDatagramPayload + MaxControlFrame + 2
 )
 

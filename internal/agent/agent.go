@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -19,7 +18,6 @@ import (
 	"github.com/xtaci/smux"
 
 	"xmesh/internal/controller"
-	"xmesh/internal/identity"
 	"xmesh/internal/model"
 	"xmesh/internal/nodeclient"
 	"xmesh/internal/protocol"
@@ -189,8 +187,7 @@ func (r *Runtime) runSession(ctx context.Context, key string, link controller.Ag
 	conn := websocket.NetConn(context.Background(), ws, websocket.MessageBinary)
 	defer conn.Close()
 	_ = conn.SetDeadline(time.Now().Add(15 * time.Second))
-	sessionID, _ := identity.Token(12)
-	registration := protocol.Message{Type: protocol.TypeRegister, Version: protocol.Version, AgentID: r.local.NodeID, LinkID: link.ID, Token: link.TunnelToken, SessionID: sessionID, Generation: generation}
+	registration := protocol.Message{Type: protocol.TypeRegister, Version: protocol.Version, AgentID: r.local.NodeID, LinkID: link.ID, Token: link.TunnelToken, SessionID: key, Generation: generation}
 	if err := protocol.WriteMessage(conn, registration); err != nil {
 		return err
 	}
@@ -202,10 +199,10 @@ func (r *Runtime) runSession(ctx context.Context, key string, link controller.Ag
 		return fmt.Errorf("tunnel rejected: %s", response.Error)
 	}
 	_ = conn.SetDeadline(time.Time{})
-	config := smux.DefaultConfig()
-	config.Version = protocol.SMuxVersion
-	config.KeepAliveInterval = 10 * time.Second
-	config.KeepAliveTimeout = 35 * time.Second
+	config, err := protocol.NewSMuxConfig()
+	if err != nil {
+		return fmt.Errorf("configure smux: %w", err)
+	}
 	session, err := smux.Client(conn, config)
 	if err != nil {
 		return err
@@ -302,39 +299,50 @@ func (r *Runtime) handleUDP(ctx context.Context, linkID string, stream *smux.Str
 		return
 	}
 	_ = stream.SetDeadline(time.Time{})
-	datagram, err := protocol.ReadDatagram(stream)
-	if err != nil {
-		r.logger.Warn("agent UDP stream read failed", "link", linkID, "error", err)
-		return
-	}
-	target, err := policy.udpAddress(ctx, datagram.Host, datagram.Port)
-	if err != nil {
-		r.logger.Warn("agent UDP target denied", "link", linkID, "error", err)
-		return
-	}
-	if _, err = socket.WriteToUDP(datagram.Payload, target); err != nil {
-		r.logger.Warn("agent UDP target write failed", "link", linkID, "bytes", len(datagram.Payload), "error", err)
-		return
-	}
-	r.addTraffic(linkID, uint64(len(datagram.Payload)), 0)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		defer socket.Close()
+		for {
+			datagram, err := protocol.ReadDatagram(stream)
+			if err != nil {
+				r.logger.Debug("agent UDP tunnel reader ended", "link", linkID, "error", err)
+				return
+			}
+			target, err := policy.udpAddress(ctx, datagram.Host, datagram.Port)
+			if err != nil {
+				r.logger.Warn("agent UDP target denied", "link", linkID, "target", net.JoinHostPort(datagram.Host, fmt.Sprint(datagram.Port)), "error", err)
+				continue
+			}
+			if _, err = socket.WriteToUDP(datagram.Payload, target); err != nil {
+				r.logger.Warn("agent UDP target write failed", "link", linkID, "bytes", len(datagram.Payload), "error", err)
+				return
+			}
+			r.addTraffic(linkID, uint64(len(datagram.Payload)), 0)
+		}
+	}()
 	buffer := make([]byte, protocol.MaxDatagramPayload)
-	_ = socket.SetReadDeadline(time.Now().Add(2 * time.Minute))
-	n, source, err := socket.ReadFromUDP(buffer)
-	if err != nil {
-		r.logger.Warn("agent UDP target read failed", "link", linkID, "error", err)
-		return
+	for {
+		_ = socket.SetReadDeadline(time.Now().Add(2 * time.Minute))
+		n, source, err := socket.ReadFromUDP(buffer)
+		if err != nil {
+			if !errors.Is(err, net.ErrClosed) {
+				r.logger.Debug("agent UDP socket reader ended", "link", linkID, "error", err)
+			}
+			return
+		}
+		reply := protocol.Datagram{Host: source.IP.String(), Port: source.Port, Payload: append([]byte(nil), buffer[:n]...)}
+		if err := protocol.WriteDatagram(stream, reply); err != nil {
+			r.logger.Warn("agent UDP tunnel write failed", "link", linkID, "bytes", n, "error", err)
+			return
+		}
+		r.addTraffic(linkID, 0, uint64(n))
+		select {
+		case <-done:
+			return
+		default:
+		}
 	}
-	reply := protocol.Datagram{Host: source.IP.String(), Port: source.Port, Payload: append([]byte(nil), buffer[:n]...)}
-	if err := protocol.WriteDatagram(stream, reply); err != nil {
-		r.logger.Warn("agent UDP stream write failed", "link", linkID, "bytes", n, "error", err)
-		return
-	}
-	r.addTraffic(linkID, 0, uint64(n))
-	if err := stream.CloseWrite(); err != nil {
-		return
-	}
-	_ = stream.SetReadDeadline(time.Now().Add(10 * time.Second))
-	_, _ = io.Copy(io.Discard, stream)
 }
 
 func (r *Runtime) grantAllowed(id string) bool {

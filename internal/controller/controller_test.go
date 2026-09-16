@@ -127,3 +127,28 @@ func TestEnrollmentTokenIsSingleUse(t *testing.T) {
 		t.Fatal("node credential was not stored")
 	}
 }
+
+func TestPanelRendersPopulatedRelationshipTables(t *testing.T) {
+	server, _ := testServer(t, func(s *model.State) error {
+		s.Users["u"] = model.User{ID: "u", Name: "User", Enabled: true}
+		s.Gateways["g"] = model.Gateway{ID: "g", Name: "Gateway", Enabled: true}
+		s.Agents["a"] = model.Agent{ID: "a", Name: "Agent", Enabled: true}
+		s.Attachments["n"] = model.Attachment{ID: "n", GatewayID: "g", AgentID: "a", Enabled: true}
+		s.Links["l"] = model.Link{ID: "l", Name: "Link", AttachmentID: "n", Enabled: true}
+		s.Grants["r"] = model.Grant{ID: "r", UserID: "u", AttachmentID: "n", Enabled: true}
+		return nil
+	})
+	expires := server.now().Add(time.Hour)
+	request := httptest.NewRequest(http.MethodGet, "/", nil)
+	request.AddCookie(&http.Cookie{Name: sessionCookie, Value: auth.SignSession(server.cfg.sessionKey(), "admin", expires)})
+	recorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	for _, want := range []string{"Gateway", "Agent", "User", "Link"} {
+		if !strings.Contains(recorder.Body.String(), want) {
+			t.Fatalf("panel missing %q", want)
+		}
+	}
+}
