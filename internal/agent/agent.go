@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -34,6 +35,8 @@ type Runtime struct {
 	configFingerprint string
 	workers           map[string]context.CancelFunc
 	statuses          map[string]*linkRuntimeStatus
+	realityMu         sync.Mutex
+	realities         map[string]*realityCore
 	streamSlots       chan struct{}
 	tcpConnections    atomic.Int64
 	udpAssociations   atomic.Int64
@@ -50,7 +53,7 @@ func New(local runtimecfg.Config, logger *slog.Logger) *Runtime {
 	if limit <= 0 {
 		limit = 1024
 	}
-	return &Runtime{local: local, client: nodeclient.New(local.ControllerURL, local.Credential), logger: logger, workers: map[string]context.CancelFunc{}, statuses: map[string]*linkRuntimeStatus{}, streamSlots: make(chan struct{}, limit)}
+	return &Runtime{local: local, client: nodeclient.New(local.ControllerURL, local.Credential), logger: logger, workers: map[string]context.CancelFunc{}, statuses: map[string]*linkRuntimeStatus{}, realities: map[string]*realityCore{}, streamSlots: make(chan struct{}, limit)}
 }
 
 func (r *Runtime) Run(ctx context.Context) error {
@@ -105,6 +108,7 @@ func (r *Runtime) ApplyConfig(config controller.AgentConfig) error {
 			cancel()
 		}
 		r.workers = map[string]context.CancelFunc{}
+		r.closeRealities()
 	}
 	r.config = config
 	r.configFingerprint = string(b)
@@ -115,6 +119,7 @@ func (r *Runtime) ApplyConfig(config controller.AgentConfig) error {
 
 // RunLink runs one tunnel connection until the connection or context ends.
 func (r *Runtime) RunLink(ctx context.Context, link controller.AgentLinkConfig) error {
+	defer r.closeRealities()
 	return r.runSession(ctx, link.ID+"#manual", link, 1)
 }
 
@@ -153,6 +158,7 @@ func (r *Runtime) stopWorkers() {
 		cancel()
 	}
 	r.workers = map[string]context.CancelFunc{}
+	r.closeRealities()
 }
 
 func (r *Runtime) linkLoop(ctx context.Context, key string, link controller.AgentLinkConfig) {
@@ -182,13 +188,32 @@ func (r *Runtime) linkLoop(ctx context.Context, key string, link controller.Agen
 }
 
 func (r *Runtime) runSession(ctx context.Context, key string, link controller.AgentLinkConfig, generation uint64) error {
-	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12, ServerName: link.TLSServerName, InsecureSkipVerify: !link.TLSVerify}
-	transport := http.DefaultTransport.(*http.Transport).Clone()
-	transport.TLSClientConfig = tlsConfig
-	ws, _, err := websocket.Dial(ctx, link.URL, &websocket.DialOptions{HTTPClient: &http.Client{Transport: transport, Timeout: 20 * time.Second}, Host: link.HTTPHost, CompressionMode: websocket.CompressionDisabled})
+	var ws *websocket.Conn
+	var err error
+	if strings.HasPrefix(link.URL, "reality://") {
+		var cleanup func()
+		ws, cleanup, err = r.dialReality(ctx, link)
+		if cleanup != nil {
+			defer cleanup()
+		}
+	} else {
+		tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12, ServerName: link.TLSServerName, InsecureSkipVerify: !link.TLSVerify}
+		transport := http.DefaultTransport.(*http.Transport).Clone()
+		transport.TLSClientConfig = tlsConfig
+		ws, _, err = websocket.Dial(ctx, link.URL, &websocket.DialOptions{HTTPClient: &http.Client{Transport: transport, Timeout: 20 * time.Second}, Host: link.HTTPHost, CompressionMode: websocket.CompressionDisabled})
+	}
 	if err != nil {
 		return fmt.Errorf("websocket dial: %w", err)
 	}
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = ws.Close(websocket.StatusGoingAway, "")
+		case <-done:
+		}
+	}()
 	conn := websocket.NetConn(context.Background(), ws, websocket.MessageBinary)
 	defer conn.Close()
 	_ = conn.SetDeadline(time.Now().Add(15 * time.Second))

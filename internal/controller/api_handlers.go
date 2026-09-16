@@ -121,7 +121,8 @@ func (s *Server) nodeConfig(w http.ResponseWriter, r *http.Request) {
 					continue
 				}
 				link.TunnelTokenHash = ""
-				response.Links = append(response.Links, AgentLinkConfig{Link: link, GatewayID: attachment.GatewayID, TunnelToken: auth.Derive(s.cfg.sessionKey(), "tunnel", link.ID)})
+				gateway := state.Gateways[attachment.GatewayID]
+				response.Links = append(response.Links, AgentLinkConfig{Link: link, GatewayID: attachment.GatewayID, TunnelToken: auth.Derive(s.cfg.sessionKey(), "tunnel", link.ID), RealityPublicKey: gateway.RealityPublicKey, RealityName: gateway.RealityName})
 			}
 			for _, grant := range state.Grants {
 				user := state.Users[grant.UserID]

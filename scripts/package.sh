@@ -13,7 +13,7 @@ case "$(uname -m)" in x86_64|amd64) host_arch=amd64;; aarch64|arm64) host_arch=a
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT HUP INT TERM
 mkdir -p "$root/dist"
-rm -f "$root/dist"/*.tar.gz "$root/dist"/*.exe "$root/dist/SHA256SUMS" "$root/dist/install.sh" "$root/dist/install-docker.sh" "$root/dist/install-controller.sh"
+rm -f "$root/dist"/*.tar.gz "$root/dist"/*.exe "$root/dist/SHA256SUMS" "$root/dist/install.sh" "$root/dist/install-docker.sh" "$root/dist/install-controller.sh" "$root/dist/THIRD_PARTY_NOTICES.md"
 
 for arch in amd64 arm64; do
   package="$work/$arch"
@@ -30,11 +30,13 @@ for arch in amd64 arm64; do
     echo "Xray $arch version is trusted from its independently verified upstream archive; cannot execute on $host_arch"
   fi
   install -m 0755 "$xray_path" "$package/xray"
-  tar -C "$package" -czf "$root/dist/xmesh-${version}-linux-${arch}.tar.gz" xmesh xray
+  install -m 0644 "$root/THIRD_PARTY_NOTICES.md" "$package/THIRD_PARTY_NOTICES.md"
+  tar -C "$package" -czf "$root/dist/xmesh-${version}-linux-${arch}.tar.gz" xmesh xray THIRD_PARTY_NOTICES.md
 done
 CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "-s -w -X main.version=$version" -o "$root/dist/xmesh-${version}-windows-amd64.exe" ./cmd/xmesh
 install -m 0755 "$root/scripts/install.sh" "$root/dist/install.sh"
 install -m 0755 "$root/scripts/install-docker.sh" "$root/dist/install-docker.sh"
 install -m 0755 "$root/scripts/install-controller.sh" "$root/dist/install-controller.sh"
-(cd "$root/dist" && sha256sum *.tar.gz *.exe install.sh install-docker.sh install-controller.sh >SHA256SUMS)
+install -m 0644 "$root/THIRD_PARTY_NOTICES.md" "$root/dist/THIRD_PARTY_NOTICES.md"
+(cd "$root/dist" && sha256sum *.tar.gz *.exe install.sh install-docker.sh install-controller.sh THIRD_PARTY_NOTICES.md >SHA256SUMS)
 echo "release assets written to $root/dist"

@@ -157,8 +157,8 @@ func (s *Server) quickSetup(w http.ResponseWriter, r *http.Request) {
 	deniedCIDRs := splitCSV(r.FormValue("denied_cidrs"))
 	if gwName == "" || agtName == "" || publicHost == "" || strings.ContainsAny(publicHost, "/?#@ \t\r\n") ||
 		vmessPort > 65535 || portErr != nil || !strings.HasPrefix(vmessPath, "/") || strings.ContainsAny(vmessPath, " \t\r\n") ||
-		validateURL(linkURL) != nil || !strings.HasPrefix(linkURL, "wss://") || len(allowedCIDRs) == 0 {
-		http.Error(w, "valid node names, public host, VMess port/path, allowed CIDRs and wss:// Link URL are required", 400)
+		validateURL(linkURL) != nil || (!strings.HasPrefix(linkURL, "wss://") && !strings.HasPrefix(linkURL, "reality://")) || len(allowedCIDRs) == 0 {
+		http.Error(w, "valid node names, public host, VMess port/path, allowed CIDRs and wss:// or reality:// Link URL are required", 400)
 		return
 	}
 	for _, cidr := range append(append([]string{}, allowedCIDRs...), deniedCIDRs...) {
@@ -192,7 +192,15 @@ func (s *Server) quickSetup(w http.ResponseWriter, r *http.Request) {
 		state.Gateways[gwID] = model.Gateway{ID: gwID, Name: gwName, PublicHost: publicHost, VMessPort: vmessPort, VMessPath: vmessPath, VMessHost: strings.TrimSpace(r.FormValue("vmess_host")), Enabled: true, DesiredVersion: 1, CreatedAt: now}
 		state.Agents[agtID] = model.Agent{ID: agtID, Name: agtName, Enabled: true, AllowedCIDRs: allowedCIDRs, DeniedCIDRs: deniedCIDRs, DesiredVersion: 1, CreatedAt: now}
 		state.Attachments[attachmentID] = model.Attachment{ID: attachmentID, GatewayID: gwID, AgentID: agtID, Enabled: true, CreatedAt: now}
-		state.Links[linkID] = model.Link{ID: linkID, AttachmentID: attachmentID, Name: gwName + " / " + agtName, URL: linkURL, HTTPHost: strings.TrimSpace(r.FormValue("link_http_host")), TLSServerName: strings.TrimSpace(r.FormValue("tls_server_name")), TLSVerify: true, Priority: 10, Weight: 1, Connections: 2, MaxStreams: 256, Enabled: true, TunnelTokenHash: auth.SecretHash(auth.Derive(s.cfg.sessionKey(), "tunnel", linkID)), CreatedAt: now}
+		link := model.Link{ID: linkID, AttachmentID: attachmentID, Name: gwName + " / " + agtName, URL: linkURL, HTTPHost: strings.TrimSpace(r.FormValue("link_http_host")), TLSServerName: strings.TrimSpace(r.FormValue("tls_server_name")), TLSVerify: true, Priority: 10, Weight: 1, Connections: 2, MaxStreams: 256, Enabled: true, TunnelTokenHash: auth.SecretHash(auth.Derive(s.cfg.sessionKey(), "tunnel", linkID)), CreatedAt: now}
+		if strings.HasPrefix(linkURL, "reality://") {
+			var err error
+			link.RealityUUID, link.RealityShortID, err = provisionReality(state, gwID, strings.TrimSpace(r.FormValue("reality_target")), linkURL)
+			if err != nil {
+				return err
+			}
+		}
+		state.Links[linkID] = link
 		return nil
 	})
 	if err != nil {
@@ -421,7 +429,15 @@ func (s *Server) createLink(w http.ResponseWriter, r *http.Request) {
 		if !ok {
 			return fmt.Errorf("attachment not found")
 		}
-		state.Links[id] = model.Link{ID: id, AttachmentID: attachmentID, Name: name, URL: linkURL, HTTPHost: strings.TrimSpace(r.FormValue("http_host")), TLSServerName: strings.TrimSpace(r.FormValue("tls_server_name")), TLSVerify: r.FormValue("tls_verify") == "on", Priority: priority, Weight: weight, Connections: connections, MaxStreams: maxStreams, Enabled: true, TunnelTokenHash: auth.SecretHash(tunnelToken), CreatedAt: s.now().UTC()}
+		link := model.Link{ID: id, AttachmentID: attachmentID, Name: name, URL: linkURL, HTTPHost: strings.TrimSpace(r.FormValue("http_host")), TLSServerName: strings.TrimSpace(r.FormValue("tls_server_name")), TLSVerify: r.FormValue("tls_verify") == "on", Priority: priority, Weight: weight, Connections: connections, MaxStreams: maxStreams, Enabled: true, TunnelTokenHash: auth.SecretHash(tunnelToken), CreatedAt: s.now().UTC()}
+		if strings.HasPrefix(linkURL, "reality://") {
+			var err error
+			link.RealityUUID, link.RealityShortID, err = provisionReality(state, attachment.GatewayID, strings.TrimSpace(r.FormValue("reality_target")), linkURL)
+			if err != nil {
+				return err
+			}
+		}
+		state.Links[id] = link
 		bumpGateway(state, attachment.GatewayID)
 		bumpAgent(state, attachment.AgentID)
 		return nil

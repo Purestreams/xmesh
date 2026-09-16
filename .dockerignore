@@ -1,0 +1,9 @@
+.git
+tmp
+dist
+bin
+data
+coverage
+*.exe
+*.test
+*.out

@@ -199,7 +199,7 @@ func enrollNode(args []string) error {
 	if string(result.Role) != *role {
 		return fmt.Errorf("enrollment role %s does not match requested role %s", result.Role, *role)
 	}
-	config := map[string]any{"role": result.Role, "node_id": result.NodeID, "controller_url": strings.TrimSuffix(*controllerURL, "/"), "credential": result.Credential, "poll_interval": "15s", "status_interval": "10s", "gateway": map[string]any{"socks_listen": "127.0.0.1:18080", "tunnel_listen": "127.0.0.1:18081", "tunnel_path": "/tunnel", "xray_binary": "/usr/local/lib/xmesh/xray", "xray_config_path": "/var/lib/xmesh/xray.json", "udp_idle_timeout": "2m", "max_udp_associations": 1024}}
+	config := map[string]any{"role": result.Role, "node_id": result.NodeID, "controller_url": strings.TrimSuffix(*controllerURL, "/"), "credential": result.Credential, "poll_interval": "15s", "status_interval": "10s", "gateway": map[string]any{"socks_listen": "127.0.0.1:18080", "tunnel_listen": "127.0.0.1:18081", "tunnel_path": "/tunnel", "xray_binary": "/usr/local/lib/xmesh/xray", "xray_config_path": "/var/lib/xmesh/xray.json", "reality_listen": "0.0.0.0:8443", "udp_idle_timeout": "2m", "max_udp_associations": 1024}}
 	b, err := json.MarshalIndent(config, "", "  ")
 	if err != nil {
 		return err

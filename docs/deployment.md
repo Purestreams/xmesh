@@ -78,9 +78,21 @@ The generator intentionally uses the schema accepted by that pinned stable relea
 "ws"`, VMess `settings.clients`, and SOCKS `settings.servers`). Do not update those fields from
 newer online examples without advancing `XRAY_VERSION` and rerunning the full real-Xray test.
 
-Agent Link URLs should normally be `wss://` addresses exposed by an external TLS service or CDN
-and forwarded to the Gateway's loopback tunnel handler. Address, HTTP Host, and TLS server name
-are independent settings. Disable TLS verification only for a deliberately controlled test link.
+For a REALITY Agent Link, enter `reality://<gateway-public-host-or-IP>:8443/tunnel` and a reachable
+TLS 1.3 target such as `<target-host>:443` in the Controller. The Controller generates a Gateway
+X25519 key pair and a per-Link VLESS UUID and short ID, then sends only the public key and Link
+identity to the Agent. The Gateway's existing Xray process listens on
+`gateway.reality_listen` (`0.0.0.0:8443` by default), forwards authenticated connections to
+the loopback tunnel handler, and forwards unauthenticated connections to the target. The Agent
+embeds the pinned Xray-core implementation for REALITY; it does not spawn a helper process.
+The public port in the Link URL must reach `gateway.reality_listen`. Port 443 requires a
+privileged listener or external port mapping with the default unprivileged service account.
+Use a target whose TLS certificate matches the configured name, and check its reachability
+from the Gateway. A chosen target can change behavior over time, so monitor Link readiness.
+
+Legacy `wss://` Links remain supported via an external TLS service or CDN forwarded to the
+Gateway's loopback tunnel handler. Address, HTTP Host, and TLS server name are independent
+settings. Disable TLS verification only for a deliberately controlled test link.
 
 ### High-latency links
 

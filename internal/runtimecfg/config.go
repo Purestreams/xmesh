@@ -27,6 +27,7 @@ type Gateway struct {
 	TunnelPath         string   `json:"tunnel_path"`
 	XrayBinary         string   `json:"xray_binary"`
 	XrayConfigPath     string   `json:"xray_config_path"`
+	RealityListen      string   `json:"reality_listen,omitempty"`
 	UDPIdleTimeout     Duration `json:"udp_idle_timeout"`
 	MaxUDPAssociations int      `json:"max_udp_associations"`
 	MaxUDPQueueBytes   int      `json:"max_udp_queue_bytes,omitempty"`
@@ -83,6 +84,9 @@ func Load(path string) (Config, error) {
 	}
 	if cfg.Gateway.XrayConfigPath == "" {
 		cfg.Gateway.XrayConfigPath = "/var/lib/xmesh/xray.json"
+	}
+	if cfg.Gateway.RealityListen == "" {
+		cfg.Gateway.RealityListen = "0.0.0.0:8443"
 	}
 	if cfg.Gateway.MaxUDPAssociations <= 0 {
 		cfg.Gateway.MaxUDPAssociations = 1024

@@ -33,7 +33,8 @@ type xrayInbound struct {
 	StreamSettings xrayStreamSettings  `json:"streamSettings"`
 }
 type xrayInboundSettings struct {
-	Clients []xrayClient `json:"clients"`
+	Clients    []xrayClient `json:"clients"`
+	Decryption string       `json:"decryption,omitempty"`
 }
 type xrayClient struct {
 	ID      string `json:"id"`
@@ -41,9 +42,16 @@ type xrayClient struct {
 	AlterID int    `json:"alterId"`
 }
 type xrayStreamSettings struct {
-	Network    string         `json:"network"`
-	Security   string         `json:"security"`
-	WSSettings xrayWSSettings `json:"wsSettings"`
+	Network         string               `json:"network"`
+	Security        string               `json:"security"`
+	WSSettings      xrayWSSettings       `json:"wsSettings,omitempty"`
+	RealitySettings *xrayRealitySettings `json:"realitySettings,omitempty"`
+}
+type xrayRealitySettings struct {
+	Target      string   `json:"target"`
+	ServerNames []string `json:"serverNames"`
+	PrivateKey  string   `json:"privateKey"`
+	ShortIDs    []string `json:"shortIds"`
 }
 type xrayWSSettings struct {
 	Path string `json:"path"`
@@ -55,7 +63,8 @@ type xrayOutbound struct {
 	Settings xrayOutboundSettings `json:"settings"`
 }
 type xrayOutboundSettings struct {
-	Servers []xraySOCKSServer `json:"servers"`
+	Servers  []xraySOCKSServer `json:"servers,omitempty"`
+	Redirect string            `json:"redirect,omitempty"`
 }
 type xraySOCKSServer struct {
 	Address string          `json:"address"`
@@ -78,6 +87,10 @@ type xrayRule struct {
 }
 
 func buildXrayConfig(config controller.GatewayConfig, socksAddress string) ([]byte, error) {
+	return buildXrayConfigWithReality(config, socksAddress, "", "")
+}
+
+func buildXrayConfigWithReality(config controller.GatewayConfig, socksAddress, realityAddress, tunnelAddress string) ([]byte, error) {
 	host, portText, err := net.SplitHostPort(socksAddress)
 	if err != nil {
 		return nil, err
@@ -99,6 +112,35 @@ func buildXrayConfig(config controller.GatewayConfig, socksAddress string) ([]by
 		result.Routing.Rules = append(result.Routing.Rules, xrayRule{Type: "field", InboundTag: []string{"xmesh-vmess"}, User: []string{email}, OutboundTag: tag})
 	}
 	result.Inbounds = []xrayInbound{inbound}
+	if config.Gateway.RealityPrivateKey != "" {
+		realityHost, realityPortText, err := net.SplitHostPort(realityAddress)
+		if err != nil {
+			return nil, fmt.Errorf("REALITY listen: %w", err)
+		}
+		realityPort, err := strconv.Atoi(realityPortText)
+		if err != nil || realityPort <= 0 || realityPort > 65535 {
+			return nil, errors.New("invalid REALITY listen port")
+		}
+		if realityHost == "" {
+			realityHost = "0.0.0.0"
+		}
+		if _, _, err := net.SplitHostPort(tunnelAddress); err != nil {
+			return nil, fmt.Errorf("tunnel listen: %w", err)
+		}
+		realityInbound := xrayInbound{Listen: realityHost, Port: realityPort, Protocol: "vless", Tag: "xmesh-reality", Settings: xrayInboundSettings{Decryption: "none"}, StreamSettings: xrayStreamSettings{Network: "raw", Security: "reality", RealitySettings: &xrayRealitySettings{Target: config.Gateway.RealityTarget, ServerNames: []string{config.Gateway.RealityName}, PrivateKey: config.Gateway.RealityPrivateKey}}}
+		for _, link := range config.Links {
+			if !link.Enabled || link.RealityUUID == "" {
+				continue
+			}
+			realityInbound.Settings.Clients = append(realityInbound.Settings.Clients, xrayClient{ID: link.RealityUUID, Email: "link-" + link.ID})
+			realityInbound.StreamSettings.RealitySettings.ShortIDs = append(realityInbound.StreamSettings.RealitySettings.ShortIDs, link.RealityShortID)
+		}
+		if len(realityInbound.Settings.Clients) > 0 {
+			result.Inbounds = append(result.Inbounds, realityInbound)
+			result.Outbounds = append(result.Outbounds, xrayOutbound{Protocol: "freedom", Tag: "xmesh-reality-local", Settings: xrayOutboundSettings{Redirect: tunnelAddress}})
+			result.Routing.Rules = append(result.Routing.Rules, xrayRule{Type: "field", InboundTag: []string{"xmesh-reality"}, OutboundTag: "xmesh-reality-local"})
+		}
+	}
 	return json.MarshalIndent(result, "", "  ")
 }
 
@@ -114,7 +156,7 @@ func (r *Runtime) xrayLoop(ctx context.Context) error {
 		r.mu.RLock()
 		config := r.config
 		r.mu.RUnlock()
-		payload, err := buildXrayConfig(config, r.local.Gateway.SOCKSListen)
+		payload, err := buildXrayConfigWithReality(config, r.local.Gateway.SOCKSListen, r.local.Gateway.RealityListen, r.local.Gateway.TunnelListen)
 		if err != nil {
 			r.setXray(false, err.Error())
 			return err

@@ -1,6 +1,9 @@
 package gateway
 
 import (
+	"crypto/ecdh"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -10,6 +13,30 @@ import (
 	"xmesh/internal/controller"
 	"xmesh/internal/model"
 )
+
+func TestRealityGatewayConfigAcceptedByXray(t *testing.T) {
+	binary := os.Getenv("XMESH_TEST_XRAY")
+	if binary == "" {
+		t.Skip("XMESH_TEST_XRAY not set")
+	}
+	key, err := ecdh.X25519().GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := controller.GatewayConfig{Gateway: model.Gateway{VMessPort: 18000, VMessPath: "/proxy", RealityTarget: "example.com:443", RealityName: "example.com", RealityPrivateKey: base64.RawURLEncoding.EncodeToString(key.Bytes())}, Links: []controller.GatewayLinkConfig{{Link: model.Link{ID: "link", Enabled: true, RealityUUID: "00000000-0000-4000-8000-000000000001", RealityShortID: "0123456789abcdef"}}}}
+	b, err := buildXrayConfigWithReality(config, "127.0.0.1:18080", "127.0.0.1:18443", "127.0.0.1:18081")
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "reality.json")
+	if err := os.WriteFile(path, b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	output, err := exec.Command(binary, "run", "-test", "-config", path).CombinedOutput()
+	if err != nil {
+		t.Fatalf("Xray rejected gateway REALITY config: %v\n%s\n%s", err, output, b)
+	}
+}
 
 func TestBuildXrayConfigUsesOneVMessInboundAndPerGrantRoutes(t *testing.T) {
 	config := controller.GatewayConfig{Gateway: model.Gateway{VMessPort: 8080, VMessPath: "/proxy"}, Grants: []model.Grant{{ID: "b", VMessUUID: "uuid-b", SOCKSUsername: "b", SOCKSPassword: "pb", Enabled: true}, {ID: "a", VMessUUID: "uuid-a", SOCKSUsername: "a", SOCKSPassword: "pa", Enabled: true}}}

@@ -274,8 +274,8 @@ func parsePositive(value string, fallback int) (int, error) {
 
 func validateURL(value string) error {
 	u, err := url.Parse(value)
-	if err != nil || (u.Scheme != "wss" && u.Scheme != "ws") || u.Host == "" {
-		return errors.New("link URL must be an absolute ws:// or wss:// URL")
+	if err != nil || (u.Scheme != "wss" && u.Scheme != "ws" && u.Scheme != "reality") || u.Host == "" {
+		return errors.New("link URL must be an absolute ws://, wss://, or reality:// URL")
 	}
 	return nil
 }
