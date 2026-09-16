@@ -7,5 +7,6 @@
   "session_secret": "replace_with_output_from_xmesh_generate-secret",
   "release_base_url": "https://github.com/OWNER/xmesh/releases/download",
   "release_version": "v0.1.0",
+  "release_dir": "/var/lib/xmesh/releases",
   "node_offline_after_seconds": 45
 }

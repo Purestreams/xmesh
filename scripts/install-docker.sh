@@ -41,8 +41,8 @@ archive="xmesh-${version}-linux-${arch}.tar.gz"
 base="${release_base_url%/}/${version}"
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT HUP INT TERM
-wget -q --https-only "$base/$archive" -O "$work/$archive"
-wget -q --https-only "$base/SHA256SUMS" -O "$work/SHA256SUMS"
+curl --fail --location --retry 3 --proto '=https' --proto-redir '=https' --output "$work/$archive" "$base/$archive"
+curl --fail --location --retry 3 --proto '=https' --proto-redir '=https' --output "$work/SHA256SUMS" "$base/SHA256SUMS"
 (cd "$work" && grep "  $archive\$" SHA256SUMS | sha256sum -c -)
 tar -xzf "$work/$archive" -C "$work" xmesh xray
 "$work/xmesh" version >/dev/null
@@ -75,15 +75,27 @@ if [ "$role" = 'controller' ]; then
   "session_secret": "$session_secret",
   "release_base_url": "${release_base_url%/}",
   "release_version": "$version",
+  "release_dir": "/var/lib/xmesh/releases",
   "node_offline_after_seconds": 45
 }
 EOF
   fi
 else
   if [ ! -f "$install_dir/config/$config_name" ]; then
-    if [ -z "$controller" ] || [ -z "$token" ]; then echo '--controller and --enrollment-token are required for a new node' >&2; exit 2; fi
+    if [ -z "$controller" ]; then echo '--controller is required for a new node' >&2; exit 2; fi
     case "$controller" in https://*) ;; *) echo '--controller must use HTTPS' >&2; exit 2;; esac
-    "$work/xmesh" enroll --controller "$controller" --role "$role" --token "$token" --output "$install_dir/config/$config_name"
+    if [ -z "$token" ]; then
+      if [ ! -r /dev/tty ]; then echo 'a terminal or --enrollment-token is required for a new node' >&2; exit 2; fi
+      printf 'One-time enrollment token: ' >/dev/tty
+      old_stty=$(stty -g </dev/tty)
+      trap 'stty "$old_stty" </dev/tty; rm -rf "$work"' EXIT HUP INT TERM
+      stty -echo </dev/tty
+      IFS= read -r token </dev/tty
+      stty "$old_stty" </dev/tty
+      trap 'rm -rf "$work"' EXIT HUP INT TERM
+      printf '\n' >/dev/tty
+    fi
+    printf '%s' "$token" | "$work/xmesh" enroll --controller "$controller" --role "$role" --token-stdin --output "$install_dir/config/$config_name"
   fi
 fi
 

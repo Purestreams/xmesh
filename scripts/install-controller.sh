@@ -46,8 +46,8 @@ archive="xmesh-${version}-linux-${arch}.tar.gz"
 base="${release_base_url%/}/${version}"
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT HUP INT TERM
-wget -q --https-only "$base/$archive" -O "$work/$archive"
-wget -q --https-only "$base/SHA256SUMS" -O "$work/SHA256SUMS"
+curl --fail --location --retry 3 --proto '=https' --proto-redir '=https' --output "$work/$archive" "$base/$archive"
+curl --fail --location --retry 3 --proto '=https' --proto-redir '=https' --output "$work/SHA256SUMS" "$base/SHA256SUMS"
 (cd "$work" && grep "  $archive\$" SHA256SUMS | sha256sum -c -)
 tar -xzf "$work/$archive" -C "$work" xmesh
 "$work/xmesh" version >/dev/null
@@ -75,6 +75,7 @@ if [ ! -f /etc/xmesh/controller.json ]; then
   "session_secret": "$session_secret",
   "release_base_url": "${release_base_url%/}",
   "release_version": "$version",
+  "release_dir": "/var/lib/xmesh-controller/releases",
   "node_offline_after_seconds": 45
 }
 EOF

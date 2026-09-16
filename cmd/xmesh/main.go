@@ -154,13 +154,27 @@ func enrollNode(args []string) error {
 	flags := flag.NewFlagSet("enroll", flag.ContinueOnError)
 	controllerURL := flags.String("controller", "", "controller public URL")
 	token := flags.String("token", "", "one-time enrollment token")
+	tokenStdin := flags.Bool("token-stdin", false, "read one-time enrollment token from stdin")
 	role := flags.String("role", "", "gateway or agent")
 	output := flags.String("output", "/etc/xmesh/node.json", "node config output")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
-	if *controllerURL == "" || *token == "" || (*role != "gateway" && *role != "agent") {
+	if *controllerURL == "" || (*role != "gateway" && *role != "agent") {
 		return fmt.Errorf("controller, token, and a valid role are required")
+	}
+	if *tokenStdin {
+		if *token != "" {
+			return fmt.Errorf("use either --token or --token-stdin")
+		}
+		b, err := io.ReadAll(io.LimitReader(os.Stdin, 4097))
+		if err != nil || len(b) > 4096 {
+			return fmt.Errorf("invalid token on stdin")
+		}
+		*token = strings.TrimSpace(string(b))
+	}
+	if *token == "" {
+		return fmt.Errorf("enrollment token is required")
 	}
 	if _, err := os.Stat(*output); err == nil {
 		return fmt.Errorf("refusing to replace existing node identity at %s", *output)

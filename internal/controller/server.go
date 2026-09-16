@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"xmesh/internal/auth"
@@ -23,11 +24,13 @@ import (
 const sessionCookie = "xmesh_admin"
 
 type Server struct {
-	cfg       Config
-	store     *store.Store
-	logger    *slog.Logger
-	templates *template.Template
-	now       func() time.Time
+	cfg               Config
+	store             *store.Store
+	logger            *slog.Logger
+	templates         *template.Template
+	now               func() time.Time
+	releaseMu         sync.Mutex
+	releaseHTTPClient *http.Client
 }
 
 func New(cfg Config, state *store.Store, logger *slog.Logger) (*Server, error) {
@@ -68,6 +71,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /admin/users/{id}/toggle", s.requireAdmin(s.csrf(s.toggleUser)))
 	mux.HandleFunc("POST /admin/users/{id}/reset-subscription", s.requireAdmin(s.csrf(s.resetSubscription)))
 	mux.HandleFunc("POST /admin/gateways", s.requireAdmin(s.csrf(s.createGateway)))
+	mux.HandleFunc("POST /admin/quick-setup", s.requireAdmin(s.csrf(s.quickSetup)))
 	mux.HandleFunc("POST /admin/gateways/{id}/toggle", s.requireAdmin(s.csrf(s.toggleGateway)))
 	mux.HandleFunc("POST /admin/agents", s.requireAdmin(s.csrf(s.createAgent)))
 	mux.HandleFunc("POST /admin/agents/{id}/toggle", s.requireAdmin(s.csrf(s.toggleAgent)))
@@ -79,6 +83,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /admin/grants", s.requireAdmin(s.csrf(s.createGrant)))
 	mux.HandleFunc("POST /admin/grants/{id}/toggle", s.requireAdmin(s.csrf(s.toggleGrant)))
 	mux.HandleFunc("POST /admin/enrollments", s.requireAdmin(s.csrf(s.createEnrollment)))
+	mux.HandleFunc("POST /admin/enrollments/{id}/revoke", s.requireAdmin(s.csrf(s.revokeEnrollment)))
+	mux.HandleFunc("GET /releases/{version}/{asset}", s.releaseAsset)
+	mux.HandleFunc("HEAD /releases/{version}/{asset}", s.releaseAsset)
 	mux.HandleFunc("GET /subscription/{token}", s.subscription)
 	mux.HandleFunc("POST /api/v1/enroll", s.enroll)
 	mux.HandleFunc("GET /api/v1/config", s.nodeConfig)
@@ -179,6 +186,9 @@ func (s *Server) panel(w http.ResponseWriter, r *http.Request) {
 		UserList:  sortedUsers(state), GatewayList: sortedGateways(state), AgentList: sortedAgents(state),
 		AttachmentList: sortedAttachments(state), LinkList: sortedLinks(state), GrantList: sortedGrants(state),
 		LinkSummary: summarizeLinks(state), LinkReports: sortedLinkReports(state), GrantSummary: summarizeGrants(state),
+		Release:     s.releaseStatus(),
+		Deployments: deploymentStatuses(state),
+		Enrollments: enrollmentStatuses(state, s.now()),
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := s.templates.ExecuteTemplate(w, "panel", data); err != nil {
@@ -291,6 +301,64 @@ type panelData struct {
 	LinkSummary    map[string]model.LinkStatus
 	LinkReports    []model.LinkStatus
 	GrantSummary   map[string]model.GrantStatus
+	Release        releaseStatus
+	Deployments    []deploymentStatus
+	Enrollments    []enrollmentStatus
+}
+
+type enrollmentStatus struct {
+	ID, NodeID, Role, State string
+	ExpiresAt               time.Time
+}
+
+func enrollmentStatuses(state model.State, now time.Time) []enrollmentStatus {
+	result := make([]enrollmentStatus, 0, len(state.Enrollments))
+	for _, enrollment := range state.Enrollments {
+		status := "active"
+		if !enrollment.UsedAt.IsZero() {
+			status = "used"
+		} else if !now.Before(enrollment.ExpiresAt) {
+			status = "expired"
+		}
+		result = append(result, enrollmentStatus{ID: enrollment.ID, NodeID: enrollment.NodeID, Role: string(enrollment.Role), State: status, ExpiresAt: enrollment.ExpiresAt})
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].ExpiresAt.After(result[j].ExpiresAt) })
+	return result
+}
+
+type deploymentStatus struct {
+	Name, Role, ID, Identity, Online, Applied, Runtime string
+}
+
+func deploymentStatuses(state model.State) []deploymentStatus {
+	result := make([]deploymentStatus, 0, len(state.Gateways)+len(state.Agents))
+	for _, gateway := range sortedGateways(state) {
+		st := state.NodeStatus[gateway.ID]
+		result = append(result, deploymentStatus{Name: gateway.Name, Role: "Gateway", ID: gateway.ID,
+			Identity: yesNo(gateway.CredentialHash != ""), Online: yesNo(st.Online),
+			Applied: configStage(st.AppliedVersion, gateway.DesiredVersion, st.ApplyError), Runtime: yesNo(st.Ready && st.XrayReady)})
+	}
+	for _, agent := range sortedAgents(state) {
+		st := state.NodeStatus[agent.ID]
+		result = append(result, deploymentStatus{Name: agent.Name, Role: "Agent", ID: agent.ID,
+			Identity: yesNo(agent.CredentialHash != ""), Online: yesNo(st.Online),
+			Applied: configStage(st.AppliedVersion, agent.DesiredVersion, st.ApplyError), Runtime: yesNo(st.Ready)})
+	}
+	return result
+}
+
+func yesNo(ok bool) string {
+	if ok {
+		return "ready"
+	}
+	return "pending"
+}
+
+func configStage(applied, desired uint64, applyError string) string {
+	if applyError != "" {
+		return "failed: " + applyError
+	}
+	return yesNo(applied >= desired && desired > 0)
 }
 
 func sortedUsers(s model.State) []model.User {

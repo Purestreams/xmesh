@@ -40,16 +40,17 @@ fi
 
 case "$role" in gateway|agent) ;; *) echo '--role must be gateway or agent' >&2; exit 2;; esac
 if [ -z "$controller" ] || [ -z "$version" ] || [ -z "$release_base_url" ]; then echo '--controller, --version, and --release-base-url are required' >&2; exit 2; fi
+case "$controller" in https://*) ;; *) echo '--controller must use HTTPS' >&2; exit 2;; esac
+case "$version" in *[!a-zA-Z0-9._-]*|'') echo 'version must contain only letters, numbers, dots, underscores, or hyphens' >&2; exit 2;; esac
 case "$release_base_url" in https://*) ;; *) echo '--release-base-url must use HTTPS' >&2; exit 2;; esac
-if [ ! -f /etc/xmesh/node.json ] && [ -z "$token" ]; then echo '--enrollment-token is required for a new node' >&2; exit 2; fi
 
 case "$(uname -m)" in x86_64|amd64) arch=amd64;; aarch64|arm64) arch=arm64;; *) echo "unsupported architecture: $(uname -m)" >&2; exit 1;; esac
 archive="xmesh-${version}-linux-${arch}.tar.gz"
 base="${release_base_url%/}/${version}"
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT HUP INT TERM
-wget -q --https-only "$base/$archive" -O "$work/$archive"
-wget -q --https-only "$base/SHA256SUMS" -O "$work/SHA256SUMS"
+curl --fail --location --retry 3 --proto '=https' --proto-redir '=https' --output "$work/$archive" "$base/$archive"
+curl --fail --location --retry 3 --proto '=https' --proto-redir '=https' --output "$work/SHA256SUMS" "$base/SHA256SUMS"
 (cd "$work" && grep "  $archive\$" SHA256SUMS | sha256sum -c -)
 tar -xzf "$work/$archive" -C "$work"
 "$work/xmesh" version >/dev/null
@@ -59,7 +60,18 @@ getent group xmesh >/dev/null 2>&1 || groupadd --system xmesh
 id xmesh >/dev/null 2>&1 || useradd --system --gid xmesh --home-dir /var/lib/xmesh --shell /usr/sbin/nologin xmesh
 install -d -m 0750 -o xmesh -g xmesh /etc/xmesh /var/lib/xmesh /usr/local/lib/xmesh
 if [ ! -f /etc/xmesh/node.json ]; then
-  "$work/xmesh" enroll --controller "$controller" --role "$role" --token "$token" --output /etc/xmesh/node.json
+  if [ -z "$token" ]; then
+    if [ ! -r /dev/tty ]; then echo 'a terminal or --enrollment-token is required for a new node' >&2; exit 2; fi
+    printf 'One-time enrollment token: ' >/dev/tty
+    old_stty=$(stty -g </dev/tty)
+    trap 'stty "$old_stty" </dev/tty; rm -rf "$work"' EXIT HUP INT TERM
+    stty -echo </dev/tty
+    IFS= read -r token </dev/tty
+    stty "$old_stty" </dev/tty
+    trap 'rm -rf "$work"' EXIT HUP INT TERM
+    printf '\n' >/dev/tty
+  fi
+  printf '%s' "$token" | "$work/xmesh" enroll --controller "$controller" --role "$role" --token-stdin --output /etc/xmesh/node.json
   chown xmesh:xmesh /etc/xmesh/node.json
   chmod 0600 /etc/xmesh/node.json
 else

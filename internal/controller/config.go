@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -18,6 +19,7 @@ type Config struct {
 	SessionSecret           string `json:"session_secret"`
 	ReleaseBaseURL          string `json:"release_base_url,omitempty"`
 	ReleaseVersion          string `json:"release_version,omitempty"`
+	ReleaseDir              string `json:"release_dir,omitempty"`
 	NodeOfflineAfterSeconds int    `json:"node_offline_after_seconds,omitempty"`
 }
 
@@ -51,6 +53,9 @@ func LoadConfig(path string) (Config, error) {
 	}
 	if cfg.PublicURL == "" {
 		return cfg, errors.New("public_url is required")
+	}
+	if cfg.ReleaseDir != "" && !filepath.IsAbs(cfg.ReleaseDir) {
+		return cfg, errors.New("release_dir must be an absolute path")
 	}
 	if cfg.NodeOfflineAfterSeconds <= 0 {
 		cfg.NodeOfflineAfterSeconds = 45

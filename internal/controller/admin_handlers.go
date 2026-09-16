@@ -3,6 +3,7 @@ package controller
 import (
 	"fmt"
 	"net/http"
+	"net/netip"
 	"strconv"
 	"strings"
 	"time"
@@ -142,6 +143,63 @@ func (s *Server) createAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.Redirect(w, r, "/", 303)
+}
+
+// quickSetup creates a minimal Gateway-Agent route as one desired-state transaction.
+func (s *Server) quickSetup(w http.ResponseWriter, r *http.Request) {
+	gwName := strings.TrimSpace(r.FormValue("gateway_name"))
+	agtName := strings.TrimSpace(r.FormValue("agent_name"))
+	publicHost := strings.TrimSpace(r.FormValue("public_host"))
+	linkURL := strings.TrimSpace(r.FormValue("link_url"))
+	vmessPath := strings.TrimSpace(r.FormValue("vmess_path"))
+	vmessPort, portErr := parsePositive(r.FormValue("vmess_port"), 8080)
+	allowedCIDRs := splitCSV(r.FormValue("allowed_cidrs"))
+	deniedCIDRs := splitCSV(r.FormValue("denied_cidrs"))
+	if gwName == "" || agtName == "" || publicHost == "" || strings.ContainsAny(publicHost, "/?#@ \t\r\n") ||
+		vmessPort > 65535 || portErr != nil || !strings.HasPrefix(vmessPath, "/") || strings.ContainsAny(vmessPath, " \t\r\n") ||
+		validateURL(linkURL) != nil || !strings.HasPrefix(linkURL, "wss://") || len(allowedCIDRs) == 0 {
+		http.Error(w, "valid node names, public host, VMess port/path, allowed CIDRs and wss:// Link URL are required", 400)
+		return
+	}
+	for _, cidr := range append(append([]string{}, allowedCIDRs...), deniedCIDRs...) {
+		if _, err := netip.ParsePrefix(cidr); err != nil {
+			http.Error(w, "invalid CIDR: "+cidr, 400)
+			return
+		}
+	}
+	gwID, err := newID("gw")
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	agtID, err := newID("agt")
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	attachmentID, err := newID("node")
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	linkID, err := newID("lnk")
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	now := s.now().UTC()
+	err = s.store.Update(func(state *model.State) error {
+		state.Gateways[gwID] = model.Gateway{ID: gwID, Name: gwName, PublicHost: publicHost, VMessPort: vmessPort, VMessPath: vmessPath, VMessHost: strings.TrimSpace(r.FormValue("vmess_host")), Enabled: true, DesiredVersion: 1, CreatedAt: now}
+		state.Agents[agtID] = model.Agent{ID: agtID, Name: agtName, Enabled: true, AllowedCIDRs: allowedCIDRs, DeniedCIDRs: deniedCIDRs, DesiredVersion: 1, CreatedAt: now}
+		state.Attachments[attachmentID] = model.Attachment{ID: attachmentID, GatewayID: gwID, AgentID: agtID, Enabled: true, CreatedAt: now}
+		state.Links[linkID] = model.Link{ID: linkID, AttachmentID: attachmentID, Name: gwName + " / " + agtName, URL: linkURL, HTTPHost: strings.TrimSpace(r.FormValue("link_http_host")), TLSServerName: strings.TrimSpace(r.FormValue("tls_server_name")), TLSVerify: true, Priority: 10, Weight: 1, Connections: 2, MaxStreams: 256, Enabled: true, TunnelTokenHash: auth.SecretHash(auth.Derive(s.cfg.sessionKey(), "tunnel", linkID)), CreatedAt: now}
+		return nil
+	})
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
 func (s *Server) toggleGateway(w http.ResponseWriter, r *http.Request) {
@@ -454,8 +512,8 @@ func (s *Server) createEnrollment(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if s.cfg.ReleaseBaseURL == "" || s.cfg.ReleaseVersion == "" {
-		http.Error(w, "release_base_url and release_version must be configured before generating installers", 409)
+	if !s.releaseEnabled() {
+		http.Error(w, "configure a release version and a GitHub or Controller release source", 409)
 		return
 	}
 	token, err := identity.Token(32)
@@ -469,6 +527,12 @@ func (s *Server) createEnrollment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	err = s.store.Update(func(state *model.State) error {
+		for existingID, enrollment := range state.Enrollments {
+			if enrollment.NodeID == nodeID && enrollment.Role == role && enrollment.UsedAt.IsZero() {
+				enrollment.ExpiresAt = s.now().UTC()
+				state.Enrollments[existingID] = enrollment
+			}
+		}
 		state.Enrollments[id] = model.Enrollment{ID: id, NodeID: nodeID, Role: role, TokenHash: auth.SecretHash(token), ExpiresAt: s.now().Add(30 * time.Minute).UTC(), CreatedAt: s.now().UTC()}
 		return nil
 	})
@@ -476,12 +540,41 @@ func (s *Server) createEnrollment(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 500)
 		return
 	}
-	releaseBase := strings.TrimSuffix(s.cfg.ReleaseBaseURL, "/")
-	scriptURL := releaseBase + "/" + s.cfg.ReleaseVersion + "/install.sh"
-	command := fmt.Sprintf("curl -fsSL %s | sudo sh -s -- --controller %s --role %s --enrollment-token %s --version %s --release-base-url %s", shellQuote(scriptURL), shellQuote(s.cfg.PublicURL), shellQuote(string(role)), shellQuote(token), shellQuote(s.cfg.ReleaseVersion), shellQuote(releaseBase))
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
-	_, _ = fmt.Fprintf(w, "This one-time enrollment token expires in 30 minutes.\n\n%s\n", command)
+	_, _ = fmt.Fprintf(w, "One-time enrollment token (expires in 30 minutes):\n%s\n\nPaste one command on the %s host. The installer prompts for the token; it is not embedded in the command.\n", token, role)
+	s.writeInstallOptions(w, "Controller on-demand cache", strings.TrimSuffix(s.cfg.PublicURL, "/")+"/releases", role)
+	s.writeInstallOptions(w, "GitHub release", strings.TrimSuffix(s.cfg.ReleaseBaseURL, "/"), role)
+}
+
+func (s *Server) revokeEnrollment(w http.ResponseWriter, r *http.Request) {
+	err := s.store.Update(func(state *model.State) error {
+		enrollment, ok := state.Enrollments[r.PathValue("id")]
+		if !ok {
+			return fmt.Errorf("enrollment not found")
+		}
+		enrollment.ExpiresAt = s.now().UTC()
+		state.Enrollments[enrollment.ID] = enrollment
+		return nil
+	})
+	if err != nil {
+		http.Error(w, err.Error(), 404)
+		return
+	}
+	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+func (s *Server) writeInstallOptions(w http.ResponseWriter, label, base string, role model.Role) {
+	for _, method := range []struct{ label, script string }{{"systemd", "install.sh"}, {"Docker Compose", "install-docker.sh"}} {
+		_, _ = fmt.Fprintf(w, "\n%s / %s:\n%s\n", label, method.label, s.installCommand(base, method.script, role))
+	}
+}
+
+func (s *Server) installCommand(base, script string, role model.Role) string {
+	versionBase := strings.TrimSuffix(base, "/") + "/" + s.cfg.ReleaseVersion
+	return fmt.Sprintf("(set -eu; work=$(mktemp -d); trap 'rm -rf \"$work\"' EXIT; curl -fL --retry 3 --proto '=https' --proto-redir '=https' -o \"$work/SHA256SUMS\" %s; curl -fL --retry 3 --proto '=https' --proto-redir '=https' -o \"$work/%s\" %s; (cd \"$work\" && grep '  %s$' SHA256SUMS | sha256sum -c -); sudo sh \"$work/%s\" --controller %s --role %s --version %s --release-base-url %s)",
+		shellQuote(versionBase+"/SHA256SUMS"), script, shellQuote(versionBase+"/"+script), script, script,
+		shellQuote(s.cfg.PublicURL), shellQuote(string(role)), shellQuote(s.cfg.ReleaseVersion), shellQuote(base))
 }
 
 func bumpGatewayForAttachment(state *model.State, attachmentID string) {

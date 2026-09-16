@@ -16,11 +16,44 @@ your own HTTPS reverse proxy in front of it.
 `state_path` contains credentials and must be backed up and readable only by the Controller user.
 The Controller does not terminate TLS and business traffic never passes through it.
 
+Set `release_base_url` to the HTTPS GitHub Release download base, `release_version` to an exact
+tag, and `release_dir` to a writable cache directory (for example,
+`/var/lib/xmesh-controller/releases` for systemd or `/var/lib/xmesh/releases` for Docker).
+The Controller serves `GET /releases/<version>/<asset>` publicly. On the first request for a
+versioned asset, it downloads `SHA256SUMS` and that asset from GitHub, verifies the asset hash,
+then atomically caches it on disk. Later requests use the cached copy. The download is capped at
+256 MiB per asset; an upstream failure or checksum mismatch returns 502 and does not cache the
+bad file. No release binary is embedded in the Controller executable. Ensure the reverse proxy
+allows these paths and large downloads; for `/releases/`, set the upstream read timeout to at
+least 10 minutes and disable proxy response buffering so the first slow GitHub fetch is not cut
+off or spooled to the proxy's temporary disk. Size the cache for both Linux architectures and
+Windows.
+The Controller host must be able to reach GitHub over HTTPS, but Gateway and Agent hosts can use
+the Controller URL when their GitHub connection is unreliable. Existing Controller installations
+must add `release_dir` to their preserved configuration and restart; the installers only set it
+for a new configuration. Hosts running the install commands need `curl`, `sha256sum` and `tar`;
+Docker mode additionally needs Docker Engine with the Compose plugin.
+
+Pushing a `v*` tag runs the release workflow: it tests the code, fetches the Xray version pinned
+in `versions.env`, checks the upstream SHA-256 digest, builds Linux amd64/arm64 and Windows amd64,
+and publishes the archives, installers and `SHA256SUMS` to the matching GitHub Release. Set the
+Controller's `release_version` to that published tag. Do not reuse an old tag whose manifest does
+not cover the installer scripts.
+
 ## Gateway and Agent
 
-Create the Gateway or Agent in the Panel, create the required Gateway × Agent combination and
-Link, then use **Generate one-time install command**. The command expires after 30 minutes and can
-only be used once.
+Use **Create route** in the Panel to make a Gateway, Agent, attachment and TLS-verified WSS Link
+in one operation, or configure them separately below. Review the Gateway host/port/path, Agent
+CIDR rules and WSS address carefully before submitting: the Panel does not currently edit those
+fields after creation. Generate an install command for each node.
+The Panel offers both Controller-cache and GitHub URLs, each with systemd and Docker Compose
+commands. The one-time token expires after 30 minutes, can only be used once, and is entered at
+the target host prompt rather than included in the shell command. The command verifies the
+installer script against `SHA256SUMS`; the installer verifies the architecture-specific archive.
+Generating another token for the same node revokes its previous unused token; the Panel can also
+revoke an active token explicitly.
+The Panel's readiness table shows enrollment, online status, applied version and runtime health;
+Link readiness and grant publication remain visible in their detailed tables.
 
 The generic installer:
 
