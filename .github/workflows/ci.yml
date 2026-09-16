@@ -15,5 +15,43 @@ jobs:
           cache: true
       - run: mise exec -- go test ./...
       - run: mise exec -- go vet ./...
-      - run: mise exec -- go build ./cmd/xmesh
       - run: sh -n scripts/install.sh scripts/package.sh
+
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            artifact: xmesh-linux-amd64
+            output: dist/xmesh-linux-amd64
+          - goos: linux
+            goarch: arm64
+            artifact: xmesh-linux-arm64
+            output: dist/xmesh-linux-arm64
+          - goos: windows
+            goarch: amd64
+            artifact: xmesh-windows-amd64
+            output: dist/xmesh-windows-amd64.exe
+    steps:
+      - uses: actions/checkout@v5
+      - uses: jdx/mise-action@v3
+        with:
+          install: true
+          cache: true
+      - name: Build ${{ matrix.goos }} ${{ matrix.goarch }}
+        env:
+          CGO_ENABLED: "0"
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          mkdir -p dist
+          mise exec -- go build -trimpath -ldflags="-s -w" -o "${{ matrix.output }}" ./cmd/xmesh
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.output }}
+          if-no-files-found: error
+          retention-days: 14
