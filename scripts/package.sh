@@ -11,7 +11,7 @@ case "$(go env GOVERSION)" in go1.27.1) ;; *) echo 'packaging requires Go 1.27.1
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT HUP INT TERM
 mkdir -p "$root/dist"
-rm -f "$root/dist"/*.tar.gz "$root/dist/SHA256SUMS "$root/dist/install.sh"
+rm -f "$root/dist"/*.tar.gz "$root/dist"/*.exe "$root/dist/SHA256SUMS" "$root/dist/install.sh"
 
 for arch in amd64 arm64; do
   package="$work/$arch"
@@ -22,6 +22,7 @@ for arch in amd64 arm64; do
   install -m 0755 "$xray_path" "$package/xray"
   tar -C "$package" -czf "$root/dist/xmesh-${version}-linux-${arch}.tar.gz" xmesh xray
 done
+CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "-s -w -X main.version=$version" -o "$root/dist/xmesh-${version}-windows-amd64.exe" ./cmd/xmesh
 install -m 0755 "$root/scripts/install.sh" "$root/dist/install.sh"
-(cd "$root/dist" && sha256sum ./*.tar.gz >SHA256SUMS)
+(cd "$root/dist" && sha256sum ./*.tar.gz ./*.exe >SHA256SUMS)
 echo "release assets written to $root/dist"

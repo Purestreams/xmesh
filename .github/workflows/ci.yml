@@ -15,7 +15,7 @@ jobs:
           cache: true
       - run: mise exec -- go test ./...
       - run: mise exec -- go vet ./...
-      - run: sh -n scripts/install.sh scripts/package.sh
+      - run: sh -n scripts/install.sh scripts/install-controller.sh scripts/install-docker.sh scripts/package.sh
 
   build:
     needs: test

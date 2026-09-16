@@ -27,6 +27,7 @@ if [ ! -r /etc/os-release ]; then echo 'unsupported system: /etc/os-release miss
 . /etc/os-release
 case "${ID:-}" in debian|ubuntu) ;; *) echo "unsupported distribution: ${ID:-unknown}" >&2; exit 1;; esac
 if [ ! -d /run/systemd/system ]; then echo 'systemd is required' >&2; exit 1; fi
+if [ -e /etc/systemd/system/xmesh-controller.service ]; then echo 'a Controller service already uses /usr/local/bin/xmesh; install nodes on separate hosts' >&2; exit 1; fi
 
 if [ "$uninstall" = 'true' ]; then
   systemctl disable --now xmesh.service 2>/dev/null || true
@@ -39,6 +40,7 @@ fi
 
 case "$role" in gateway|agent) ;; *) echo '--role must be gateway or agent' >&2; exit 2;; esac
 if [ -z "$controller" ] || [ -z "$version" ] || [ -z "$release_base_url" ]; then echo '--controller, --version, and --release-base-url are required' >&2; exit 2; fi
+case "$release_base_url" in https://*) ;; *) echo '--release-base-url must use HTTPS' >&2; exit 2;; esac
 if [ ! -f /etc/xmesh/node.json ] && [ -z "$token" ]; then echo '--enrollment-token is required for a new node' >&2; exit 2; fi
 
 case "$(uname -m)" in x86_64|amd64) arch=amd64;; aarch64|arm64) arch=arm64;; *) echo "unsupported architecture: $(uname -m)" >&2; exit 1;; esac
@@ -46,8 +48,8 @@ archive="xmesh-${version}-linux-${arch}.tar.gz"
 base="${release_base_url%/}/${version}"
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT HUP INT TERM
-curl -fL --retry 3 "$base/$archive" -o "$work/$archive"
-curl -fL --retry 3 "$base/SHA256SUMS" -o "$work/SHA256SUMS"
+wget -q --https-only "$base/$archive" -O "$work/$archive"
+wget -q --https-only "$base/SHA256SUMS" -O "$work/SHA256SUMS"
 (cd "$work" && grep "  $archive\$" SHA256SUMS | sha256sum -c -)
 tar -xzf "$work/$archive" -C "$work"
 "$work/xmesh" version >/dev/null
