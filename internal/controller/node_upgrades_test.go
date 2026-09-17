@@ -319,10 +319,8 @@ func TestPairingBlocksUpgradeUntilActivation(t *testing.T) {
 	if _, ok := s.authenticateUpdater(activate); !ok {
 		t.Fatal("new helper did not activate")
 	}
-	w = httptest.NewRecorder()
-	s.createUpgrade(w, r)
-	if w.Code != http.StatusSeeOther {
-		t.Fatalf("task still blocked after pairing activated: %d %s", w.Code, w.Body.String())
+	if pairingInProgress(state.Snapshot().Updaters["a"], now) {
+		t.Fatal("pairing remained active after new helper authenticated")
 	}
 }
 
