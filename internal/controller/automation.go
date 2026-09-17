@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"xmesh/internal/auth"
@@ -29,6 +30,7 @@ func (s *Server) assignGateways(w http.ResponseWriter, r *http.Request) {
 	}
 	target := strings.TrimSpace(r.FormValue("reality_target"))
 	seen := map[string]bool{}
+	created, reenabled, unchanged := 0, 0, 0
 	err := s.store.Update(func(state *model.State) error {
 		agent, ok := state.Agents[agentID]
 		if !ok || !agent.Enabled {
@@ -39,6 +41,7 @@ func (s *Server) assignGateways(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			seen[gatewayID] = true
+			routeReenabled := false
 			gateway, ok := state.Gateways[gatewayID]
 			if !ok || !gateway.Enabled || gateway.PublicHost == "" {
 				return fmt.Errorf("Gateway %s unavailable", gatewayID)
@@ -47,7 +50,11 @@ func (s *Server) assignGateways(w http.ResponseWriter, r *http.Request) {
 			for _, attachment := range state.Attachments {
 				if attachment.AgentID == agentID && attachment.GatewayID == gatewayID {
 					if !attachment.Enabled {
-						return fmt.Errorf("Gateway %s assignment is disabled; enable it explicitly", gateway.Name)
+						attachment.Enabled = true
+						state.Attachments[attachment.ID] = attachment
+						bumpGateway(state, gatewayID)
+						bumpAgent(state, agentID)
+						routeReenabled = true
 					}
 					attachmentID = attachment.ID
 					break
@@ -55,13 +62,25 @@ func (s *Server) assignGateways(w http.ResponseWriter, r *http.Request) {
 			}
 			if attachmentID != "" {
 				hasExistingLink := false
-				for _, link := range state.Links {
+				for id, link := range state.Links {
 					if link.AttachmentID == attachmentID {
 						hasExistingLink = true
+						if !link.Enabled {
+							link.Enabled = true
+							state.Links[id] = link
+							bumpGateway(state, gatewayID)
+							bumpAgent(state, agentID)
+							routeReenabled = true
+						}
 						break
 					}
 				}
 				if hasExistingLink {
+					if routeReenabled {
+						reenabled++
+					} else {
+						unchanged++
+					}
 					continue
 				}
 			} else {
@@ -86,6 +105,7 @@ func (s *Server) assignGateways(w http.ResponseWriter, r *http.Request) {
 				return fmt.Errorf("Gateway %s: %w", gateway.Name, err)
 			}
 			state.Links[linkID] = model.Link{ID: linkID, AttachmentID: attachmentID, Name: gateway.Name + " / " + agent.Name, URL: linkURL, TLSVerify: true, RealityUUID: uuid, RealityShortID: shortID, Priority: 10, Weight: 1, Connections: 2, MaxStreams: 256, Enabled: true, TunnelTokenHash: auth.SecretHash(auth.Derive(s.cfg.sessionKey(), "tunnel", linkID)), CreatedAt: s.now().UTC()}
+			created++
 			bumpGateway(state, gatewayID)
 			bumpAgent(state, agentID)
 		}
@@ -95,7 +115,7 @@ func (s *Server) assignGateways(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	http.Redirect(w, r, "/", http.StatusSeeOther)
+	http.Redirect(w, r, "/?notice="+url.QueryEscape(fmt.Sprintf("Gateway assignment: %d created, %d re-enabled, %d already active", created, reenabled, unchanged)), http.StatusSeeOther)
 }
 
 // openSubscription grants only the routes selected by the administrator.
@@ -114,6 +134,7 @@ func (s *Server) openSubscription(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	seen := map[string]bool{}
+	created, reenabled, unchanged := 0, 0, 0
 	err := s.store.Update(func(state *model.State) error {
 		user, ok := state.Users[userID]
 		if !ok || !user.Enabled {
@@ -124,6 +145,7 @@ func (s *Server) openSubscription(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			seen[attachmentID] = true
+			grantReenabled := false
 			attachment, ok := state.Attachments[attachmentID]
 			if !ok || !attachment.Enabled || !state.Gateways[attachment.GatewayID].Enabled || !state.Agents[attachment.AgentID].Enabled {
 				return fmt.Errorf("route %s unavailable", attachmentID)
@@ -139,13 +161,25 @@ func (s *Server) openSubscription(w http.ResponseWriter, r *http.Request) {
 				return fmt.Errorf("route %s has no enabled Link", attachmentID)
 			}
 			hasExistingGrant := false
-			for _, grant := range state.Grants {
+			for id, grant := range state.Grants {
 				if grant.UserID == userID && grant.AttachmentID == attachmentID {
 					hasExistingGrant = true
+					if !grant.Enabled {
+						grant.Enabled = true
+						grant.Published = false
+						state.Grants[id] = grant
+						bumpGateway(state, attachment.GatewayID)
+						grantReenabled = true
+					}
 					break
 				}
 			}
 			if hasExistingGrant {
+				if grantReenabled {
+					reenabled++
+				} else {
+					unchanged++
+				}
 				continue
 			}
 			id, err := newID("grt")
@@ -161,6 +195,7 @@ func (s *Server) openSubscription(w http.ResponseWriter, r *http.Request) {
 				return err
 			}
 			state.Grants[id] = model.Grant{ID: id, UserID: userID, AttachmentID: attachmentID, VMessUUID: uuid, SOCKSUsername: id, SOCKSPassword: password, Enabled: true, CreatedAt: s.now().UTC()}
+			created++
 			bumpGateway(state, attachment.GatewayID)
 		}
 		return nil
@@ -169,7 +204,7 @@ func (s *Server) openSubscription(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	http.Redirect(w, r, "/", http.StatusSeeOther)
+	http.Redirect(w, r, "/?notice="+url.QueryEscape(fmt.Sprintf("Subscription routes: %d created, %d re-enabled, %d already active", created, reenabled, unchanged)), http.StatusSeeOther)
 }
 
 func (s *Server) upgradeOptions(w http.ResponseWriter, r *http.Request) {

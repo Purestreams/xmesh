@@ -235,7 +235,7 @@ func (s *Server) nodeStatus(w http.ResponseWriter, r *http.Request) {
 				for id, grant := range state.Grants {
 					attachment := state.Attachments[grant.AttachmentID]
 					user := state.Users[grant.UserID]
-					if attachment.GatewayID == nodeID && attachment.Enabled && grant.Enabled && user.Enabled {
+					if attachment.GatewayID == nodeID && attachment.Enabled && grant.Enabled && user.Enabled && attachmentHasEnabledLink(state, attachment.ID) {
 						grant.Published = true
 						state.Grants[id] = grant
 					}

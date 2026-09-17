@@ -41,6 +41,26 @@ func TestAssignMultipleGatewaysToAgent(t *testing.T) {
 	}
 }
 
+func TestOneClickReenablesExistingRouteAndGrant(t *testing.T) {
+	server, state := testServer(t, func(s *model.State) error {
+		s.Users["u"] = model.User{ID: "u", Enabled: true}
+		s.Gateways["g"] = model.Gateway{ID: "g", Name: "G", PublicHost: "edge.example", Enabled: true}
+		s.Agents["a"] = model.Agent{ID: "a", Name: "A", Enabled: true}
+		s.Attachments["n"] = model.Attachment{ID: "n", GatewayID: "g", AgentID: "a", Enabled: false}
+		s.Links["l"] = model.Link{ID: "l", AttachmentID: "n", Enabled: false}
+		s.Grants["r"] = model.Grant{ID: "r", UserID: "u", AttachmentID: "n", Enabled: false}
+		return nil
+	})
+	response := postNodeForm("/admin/agents/a/assign-gateways", url.Values{"gateway_id": {"g"}}, server.assignGateways)
+	if response.Code != http.StatusSeeOther || !state.Snapshot().Attachments["n"].Enabled || !state.Snapshot().Links["l"].Enabled {
+		t.Fatalf("route not re-enabled: %d", response.Code)
+	}
+	response = postNodeForm("/admin/users/u/subscribe", url.Values{"attachment_id": {"n"}}, server.openSubscription)
+	if response.Code != http.StatusSeeOther || !state.Snapshot().Grants["r"].Enabled || state.Snapshot().Grants["r"].Published {
+		t.Fatalf("grant not staged for re-publication: %d", response.Code)
+	}
+}
+
 func TestBatchAssignmentIsAtomicOnInvalidTarget(t *testing.T) {
 	server, store := testServer(t, func(state *model.State) error {
 		state.Agents["a"] = model.Agent{ID: "a", Name: "Agent", Enabled: true}

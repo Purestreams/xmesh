@@ -1,9 +1,9 @@
-# Deployment automation (v0.2.3)
+# Deployment automation (v0.2.4)
 
-This guide targets the v0.2.3 Controller and node binaries. Upgrade an
-existing Controller first and set its `release_version` to `v0.2.3`. The v0.2.0
+This guide targets the v0.2.4 Controller and node binaries. Upgrade an
+existing Controller first and set its `release_version` to `v0.2.4`. The v0.2.0
 Controller does not offer the new panel controls. Node installers obtain
-verified v0.2.3 assets from GitHub or the Controller's on-demand cache.
+verified v0.2.4 assets from GitHub or the Controller's on-demand cache.
 The v0.2.1 Controller's on-demand cache rejects its release manifest and
 returns 502; upgrade the Controller before selecting a cached install command.
 
@@ -27,7 +27,7 @@ next check. An installed node without a Link is not yet a usable route.
 
 Select one Agent and several Gateways in **Assign multiple Gateways to an
 Agent**. The Controller creates each missing attachment and REALITY Link in one
-transaction. Existing routes are left untouched. A Gateway keeps one REALITY
+transaction. Disabled existing routes are re-enabled; active routes are left unchanged. A Gateway keeps one REALITY
 target; newly selected Gateways use the target entered in that form. The Agent
 initiates a separate connection to each Gateway. A multi-container test runs
 two Gateway containers, one Agent, two client containers, Controller, and a
@@ -35,6 +35,7 @@ target, checking TCP and UDP through both REALITY routes.
 
 In **Open VMess/WS subscription**, select one user and only the routes they
 should access. The Controller creates missing Grants in one transaction. The
+panel re-enables an existing disabled Grant when selected again. The
 panel shows how many entries are published and offers a copy button. A new
 Grant appears in the subscription only after its Gateway applies the updated
 configuration. The subscription URL is a bearer secret; use HTTPS, do not put
@@ -59,14 +60,14 @@ same node identity atomically. The previous credential has a 15-minute grace
 period and is revoked as soon as the new node reports status. Unused tokens can
 be revoked from the panel. Subscription links can be reset separately.
 
-On a Docker Controller host with a v0.2.3 source checkout, run:
+On a Docker Controller host with a v0.2.4 source checkout, run:
 
 ```sh
 sudo sh scripts/backup-controller.sh /opt/xmesh-docker-controller /var/backups/xmesh-controller
 ```
 
-The helper is also a v0.2.3 release asset and is available from the
-Controller's on-demand `/releases/v0.2.3/backup-controller.sh` URL. If the
+The helper is also a v0.2.4 release asset and is available from the
+Controller's on-demand `/releases/v0.2.4/backup-controller.sh` URL. If the
 source checkout is absent, download the helper and `SHA256SUMS` from the same
 release source, verify the helper with `sha256sum -c`, then run it as root.
 
@@ -79,8 +80,8 @@ be downloaded again and are not part of the backup.
 
 ## One-click Controller upgrade
 
-The first upgrade from an older Docker Controller to v0.2.3 is manual. Use the
-verified v0.2.3 `install-docker.sh` from GitHub on the Controller host; the
+The first upgrade from a Docker Controller older than v0.2.3 is manual. Use the
+verified v0.2.4 `install-docker.sh` from GitHub on the Controller host; the
 v0.2.1 Controller cache is broken. On a systemd host the installer registers
 `xmesh-controller-updater.timer` and a root-owned helper outside the Controller
 container. It does **not** mount the Docker socket into the web process.

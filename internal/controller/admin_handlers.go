@@ -125,17 +125,24 @@ func (s *Server) createAgent(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "name is required", 400)
 		return
 	}
+	allowedCIDRs := splitCSV(r.FormValue("allowed_cidrs"))
+	if len(allowedCIDRs) == 0 {
+		allowedCIDRs = []string{"0.0.0.0/0", "::/0"}
+	}
+	deniedCIDRs := splitCSV(r.FormValue("denied_cidrs"))
+	for _, cidr := range append(append([]string{}, allowedCIDRs...), deniedCIDRs...) {
+		if _, err := netip.ParsePrefix(cidr); err != nil {
+			http.Error(w, "invalid CIDR: "+cidr, http.StatusBadRequest)
+			return
+		}
+	}
 	id, err := newID("agt")
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return
 	}
 	err = s.store.Update(func(state *model.State) error {
-		allowedCIDRs := splitCSV(r.FormValue("allowed_cidrs"))
-		if len(allowedCIDRs) == 0 {
-			allowedCIDRs = []string{"0.0.0.0/0", "::/0"}
-		}
-		state.Agents[id] = model.Agent{ID: id, Name: name, Enabled: true, AllowedCIDRs: allowedCIDRs, DeniedCIDRs: splitCSV(r.FormValue("denied_cidrs")), DesiredVersion: 1, CreatedAt: s.now().UTC()}
+		state.Agents[id] = model.Agent{ID: id, Name: name, Enabled: true, AllowedCIDRs: allowedCIDRs, DeniedCIDRs: deniedCIDRs, DesiredVersion: 1, CreatedAt: s.now().UTC()}
 		return nil
 	})
 	if err != nil {
@@ -305,6 +312,7 @@ func (s *Server) toggleLink(w http.ResponseWriter, r *http.Request) {
 		link.Enabled = !link.Enabled
 		state.Links[link.ID] = link
 		attachment := state.Attachments[link.AttachmentID]
+		unpublishGrantsWithoutLink(state, link.AttachmentID)
 		bumpGateway(state, attachment.GatewayID)
 		bumpAgent(state, attachment.AgentID)
 		return nil
@@ -543,6 +551,13 @@ func (s *Server) createEnrollment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	err = s.store.Update(func(state *model.State) error {
+		if role == model.RoleGateway {
+			if _, ok := state.Gateways[nodeID]; !ok {
+				return fmt.Errorf("gateway no longer exists")
+			}
+		} else if _, ok := state.Agents[nodeID]; !ok {
+			return fmt.Errorf("agent no longer exists")
+		}
 		for existingID, enrollment := range state.Enrollments {
 			if enrollment.NodeID == nodeID && enrollment.Role == role && enrollment.UsedAt.IsZero() {
 				enrollment.ExpiresAt = s.now().UTC()

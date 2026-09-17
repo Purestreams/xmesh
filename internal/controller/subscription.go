@@ -39,7 +39,7 @@ func BuildSubscription(state model.State, userID string) (string, error) {
 			continue
 		}
 		attachment, ok := state.Attachments[grant.AttachmentID]
-		if !ok || !attachment.Enabled {
+		if !ok || !attachment.Enabled || !attachmentHasEnabledLink(&state, attachment.ID) {
 			continue
 		}
 		gateway, gatewayOK := state.Gateways[attachment.GatewayID]
@@ -71,4 +71,13 @@ func BuildSubscription(state model.State, userID string) (string, error) {
 		plain += item.link
 	}
 	return base64.StdEncoding.EncodeToString([]byte(plain)), nil
+}
+
+func attachmentHasEnabledLink(state *model.State, attachmentID string) bool {
+	for _, link := range state.Links {
+		if link.AttachmentID == attachmentID && link.Enabled {
+			return true
+		}
+	}
+	return false
 }

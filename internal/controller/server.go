@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"html/template"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"sort"
@@ -35,6 +36,13 @@ type Server struct {
 	now               func() time.Time
 	releaseMu         sync.Mutex
 	releaseHTTPClient *http.Client
+	loginMu           sync.Mutex
+	loginFailures     map[string]loginFailure
+}
+
+type loginFailure struct {
+	count int
+	until time.Time
 }
 
 func New(cfg Config, state *store.Store, logger *slog.Logger) (*Server, error) {
@@ -53,10 +61,11 @@ func New(cfg Config, state *store.Store, logger *slog.Logger) (*Server, error) {
 				return "failed: " + applyErr
 			}
 			if applied < desired {
-				return "pending"
+				return "pending: waiting for node to apply config"
 			}
 			return "applied"
 		},
+		"join": func(values []string) string { return strings.Join(values, ", ") },
 	}).Parse(panelTemplate)
 	if err != nil {
 		return nil, fmt.Errorf("parse panel template: %w", err)
@@ -82,17 +91,25 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /admin/gateways", s.requireAdmin(s.csrf(s.createGateway)))
 	mux.HandleFunc("POST /admin/quick-setup", s.requireAdmin(s.csrf(s.quickSetup)))
 	mux.HandleFunc("POST /admin/gateways/{id}/toggle", s.requireAdmin(s.csrf(s.toggleGateway)))
+	mux.HandleFunc("POST /admin/gateways/{id}/edit", s.requireAdmin(s.csrf(s.editGateway)))
+	mux.HandleFunc("POST /admin/gateways/{id}/delete", s.requireAdmin(s.csrf(s.deleteGateway)))
 	mux.HandleFunc("POST /admin/agents", s.requireAdmin(s.csrf(s.createAgent)))
 	mux.HandleFunc("POST /admin/agents/{id}/toggle", s.requireAdmin(s.csrf(s.toggleAgent)))
+	mux.HandleFunc("POST /admin/agents/{id}/edit", s.requireAdmin(s.csrf(s.editAgent)))
+	mux.HandleFunc("POST /admin/agents/{id}/delete", s.requireAdmin(s.csrf(s.deleteAgent)))
 	mux.HandleFunc("POST /admin/agents/{id}/assign-gateways", s.requireAdmin(s.csrf(s.assignGateways)))
 	mux.HandleFunc("POST /admin/assign-gateways", s.requireAdmin(s.csrf(s.assignGateways)))
 	mux.HandleFunc("POST /admin/attachments", s.requireAdmin(s.csrf(s.createAttachment)))
 	mux.HandleFunc("POST /admin/attachments/{id}/toggle", s.requireAdmin(s.csrf(s.toggleAttachment)))
+	mux.HandleFunc("POST /admin/attachments/{id}/delete", s.requireAdmin(s.csrf(s.deleteAttachment)))
 	mux.HandleFunc("POST /admin/links", s.requireAdmin(s.csrf(s.createLink)))
 	mux.HandleFunc("POST /admin/links/{id}/toggle", s.requireAdmin(s.csrf(s.toggleLink)))
+	mux.HandleFunc("POST /admin/links/{id}/edit", s.requireAdmin(s.csrf(s.editLink)))
+	mux.HandleFunc("POST /admin/links/{id}/delete", s.requireAdmin(s.csrf(s.deleteLink)))
 	mux.HandleFunc("POST /admin/links/{id}/policy", s.requireAdmin(s.csrf(s.updateLinkPolicy)))
 	mux.HandleFunc("POST /admin/grants", s.requireAdmin(s.csrf(s.createGrant)))
 	mux.HandleFunc("POST /admin/grants/{id}/toggle", s.requireAdmin(s.csrf(s.toggleGrant)))
+	mux.HandleFunc("POST /admin/grants/{id}/delete", s.requireAdmin(s.csrf(s.deleteGrant)))
 	mux.HandleFunc("POST /admin/users/{id}/subscribe", s.requireAdmin(s.csrf(s.openSubscription)))
 	mux.HandleFunc("POST /admin/subscribe", s.requireAdmin(s.csrf(s.openSubscription)))
 	mux.HandleFunc("POST /admin/enrollments", s.requireAdmin(s.csrf(s.createEnrollment)))
@@ -129,12 +146,22 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	}
 	username := r.FormValue("username")
 	password := r.FormValue("password")
+	clientIP, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		clientIP = r.RemoteAddr
+	}
+	if s.loginLimited(clientIP) {
+		http.Error(w, "too many login attempts; try again later", http.StatusTooManyRequests)
+		return
+	}
 	usernameOK := subtle.ConstantTimeCompare([]byte(username), []byte(s.cfg.AdminUsername)) == 1
 	if !usernameOK || !auth.CheckPassword(s.cfg.AdminPasswordHash, password) {
+		s.recordLoginFailure(clientIP)
 		time.Sleep(150 * time.Millisecond)
 		s.renderLogin(w, "Invalid credentials")
 		return
 	}
+	s.clearLoginFailures(clientIP)
 	expires := s.now().Add(12 * time.Hour)
 	http.SetCookie(w, &http.Cookie{
 		Name: sessionCookie, Value: auth.SignSession(s.cfg.sessionKey(), username, expires),
@@ -142,6 +169,41 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		Secure: strings.HasPrefix(s.cfg.PublicURL, "https://"), Expires: expires,
 	})
 	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+func (s *Server) loginLimited(clientIP string) bool {
+	s.loginMu.Lock()
+	defer s.loginMu.Unlock()
+	failure := s.loginFailures[clientIP]
+	return failure.count >= 5 && s.now().Before(failure.until)
+}
+
+func (s *Server) recordLoginFailure(clientIP string) {
+	s.loginMu.Lock()
+	defer s.loginMu.Unlock()
+	if s.loginFailures == nil {
+		s.loginFailures = map[string]loginFailure{}
+	}
+	now := s.now()
+	if len(s.loginFailures) > 1024 {
+		for ip, failure := range s.loginFailures {
+			if !now.Before(failure.until) {
+				delete(s.loginFailures, ip)
+			}
+		}
+	}
+	failure := s.loginFailures[clientIP]
+	if !now.Before(failure.until) {
+		failure = loginFailure{until: now.Add(15 * time.Minute)}
+	}
+	failure.count++
+	s.loginFailures[clientIP] = failure
+}
+
+func (s *Server) clearLoginFailures(clientIP string) {
+	s.loginMu.Lock()
+	delete(s.loginFailures, clientIP)
+	s.loginMu.Unlock()
 }
 
 func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
@@ -197,7 +259,7 @@ func (s *Server) panel(w http.ResponseWriter, r *http.Request) {
 	}
 	cookie, _ := r.Cookie(sessionCookie)
 	data := panelData{
-		State: state, CSRF: auth.Derive(s.cfg.sessionKey(), "csrf", cookie.Value),
+		State: state, CSRF: auth.Derive(s.cfg.sessionKey(), "csrf", cookie.Value), Notice: r.URL.Query().Get("notice"),
 		PublicURL: strings.TrimSuffix(s.cfg.PublicURL, "/"),
 		UserList:  sortedUsers(state), GatewayList: sortedGateways(state), AgentList: sortedAgents(state),
 		AttachmentList: sortedAttachments(state), LinkList: sortedLinks(state), GrantList: sortedGrants(state),
@@ -206,6 +268,8 @@ func (s *Server) panel(w http.ResponseWriter, r *http.Request) {
 		Deployments:        deploymentStatuses(state),
 		Enrollments:        enrollmentStatuses(state, s.now()),
 		SubscriptionCounts: subscriptionCounts(state),
+		NodeImpacts:        nodeImpacts(state),
+		RouteImpacts:       routeImpacts(state),
 		ControllerUpgrade:  s.controllerUpgradeStatus(),
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -313,6 +377,7 @@ func newID(prefix string) (string, error) {
 type panelData struct {
 	model.State
 	CSRF               string
+	Notice             string
 	PublicURL          string
 	UserList           []model.User
 	GatewayList        []model.Gateway
@@ -327,6 +392,8 @@ type panelData struct {
 	Deployments        []deploymentStatus
 	Enrollments        []enrollmentStatus
 	SubscriptionCounts map[string]string
+	NodeImpacts        map[string]deletionImpact
+	RouteImpacts       map[string]deletionImpact
 	ControllerUpgrade  controllerUpgradeView
 }
 
@@ -337,7 +404,8 @@ func subscriptionCounts(state model.State) map[string]string {
 		for _, grant := range state.Grants {
 			if grant.UserID == user.ID && grant.Enabled {
 				total++
-				if grant.Published {
+				attachment, ok := state.Attachments[grant.AttachmentID]
+				if ok && grant.Published && attachment.Enabled && state.Gateways[attachment.GatewayID].Enabled && state.Agents[attachment.AgentID].Enabled && attachmentHasEnabledLink(&state, attachment.ID) {
 					available++
 				}
 			}

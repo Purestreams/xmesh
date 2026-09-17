@@ -54,6 +54,7 @@ func TestSubscriptionContainsOnlyPublishedAuthorizedNodes(t *testing.T) {
 	}
 	for _, attachment := range []model.Attachment{{ID: "n11", GatewayID: "g1", AgentID: "a1", Enabled: true}, {ID: "n12", GatewayID: "g1", AgentID: "a2", Enabled: true}, {ID: "n21", GatewayID: "g2", AgentID: "a1", Enabled: true}, {ID: "n22", GatewayID: "g2", AgentID: "a2", Enabled: true}} {
 		state.Attachments[attachment.ID] = attachment
+		state.Links[attachment.ID] = model.Link{ID: attachment.ID, AttachmentID: attachment.ID, Enabled: true}
 	}
 	state.Grants["r1"] = model.Grant{ID: "r1", UserID: "u1", AttachmentID: "n11", VMessUUID: "00000000-0000-4000-8000-000000000001", Enabled: true, Published: true}
 	state.Grants["r2"] = model.Grant{ID: "r2", UserID: "u1", AttachmentID: "n22", VMessUUID: "00000000-0000-4000-8000-000000000002", Enabled: true, Published: true}
@@ -81,7 +82,7 @@ func TestGatewayStatusPublishesGrantOnlyAfterXrayApplied(t *testing.T) {
 		s.Gateways["g"] = model.Gateway{ID: "g", Enabled: true, CredentialHash: auth.SecretHash("credential"), DesiredVersion: 2}
 		s.Agents["a"] = model.Agent{ID: "a", Enabled: true}
 		s.Attachments["n"] = model.Attachment{ID: "n", GatewayID: "g", AgentID: "a", Enabled: true}
-		s.Links["l"] = model.Link{ID: "l", AttachmentID: "n"}
+		s.Links["l"] = model.Link{ID: "l", AttachmentID: "n", Enabled: true}
 		s.Grants["r"] = model.Grant{ID: "r", UserID: "u", AttachmentID: "n", Enabled: true}
 		return nil
 	})
