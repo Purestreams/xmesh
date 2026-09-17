@@ -41,6 +41,7 @@ func TestPanelBrowserFixture(t *testing.T) {
 		s.Users["u1"] = model.User{ID: "u1", Name: "Personal", Enabled: true, SubscriptionToken: "fixture-subscription"}
 		s.Users["u2"] = model.User{ID: "u2", Name: "Team", Enabled: true, SubscriptionToken: "fixture-team"}
 		s.Grants["grant1"] = model.Grant{ID: "grant1", UserID: "u1", AttachmentID: "r1", Enabled: true, Published: true}
+		s.UsageHistory = map[string][]model.UsageBucket{"u1/l1": {{At: now.Truncate(5 * time.Minute), UploadBytes: 1024, DownloadBytes: 2048}}}
 		s.LinkHistory = map[string][]model.LinkSample{}
 		for i := range 60 {
 			s.LinkHistory["l1"] = append(s.LinkHistory["l1"], model.LinkSample{At: now.Add(time.Duration(i-59) * 5 * time.Minute), Generation: 1, Ready: true, RTTMillis: float64(25 + i%9*4), UploadBytes: uint64(i * i * 240000), DownloadBytes: uint64(i * i * 740000)})

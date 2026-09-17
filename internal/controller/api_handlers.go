@@ -259,6 +259,9 @@ func (s *Server) nodeStatus(w http.ResponseWriter, r *http.Request) {
 				return fmt.Errorf("grant %s does not belong to gateway", status.GrantID)
 			}
 			status.ReporterNodeID, status.LastSeen = nodeID, now
+			if err := sampleGrantUsage(state, report.Status.InstanceID, status.GrantID, status.Links, now); err != nil {
+				return err
+			}
 			state.GrantStatus[nodeID+"/"+status.GrantID] = status
 		}
 		if role == model.RoleGateway && report.Status.Ready && report.Status.XrayReady && report.Status.ApplyError == "" && report.Status.XrayError == "" {

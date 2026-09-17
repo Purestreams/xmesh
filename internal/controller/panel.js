@@ -16,7 +16,9 @@ function sampleRates(samples) {
       previous &&
       seconds > 0 &&
       seconds <= 600 &&
-      sample.generation === previous.generation &&
+      (sample.instance_id || previous.instance_id
+        ? sample.instance_id && sample.instance_id === previous.instance_id
+        : sample.generation === previous.generation) &&
       sample.upload_bytes >= previous.upload_bytes &&
       sample.download_bytes >= previous.download_bytes &&
       sample.ready &&
@@ -60,11 +62,16 @@ function formatBytes(value) {
   }
   return `${value.toFixed(i ? 1 : 0)} ${units[i]}`;
 }
+function formatRate(value) {
+  if (value > 0 && value < 1) return `${value.toFixed(2)} B/s`;
+  return `${formatBytes(value)}/s`;
+}
 if (typeof module !== "undefined")
   module.exports = {
     sampleRates,
     selectionPlan,
     formatBytes,
+    formatRate,
     defaultRealityTarget,
   };
 
@@ -185,10 +192,10 @@ if (typeof document !== "undefined")
         .forEach((link) => {
           const p = el("p");
           p.append(
-            el("strong", link.name),
+            el("strong", `Link：${link.name}`),
             el(
               "small",
-              `RTT ${link.status.rtt_millis || "—"} ms · ${link.status.active_streams || 0} streams · ↑ ${formatBytes(link.status.upload_bytes)} ↓ ${formatBytes(link.status.download_bytes)}`,
+              `RTT ${link.status.rtt_millis ? link.status.rtt_millis.toFixed(1) : "—"} ms · ${link.status.active_streams || 0} streams · 累计 ↑ ${formatBytes(link.status.upload_bytes)} ↓ ${formatBytes(link.status.download_bytes)}`,
             ),
           );
           if (link.status.last_error)
@@ -199,7 +206,7 @@ if (typeof document !== "undefined")
       a.href = "#links";
       a.addEventListener("click", () => $("#detail-dialog").close());
       body.append(a);
-      showDetail(routeName(route), body);
+      showDetail(`节点组合：${routeName(route)}`, body);
     }
     function renderMetrics() {
       const ready = data.routes.filter((r) => r.state === "ready").length,
@@ -404,7 +411,7 @@ if (typeof document !== "undefined")
             visible = route && routes.some((r) => r.id === route.id),
             button = el(
               "button",
-              route ? (visible ? stages[route.state] : "已筛除") : "+ 绑定",
+              route ? (visible ? `${stages[route.state]} · ${data.links.filter((l) => l.route_id === route.id).length} Link` : "已筛除") : "+ 绑定",
               `matrix-cell ${route?.state || "unassigned"}`,
             );
           button.type = "button";
@@ -546,11 +553,12 @@ if (typeof document !== "undefined")
         );
         return box;
       }
-      const max = Math.max(...valid, 1),
+      const actualMax = Math.max(...valid, 0),
+        max = Math.max(actualMax, 0.01),
         svg = svgEl("svg", {
           viewBox: "0 0 500 160",
           role: "img",
-          "aria-label": `${title}，最高 ${format(max)}`,
+          "aria-label": `${title}，最高 ${format(actualMax)}`,
         }),
         from = Date.parse(samples[0].at),
         to = Date.parse(samples.at(-1).at),
@@ -600,7 +608,7 @@ if (typeof document !== "undefined")
       const caption = el("p");
       caption.append(
         el("span", new Date(from).toLocaleTimeString()),
-        el("span", `最高 ${format(max)}`),
+        el("span", `最高 ${format(actualMax)}`),
         el("span", new Date(to).toLocaleTimeString()),
       );
       box.append(caption);
@@ -635,7 +643,7 @@ if (typeof document !== "undefined")
           "吞吐速率 · 蓝色上传 / 绿色下载",
           samples,
           ["uploadRate", "downloadRate"],
-          (v) => formatBytes(v) + "/s",
+          formatRate,
         ),
         chart("往返延迟 RTT", samples, ["rtt"], (v) => v.toFixed(1) + " ms"),
       );
@@ -667,6 +675,69 @@ if (typeof document !== "undefined")
         ranking.append(row);
       });
       $("#rankings").replaceChildren(ranking);
+    }
+    function renderUsage() {
+      const root = $("#usage-table");
+      if (!root) return;
+      const expanded = new Set(
+        [...root.querySelectorAll("details[open]")].map((d) => d.dataset.userId),
+      );
+      const users = data.usage || [];
+      if (!users.length) {
+        root.replaceChildren(el("p", "暂无用户。", "empty"));
+        return;
+      }
+      const periods = [["5h", "近 5 小时"], ["1d", "近 1 天"], ["7d", "近 7 天"], ["30d", "近 30 天"]];
+      const traffic = (bytes) =>
+        `↑ ${formatBytes(bytes?.upload || 0)} · ↓ ${formatBytes(bytes?.download || 0)}`;
+      const table = el("table");
+      const head = el("tr");
+      ["用户", ...periods.map(([, label]) => label), "链路明细"].forEach((label) =>
+        head.append(el("th", label)),
+      );
+      const thead = el("thead");
+      thead.append(head);
+      table.append(thead);
+      const body = el("tbody");
+      users.forEach((usage) => {
+        const user = data.users.find((item) => item.id === usage.user_id);
+        const row = el("tr");
+        row.append(el("th", user?.name || usage.user_id));
+        periods.forEach(([key]) => row.append(el("td", traffic(usage.windows?.[key]))));
+        const cell = el("td");
+        const details = el("details");
+        details.dataset.userId = usage.user_id;
+        details.open = expanded.has(usage.user_id);
+        details.append(el("summary", `${usage.links.length} 条 Link`));
+        if (usage.links.length) {
+          const links = el("table");
+          const linkHead = el("tr");
+          ["Link", ...periods.map(([, label]) => label)].forEach((label) =>
+            linkHead.append(el("th", label)),
+          );
+          const linkThead = el("thead");
+          linkThead.append(linkHead);
+          links.append(linkThead);
+          const linkBody = el("tbody");
+          usage.links.forEach((link) => {
+            const linkRow = el("tr");
+            linkRow.append(el("th", link.name));
+            periods.forEach(([key]) =>
+              linkRow.append(el("td", traffic(link.windows?.[key]))),
+            );
+            linkBody.append(linkRow);
+          });
+          links.append(linkBody);
+          details.append(links);
+        } else {
+          details.append(el("p", "尚未分配 Link。", "empty"));
+        }
+        cell.append(details);
+        row.append(cell);
+        body.append(row);
+      });
+      table.append(body);
+      root.replaceChildren(table);
     }
     function renderOperations() {
       const upgrade = data.upgrade || {};
@@ -794,7 +865,7 @@ if (typeof document !== "undefined")
           el("small", st.last_error || "", "error"),
         );
       });
-      $$("#grants>table tbody tr").forEach((row) => {
+      $$("#grant-table tbody tr").forEach((row) => {
         const action = $('form[action$="/toggle"]', row)?.getAttribute(
             "action",
           ),
@@ -1200,6 +1271,7 @@ if (typeof document !== "undefined")
         renderMap();
         renderProgress();
         renderHistory();
+        renderUsage();
         renderOperations();
         updateLiveTables();
         renderNodeUpgrades();

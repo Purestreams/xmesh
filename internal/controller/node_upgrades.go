@@ -107,16 +107,16 @@ func (s *Server) pairUpdater(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	fmt.Fprintf(w, "Pair token (expires in 30 minutes): %s\nThe installer prompts for this token on the node host. It preserves the existing node identity.\n\nsystemd:\n%s\n\nDocker Compose (edit --install-dir if needed):\n%s\n", token, s.updaterInstallCommand(role, id, "systemd"), s.updaterInstallCommand(role, id, "docker"))
+	fmt.Fprintf(w, "Pair token (expires in 30 minutes): %s\nCopy one command to the node host. The token is included and the existing node identity is preserved.\n\nsystemd:\n%s\n\nDocker Compose (edit --install-dir if needed):\n%s\n", token, s.updaterInstallCommand(role, id, "systemd", token), s.updaterInstallCommand(role, id, "docker", token))
 }
 
-func (s *Server) updaterInstallCommand(role model.Role, id, mode string) string {
+func (s *Server) updaterInstallCommand(role model.Role, id, mode, token string) string {
 	base := strings.TrimSuffix(s.cfg.PublicURL, "/") + "/releases/" + s.cfg.ReleaseVersion
 	args := ""
 	if mode == "docker" {
 		args = " --install-dir " + shellQuote("/opt/xmesh-docker-"+string(role))
 	}
-	return fmt.Sprintf("(set -eu; work=$(mktemp -d); trap 'rm -rf \"$work\"' EXIT; curl -fL --retry 3 --proto '=https' --proto-redir '=https' -o \"$work/SHA256SUMS\" %s; curl -fL --retry 3 --proto '=https' --proto-redir '=https' -o \"$work/install-updater.sh\" %s; (cd \"$work\" && grep '  install-updater.sh$' SHA256SUMS | sha256sum -c -); sudo sh \"$work/install-updater.sh\" --controller %s --release-base-url %s --version %s --role %s --node-id %s --mode %s%s)", shellQuote(base+"/SHA256SUMS"), shellQuote(base+"/install-updater.sh"), shellQuote(s.cfg.PublicURL), shellQuote(strings.TrimSuffix(s.cfg.PublicURL, "/")+"/releases"), shellQuote(s.cfg.ReleaseVersion), shellQuote(string(role)), shellQuote(id), shellQuote(mode), args)
+	return fmt.Sprintf("(set -eu; work=$(mktemp -d); trap 'rm -rf \"$work\"' EXIT; curl -fL --retry 3 --proto '=https' --proto-redir '=https' -o \"$work/SHA256SUMS\" %s; curl -fL --retry 3 --proto '=https' --proto-redir '=https' -o \"$work/install-updater.sh\" %s; (cd \"$work\" && grep '  install-updater.sh$' SHA256SUMS | sha256sum -c -); printf '%%s\\n' %s | sudo sh \"$work/install-updater.sh\" --controller %s --release-base-url %s --version %s --role %s --node-id %s --mode %s%s --token-stdin)", shellQuote(base+"/SHA256SUMS"), shellQuote(base+"/install-updater.sh"), shellQuote(token), shellQuote(s.cfg.PublicURL), shellQuote(strings.TrimSuffix(s.cfg.PublicURL, "/")+"/releases"), shellQuote(s.cfg.ReleaseVersion), shellQuote(string(role)), shellQuote(id), shellQuote(mode), args)
 }
 
 type updaterPairRequest struct {

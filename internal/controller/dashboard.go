@@ -31,7 +31,7 @@ func sampleLinkHistory(state *model.State, status model.LinkStatus, now time.Tim
 	if len(samples) > 0 && now.Sub(samples[len(samples)-1].At) < historyInterval {
 		return
 	}
-	samples = append(samples, model.LinkSample{At: now, Generation: status.Generation, UploadBytes: status.UploadBytes, DownloadBytes: status.DownloadBytes, RTTMillis: status.RTTMillis, Ready: status.Online && status.Ready})
+	samples = append(samples, model.LinkSample{At: now, Generation: status.Generation, InstanceID: state.NodeStatus[status.ReporterNodeID].InstanceID, UploadBytes: status.UploadBytes, DownloadBytes: status.DownloadBytes, RTTMillis: status.RTTMillis, Ready: status.Online && status.Ready})
 	if len(samples) > historyLimit {
 		samples = samples[len(samples)-historyLimit:]
 	}
@@ -89,6 +89,7 @@ type dashboardData struct {
 	Users          []dashboardUser               `json:"users"`
 	Grants         []dashboardGrant              `json:"grants"`
 	History        map[string][]model.LinkSample `json:"history"`
+	Usage          []usageUserView               `json:"usage"`
 	Operations     []model.Operation             `json:"operations"`
 	Upgrade        controllerUpgradeView         `json:"upgrade"`
 	UpgradeTasks   []model.UpgradeTask           `json:"upgrade_tasks"`
@@ -116,7 +117,7 @@ func (s *Server) panelState() model.State {
 
 func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 	state := s.panelState()
-	data := dashboardData{At: s.now().UTC(), Revision: state.Revision, Nodes: []dashboardNode{}, Routes: []dashboardRoute{}, Links: []dashboardLink{}, Users: []dashboardUser{}, Grants: []dashboardGrant{}, History: map[string][]model.LinkSample{}, Operations: state.Operations, Upgrade: s.controllerUpgradeStatus(), UpgradeTasks: sortedUpgradeTasks(state), Updaters: updaterViews(state, s.now()), UpgradeBatches: state.UpgradeBatches}
+	data := dashboardData{At: s.now().UTC(), Revision: state.Revision, Nodes: []dashboardNode{}, Routes: []dashboardRoute{}, Links: []dashboardLink{}, Users: []dashboardUser{}, Grants: []dashboardGrant{}, History: map[string][]model.LinkSample{}, Usage: usageViews(state, s.now()), Operations: state.Operations, Upgrade: s.controllerUpgradeStatus(), UpgradeTasks: sortedUpgradeTasks(state), Updaters: updaterViews(state, s.now()), UpgradeBatches: state.UpgradeBatches}
 	for _, node := range sortedGateways(state) {
 		data.Nodes = append(data.Nodes, dashboardNode{ID: node.ID, Name: node.Name, Role: "Gateway", Host: node.PublicHost, Region: node.Region, Target: node.RealityTarget, Enabled: node.Enabled, Enrolled: node.CredentialHash != "", Desired: node.DesiredVersion, Status: state.NodeStatus[node.ID], Next: nextDeploymentAction(state, node.ID, model.RoleGateway)})
 	}

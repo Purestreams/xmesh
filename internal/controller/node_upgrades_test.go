@@ -155,6 +155,12 @@ func TestUpdaterPairTokenIsOneUseAndSeparateFromNodeCredential(t *testing.T) {
 		t.Fatalf("pair token: %d %s", w.Code, w.Body.String())
 	}
 	token := strings.Split(strings.Split(w.Body.String(), "\n")[0], ": ")[1]
+	for _, mode := range []string{"systemd", "docker"} {
+		command := s.updaterInstallCommand(model.RoleAgent, "a", mode, token)
+		if !strings.Contains(command, "printf '%s\\n' "+shellQuote(token)+" | sudo sh") || !strings.Contains(command, "--token-stdin") {
+			t.Fatalf("%s command does not supply pairing token via stdin", mode)
+		}
+	}
 	pair := func() *httptest.ResponseRecorder {
 		r := httptest.NewRequest(http.MethodPost, "/api/v1/updater/pair", strings.NewReader(`{"token":"`+token+`","node_id":"a","role":"agent"}`))
 		w := httptest.NewRecorder()

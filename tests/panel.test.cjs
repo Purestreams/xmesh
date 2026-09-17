@@ -4,6 +4,7 @@ const {
   sampleRates,
   selectionPlan,
   formatBytes,
+  formatRate,
   defaultRealityTarget,
 } = require("../internal/controller/panel.js");
 
@@ -77,4 +78,14 @@ test("traffic uses explicit binary units and missing values stay unknown", () =>
   assert.equal(formatBytes(1024), "1.0 KiB");
   assert.equal(formatBytes(null), "—");
   assert.equal(formatBytes(0), "0 B");
+  assert.equal(formatRate(0.25), "0.25 B/s");
+});
+test("link rate survives tunnel generation changes but not process restarts", () => {
+  const points = [sample(0, 100, 1), sample(5, 700, 2), sample(10, 50, 1)];
+  points[0].instance_id = points[1].instance_id = "gateway-1";
+  points[2].instance_id = "gateway-2";
+  assert.deepEqual(sampleRates(points).map((s) => s.uploadRate), [null, 2, null]);
+  const beforeUpgrade = sample(0, 0);
+  const afterUpgrade = { ...sample(5, 700), instance_id: "gateway-1" };
+  assert.equal(sampleRates([beforeUpgrade, afterUpgrade])[1].uploadRate, null);
 });

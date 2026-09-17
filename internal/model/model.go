@@ -192,38 +192,62 @@ type LinkStatus struct {
 }
 
 type GrantStatus struct {
-	GrantID         string    `json:"grant_id"`
-	ReporterNodeID  string    `json:"reporter_node_id"`
-	UploadBytes     uint64    `json:"upload_bytes"`
-	DownloadBytes   uint64    `json:"download_bytes"`
-	TCPConnections  int       `json:"tcp_connections"`
-	UDPAssociations int       `json:"udp_associations"`
-	LastError       string    `json:"last_error,omitempty"`
-	LastSeen        time.Time `json:"last_seen"`
+	GrantID         string           `json:"grant_id"`
+	ReporterNodeID  string           `json:"reporter_node_id"`
+	UploadBytes     uint64           `json:"upload_bytes"`
+	DownloadBytes   uint64           `json:"download_bytes"`
+	Links           []GrantLinkUsage `json:"links,omitempty"`
+	TCPConnections  int              `json:"tcp_connections"`
+	UDPAssociations int              `json:"udp_associations"`
+	LastError       string           `json:"last_error,omitempty"`
+	LastSeen        time.Time        `json:"last_seen"`
+}
+
+// GrantLinkUsage counts payload bytes at the Gateway for one grant and Link.
+type GrantLinkUsage struct {
+	LinkID        string `json:"link_id"`
+	UploadBytes   uint64 `json:"upload_bytes"`
+	DownloadBytes uint64 `json:"download_bytes"`
+}
+
+type UsageBucket struct {
+	At            time.Time `json:"at"`
+	UploadBytes   uint64    `json:"upload_bytes"`
+	DownloadBytes uint64    `json:"download_bytes"`
+}
+
+type UsageCounter struct {
+	InstanceID    string `json:"instance_id"`
+	UploadBytes   uint64 `json:"upload_bytes"`
+	DownloadBytes uint64 `json:"download_bytes"`
 }
 
 type State struct {
-	Revision       uint64                  `json:"revision"`
-	Users          map[string]User         `json:"users"`
-	Gateways       map[string]Gateway      `json:"gateways"`
-	Agents         map[string]Agent        `json:"agents"`
-	Attachments    map[string]Attachment   `json:"attachments"`
-	Links          map[string]Link         `json:"links"`
-	Grants         map[string]Grant        `json:"grants"`
-	Enrollments    map[string]Enrollment   `json:"enrollments"`
-	NodeStatus     map[string]NodeStatus   `json:"node_status"`
-	LinkStatus     map[string]LinkStatus   `json:"link_status"`
-	GrantStatus    map[string]GrantStatus  `json:"grant_status"`
-	LinkHistory    map[string][]LinkSample `json:"link_history,omitempty"`
-	Operations     []Operation             `json:"operations,omitempty"`
-	Updaters       map[string]Updater      `json:"updaters,omitempty"`
-	UpgradeTasks   map[string]UpgradeTask  `json:"upgrade_tasks,omitempty"`
-	UpgradeBatches map[string]UpgradeBatch `json:"upgrade_batches,omitempty"`
+	Revision       uint64                   `json:"revision"`
+	Users          map[string]User          `json:"users"`
+	Gateways       map[string]Gateway       `json:"gateways"`
+	Agents         map[string]Agent         `json:"agents"`
+	Attachments    map[string]Attachment    `json:"attachments"`
+	Links          map[string]Link          `json:"links"`
+	Grants         map[string]Grant         `json:"grants"`
+	Enrollments    map[string]Enrollment    `json:"enrollments"`
+	NodeStatus     map[string]NodeStatus    `json:"node_status"`
+	LinkStatus     map[string]LinkStatus    `json:"link_status"`
+	GrantStatus    map[string]GrantStatus   `json:"grant_status"`
+	UsageHistory   map[string][]UsageBucket `json:"usage_history,omitempty"`
+	UsageLabels    map[string]string        `json:"usage_labels,omitempty"`
+	UsageCounters  map[string]UsageCounter  `json:"usage_counters,omitempty"`
+	LinkHistory    map[string][]LinkSample  `json:"link_history,omitempty"`
+	Operations     []Operation              `json:"operations,omitempty"`
+	Updaters       map[string]Updater       `json:"updaters,omitempty"`
+	UpgradeTasks   map[string]UpgradeTask   `json:"upgrade_tasks,omitempty"`
+	UpgradeBatches map[string]UpgradeBatch  `json:"upgrade_batches,omitempty"`
 }
 
 // LinkSample uses only the Gateway report so tunnel traffic is not counted twice.
 type LinkSample struct {
 	At            time.Time `json:"at"`
+	InstanceID    string    `json:"instance_id,omitempty"`
 	Generation    uint64    `json:"generation"`
 	UploadBytes   uint64    `json:"upload_bytes"`
 	DownloadBytes uint64    `json:"download_bytes"`

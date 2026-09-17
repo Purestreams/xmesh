@@ -69,7 +69,7 @@ sudo apt install -y ca-certificates curl tar coreutils
 
 ```sh
 sudo apt install -y git nginx certbot
-VERSION=v0.3.3
+VERSION=v0.3.4
 git clone --depth 1 --branch "$VERSION" https://github.com/Purestreams/xmesh.git
 cd xmesh
 ```
@@ -203,7 +203,7 @@ Gateway 报告对应配置已应用且 Xray 就绪后，授权才会发布。复
 
 Controller 状态保存在 `controller-state.json`，不需要额外数据库。配置、状态和备份包含凭据或私钥，应限制读取权限。不要提交这些文件、注册令牌或订阅 URL。
 
-面板每 15 秒局部刷新并保留正在输入的内容。链路历史来自 Gateway 上报，最多每 5 分钟采样一次，保留最近 24 小时；重启、计数回退或采样间隔过长时吞吐曲线留空。最近 100 次管理请求结果随状态文件保存；升级请求被接受与升级完成会分别显示。
+面板每 15 秒局部刷新并保留正在输入的内容。链路历史来自 Gateway 上报，最多每 5 分钟采样一次，保留最近 24 小时；重启、计数回退或采样间隔过长时吞吐曲线留空。用户与订阅页面按用户展示近 5 小时、1 天、7 天和 30 天的上传/下载用量，并可展开查看每条 Link。计数由 Gateway 按实际选中的 Link 记录 TCP/UDP 有效载荷；旧版数据没有 Link 归属，因此升级后才开始积累，按 5 分钟桶统计，最近 30 天保留。最近 100 次管理请求结果随状态文件保存；升级请求被接受与升级完成会分别显示。
 
 ### 升级、轮换与备份
 
@@ -212,7 +212,7 @@ v0.3.3 Release 包含 `xmesh-updater`，可由面板下发节点升级。v0.3.2 
 - **先升级 Controller，再升级 Gateway / Agent。** Controller 安装器保留既有配置并更新 `release_version`；不要假设再次传入 `--public-url` 或管理密码会覆盖原配置。旧配置缺少 `release_dir` 时需手工补齐并重启，才能启用缓存。
 - Docker Controller 在宿主机具备 systemd、`flock`、`sort` 和升级助手时，可在面板检查 GitHub 最新正式版并升级。助手在宿主机校验、备份和执行升级，Controller 容器不挂载 Docker socket。旧安装需先在宿主机运行支持该助手的 Docker 安装器。
 - systemd Controller 通过对应版本的 `install-controller.sh` 升级。Gateway / Agent 新安装会在宿主机配置独立的 `xmesh-updater` 服务；在 **系统维护 → 节点升级** 选择固定版本和节点即可下发任务。助手主动领取，校验安装包，验收新进程及配置，失败时恢复旧版本。批量任务串行执行，线路退化时暂停。
-- 老节点先在 **节点升级** 中生成一次性助手配对令牌，在节点宿主机执行面板提供的 `install-updater.sh` 命令；此操作保留节点身份。已配对节点的手动升级命令也调用同一助手执行器；未迁移节点仍使用原安装器。Docker 节点的助手运行在宿主机，要求宿主机有 systemd；业务容器不挂载 Docker socket。
+- 老节点先在 **节点升级** 中生成一次性助手配对令牌，在节点宿主机执行面板提供的 `install-updater.sh` 命令；命令已包含一次性令牌，无需再手动输入，并保留节点身份。复制的命令包含敏感令牌，使用后应清理 shell 历史。已配对节点的手动升级命令也调用同一助手执行器；未迁移节点仍使用原安装器。Docker 节点的助手运行在宿主机，要求宿主机有 systemd；业务容器不挂载 Docker socket。
 - 助手升级记录保存在 Controller 状态文件，宿主机上的任务记录和回滚材料保存在 `/var/lib/xmesh-updater/jobs`（systemd）或安装目录的 `updater/jobs`（Docker）。备份和清理时保留未完成任务的记录。
 - 节点凭据轮换使用新注册令牌和面板的 **rotate** 命令，保留节点身份。旧凭据最多有 15 分钟宽限期，新凭据首次上报后立即撤销旧凭据。订阅泄露时单独使用 **Reset link**。
 - 删除面板中的 Gateway / Agent 会删除相关管理对象，但不会远程卸载主机服务；停用和卸载需在对应主机处理。

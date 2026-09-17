@@ -74,6 +74,7 @@ func (r *Runtime) handleSOCKS(conn net.Conn, udpSem chan struct{}) {
 			return
 		}
 		defer lease.Release()
+		linkStats := r.grantLinkCounters(grant.ID, lease.Session.LinkID)
 		r.tcpConnections.Add(1)
 		defer r.tcpConnections.Add(-1)
 		stats.tcp.Add(1)
@@ -83,7 +84,7 @@ func (r *Runtime) handleSOCKS(conn net.Conn, udpSem chan struct{}) {
 			return
 		}
 		_ = conn.SetDeadline(time.Time{})
-		relay.Bidirectional(conn, stream, func(n int) { stats.upload.Add(uint64(n)) }, func(n int) { stats.download.Add(uint64(n)) }, relay.Options{
+		relay.Bidirectional(conn, stream, func(n int) { stats.upload.Add(uint64(n)); linkStats.upload.Add(uint64(n)) }, func(n int) { stats.download.Add(uint64(n)); linkStats.download.Add(uint64(n)) }, relay.Options{
 			WriteStallTimeout:  r.local.WriteStallTimeout.Value(30 * time.Second),
 			OnLeftToRightWrite: lease.Session.ObserveWrite,
 		})
@@ -306,6 +307,7 @@ func (r *Runtime) handleUDPAssociation(control net.Conn, reader *bufio.Reader, g
 	}
 	defer stream.Close()
 	defer lease.Release()
+	linkStats := r.grantLinkCounters(grantID, lease.Session.LinkID)
 	errCh := make(chan error, 2)
 	go func() {
 		datagram := first
@@ -315,6 +317,7 @@ func (r *Runtime) handleUDPAssociation(control net.Conn, reader *bufio.Reader, g
 				return
 			}
 			stats.upload.Add(uint64(len(datagram.Payload)))
+			linkStats.upload.Add(uint64(len(datagram.Payload)))
 			var ok bool
 			datagram, ok = queue.take(ctx)
 			if !ok {
@@ -338,6 +341,7 @@ func (r *Runtime) handleUDPAssociation(control net.Conn, reader *bufio.Reader, g
 				return
 			}
 			stats.download.Add(uint64(len(reply.Payload)))
+			linkStats.download.Add(uint64(len(reply.Payload)))
 		}
 	}()
 	select {

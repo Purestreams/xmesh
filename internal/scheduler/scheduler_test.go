@@ -83,6 +83,24 @@ func TestAcquireUsesHighestPriorityHealthyGroup(t *testing.T) {
 	}
 }
 
+func TestAcquireLinksKeepsGrantOnItsRoute(t *testing.T) {
+	foreign, closeForeign := smuxPair(t)
+	defer closeForeign()
+	allowed, closeAllowed := smuxPair(t)
+	defer closeAllowed()
+	pool := New()
+	pool.Add(&Session{ID: "foreign", AgentID: "agent", LinkID: "other-route", Priority: 1, Weight: 1, MaxStreams: 1, SMux: foreign, Ready: true})
+	pool.Add(&Session{ID: "allowed", AgentID: "agent", LinkID: "grant-route", Priority: 20, Weight: 1, MaxStreams: 1, SMux: allowed, Ready: true})
+	lease, err := pool.AcquireLinks("agent", map[string]bool{"grant-route": true})
+	if err != nil || lease.Session.LinkID != "grant-route" {
+		t.Fatalf("selected foreign route: lease=%v err=%v", lease, err)
+	}
+	lease.Release()
+	if _, err := pool.AcquireLinks("agent", map[string]bool{}); !errors.Is(err, ErrNoPath) {
+		t.Fatalf("empty grant route: %v", err)
+	}
+}
+
 func TestAcquireUsesWeightsWithinPriorityGroup(t *testing.T) {
 	a, closeA := smuxPair(t)
 	defer closeA()

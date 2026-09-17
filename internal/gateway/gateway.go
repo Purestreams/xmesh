@@ -42,6 +42,7 @@ type Runtime struct {
 	xrayAppliedRevision atomic.Uint64
 	grantMu             sync.Mutex
 	grantStats          map[string]*grantCounters
+	grantLinks          map[string]map[string]*grantCounters
 	udpQueueDrops       atomic.Uint64
 }
 
@@ -53,7 +54,7 @@ type grantCounters struct {
 }
 
 func New(local runtimecfg.Config, logger *slog.Logger) *Runtime {
-	return &Runtime{local: local, client: nodeclient.New(local.ControllerURL, local.Credential), logger: logger, pool: scheduler.New(), started: time.Now(), xrayApply: make(chan struct{}, 1), grantStats: map[string]*grantCounters{}}
+	return &Runtime{local: local, client: nodeclient.New(local.ControllerURL, local.Credential), logger: logger, pool: scheduler.New(), started: time.Now(), xrayApply: make(chan struct{}, 1), grantStats: map[string]*grantCounters{}, grantLinks: map[string]map[string]*grantCounters{}}
 }
 
 func (r *Runtime) Run(ctx context.Context) error {
@@ -125,7 +126,10 @@ func (r *Runtime) report(ctx context.Context) error {
 		links[item.ID] = model.LinkStatus{LinkID: item.ID}
 	}
 	for _, session := range r.pool.Snapshot() {
-		status := links[session.LinkID]
+		status, configured := links[session.LinkID]
+		if !configured {
+			continue
+		}
 		status.LinkID = session.LinkID
 		status.Connections++
 		status.ActiveStreams += session.ActiveStreams
@@ -148,16 +152,45 @@ func (r *Runtime) report(ctx context.Context) error {
 		status.WriteStalls += session.WriteStalls
 		links[session.LinkID] = status
 	}
-	linkList := make([]model.LinkStatus, 0, len(links))
 	tunnelCount := 0
 	for _, status := range links {
 		tunnelCount += status.Connections
-		linkList = append(linkList, status)
 	}
 	lastError, _ := r.lastError.Load().(string)
 	xrayError, _ := r.xrayError.Load().(string)
 	ready := lastError == "" && r.xrayReady.Load()
-	grantList, upload, download := r.grantSnapshot()
+	grantList, linkUsage, upload, download := r.trafficSnapshot()
+	activeGrants := map[string]bool{}
+	for _, grant := range config.Grants {
+		activeGrants[grant.ID] = true
+	}
+	filteredGrants := grantList[:0]
+	for _, grant := range grantList {
+		if !activeGrants[grant.GrantID] {
+			continue
+		}
+		filteredLinks := grant.Links[:0]
+		for _, usage := range grant.Links {
+			if _, active := links[usage.LinkID]; active {
+				filteredLinks = append(filteredLinks, usage)
+			}
+		}
+		grant.Links = filteredLinks
+		filteredGrants = append(filteredGrants, grant)
+	}
+	grantList = filteredGrants
+	for id, usage := range linkUsage {
+		status, ok := links[id]
+		if !ok {
+			continue
+		}
+		status.UploadBytes, status.DownloadBytes = usage.UploadBytes, usage.DownloadBytes
+		links[id] = status
+	}
+	linkList := make([]model.LinkStatus, 0, len(links))
+	for _, status := range links {
+		linkList = append(linkList, status)
+	}
 	nodeStatus := model.NodeStatus{NodeID: r.local.NodeID, Role: model.RoleGateway, BinaryVersion: r.local.BinaryVersion, InstanceID: r.local.InstanceID, Online: true, Ready: ready, DesiredVersion: config.Revision, AppliedVersion: r.xrayAppliedRevision.Load(), XrayReady: r.xrayReady.Load(), XrayError: xrayError, LastSeen: time.Now().UTC(), TunnelConnections: tunnelCount, TCPConnections: int(r.tcpConnections.Load()), UDPAssociations: int(r.udpAssociations.Load()), UploadBytes: upload, DownloadBytes: download, LastError: lastError, FailureCounters: map[string]uint64{"udp_queue_drops": r.udpQueueDrops.Load()}}
 	return r.client.Report(ctx, nodeStatus, linkList, grantList)
 }
@@ -173,18 +206,44 @@ func (r *Runtime) grantCounters(id string) *grantCounters {
 	return status
 }
 
-func (r *Runtime) grantSnapshot() ([]model.GrantStatus, uint64, uint64) {
+func (r *Runtime) grantLinkCounters(grantID, linkID string) *grantCounters {
+	r.grantMu.Lock()
+	defer r.grantMu.Unlock()
+	links := r.grantLinks[grantID]
+	if links == nil {
+		links = map[string]*grantCounters{}
+		r.grantLinks[grantID] = links
+	}
+	status := links[linkID]
+	if status == nil {
+		status = &grantCounters{}
+		links[linkID] = status
+	}
+	return status
+}
+
+func (r *Runtime) trafficSnapshot() ([]model.GrantStatus, map[string]model.GrantLinkUsage, uint64, uint64) {
 	r.grantMu.Lock()
 	defer r.grantMu.Unlock()
 	result := make([]model.GrantStatus, 0, len(r.grantStats))
+	linkTotals := map[string]model.GrantLinkUsage{}
 	var upload, download uint64
 	for id, status := range r.grantStats {
 		copy := model.GrantStatus{GrantID: id, UploadBytes: status.upload.Load(), DownloadBytes: status.download.Load(), TCPConnections: int(status.tcp.Load()), UDPAssociations: int(status.udp.Load())}
+		for linkID, counters := range r.grantLinks[id] {
+			usage := model.GrantLinkUsage{LinkID: linkID, UploadBytes: counters.upload.Load(), DownloadBytes: counters.download.Load()}
+			copy.Links = append(copy.Links, usage)
+			total := linkTotals[linkID]
+			total.LinkID = linkID
+			total.UploadBytes += usage.UploadBytes
+			total.DownloadBytes += usage.DownloadBytes
+			linkTotals[linkID] = total
+		}
 		result = append(result, copy)
 		upload += copy.UploadBytes
 		download += copy.DownloadBytes
 	}
-	return result, upload, download
+	return result, linkTotals, upload, download
 }
 
 func (r *Runtime) setError(value string) { r.lastError.Store(value) }
@@ -312,7 +371,21 @@ func (r *Runtime) grant(username, password string) (model.Grant, string, bool) {
 }
 
 func (r *Runtime) openStream(agentID string, request protocol.Message) (net.Conn, *scheduler.Lease, error) {
-	lease, err := r.pool.Acquire(agentID)
+	r.mu.RLock()
+	allowed := map[string]bool{}
+	for _, grant := range r.config.Grants {
+		if grant.ID != request.GrantID || !grant.Enabled {
+			continue
+		}
+		for _, link := range r.config.Links {
+			if link.AgentID == agentID && link.AttachmentID == grant.AttachmentID {
+				allowed[link.ID] = true
+			}
+		}
+		break
+	}
+	r.mu.RUnlock()
+	lease, err := r.pool.AcquireLinks(agentID, allowed)
 	if err != nil {
 		return nil, nil, err
 	}

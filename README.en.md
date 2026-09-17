@@ -69,7 +69,7 @@ On the Controller host only, install these additional tools and obtain the sourc
 
 ```sh
 sudo apt install -y git nginx certbot
-VERSION=v0.3.3
+VERSION=v0.3.4
 git clone --depth 1 --branch "$VERSION" https://github.com/Purestreams/xmesh.git
 cd xmesh
 ```
@@ -203,7 +203,7 @@ A Grant publishes after the Gateway reports the corresponding configuration appl
 
 Controller state lives in `controller-state.json`; no separate database is required. Configuration, state and backups contain credentials or private keys and need restricted access. Do not commit them, enrollment tokens or subscription URLs.
 
-The panel refreshes status every 15 seconds while preserving inputs. Link history comes from Gateway reports, sampled at most every five minutes and retained for 24 hours. Restarts, counter resets and long sampling gaps leave missing throughput points. The latest 100 management request results are stored with Controller state; accepting an upgrade request and completing an upgrade are displayed separately.
+The panel refreshes status every 15 seconds while preserving inputs. Link history comes from Gateway reports, sampled at most every five minutes and retained for 24 hours. Restarts, counter resets and long sampling gaps leave missing throughput points. Users and subscriptions show per-user upload/download for the last 5 hours, day, 7 days and 30 days, with a per-Link breakdown. The Gateway attributes TCP/UDP payload bytes to the selected Link; older versions did not retain this attribution, so usage starts accumulating after upgrade. Five-minute buckets are retained for 30 days. The latest 100 management request results are stored with Controller state; accepting an upgrade request and completing an upgrade are displayed separately.
 
 ### Upgrades, rotation and backups
 
@@ -212,7 +212,7 @@ The v0.3.3 release contains `xmesh-updater` for panel-issued node upgrades. v0.3
 - **Upgrade the Controller before Gateways and Agents.** Controller installers preserve existing settings and update `release_version`. Passing `--public-url` or an administrator password again does not overwrite the existing configuration. Older configurations missing `release_dir` need that field added manually and a restart to enable caching.
 - A Docker Controller can check GitHub's latest stable release and upgrade from the panel when the host has systemd, `flock`, `sort` and the updater helper. The host helper verifies assets, backs up and performs the upgrade; the Controller container has no Docker socket mount. Older installations first need a host-side run of a Docker installer that provides the helper.
 - Upgrade a systemd Controller with the matching release's `install-controller.sh`. New Gateway / Agent installations configure an independent host `xmesh-updater` service. In **System maintenance → Node upgrades**, select a fixed version and nodes; the helper claims tasks, verifies assets, checks the new process and configuration, and restores the old version on failure. Batch tasks run serially and pause when a previously healthy Link degrades.
-- For an older node, generate a one-time helper pairing token in **Node upgrades** and run the panel's verified `install-updater.sh` command on that node host. This preserves the node identity. Manual upgrade commands on paired nodes use the same host helper executor; unpaired nodes retain the original installer path. Docker nodes require systemd on the host for the helper; the business container has no Docker socket mount.
+- For an older node, generate a one-time helper pairing token in **Node upgrades** and run the panel's verified `install-updater.sh` command on that node host. The one-time token is included in the command, so there is no second prompt; the node identity is preserved. The copied command contains a secret, so clear it from shell history after use. Manual upgrade commands on paired nodes use the same host helper executor; unpaired nodes retain the original installer path. Docker nodes require systemd on the host for the helper; the business container has no Docker socket mount.
 - Upgrade history is stored in Controller state. Keep unfinished host job records and rollback material in `/var/lib/xmesh-updater/jobs` (systemd) or `updater/jobs` under the Docker installation directory when backing up or cleaning up.
 - Rotate node credentials with a new enrollment token and the panel's **rotate** command, preserving node identity. The old credential has up to 15 minutes of grace and is revoked on the first status report using the new credential. Use **Reset link** separately for a leaked subscription URL.
 - Deleting a Gateway / Agent in the panel removes related management objects but does not remotely uninstall its service. Stop or uninstall the service on the corresponding host.

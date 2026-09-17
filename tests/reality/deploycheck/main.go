@@ -49,12 +49,46 @@ func main() {
 		err = health()
 	} else if len(os.Args) == 2 && os.Args[1] == "probe" {
 		err = probe()
+	} else if len(os.Args) == 3 && os.Args[1] == "verify-usage" {
+		err = verifyUsage(os.Args[2])
 	} else {
-		err = errors.New("usage: deploycheck setup DIR | target | health | probe")
+		err = errors.New("usage: deploycheck setup DIR | target | health | probe | verify-usage STATE")
 	}
 	if err != nil {
 		log.Fatal(err)
 	}
+}
+
+func verifyUsage(path string) error {
+	deadline := time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		var state model.State
+		if err := json.Unmarshal(data, &state); err != nil {
+			return err
+		}
+		valid := true
+		for _, pair := range []struct{ gateway, link string }{{"gateway", "link"}, {"gateway2", "link2"}} {
+			status := state.LinkStatus[pair.gateway+"/"+pair.link]
+			buckets := state.UsageHistory["user/"+pair.link]
+			var usage uint64
+			for _, bucket := range buckets {
+				usage += bucket.UploadBytes + bucket.DownloadBytes
+			}
+			if status.UploadBytes == 0 || status.DownloadBytes == 0 || usage == 0 {
+				valid = false
+			}
+		}
+		if valid {
+			log.Print("Gateway Link counters and per-user Link usage: PASS")
+			return nil
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	return errors.New("Link or user usage counters did not include probe traffic")
 }
 
 func writeJSON(path string, value any) error {

@@ -136,12 +136,18 @@ func (l *Lease) Release() {
 }
 
 func (p *Pool) Acquire(agentID string) (*Lease, error) {
+	return p.AcquireLinks(agentID, nil)
+}
+
+// AcquireLinks restricts selection to the Links authorized for a grant route.
+// A nil set preserves the unconstrained behavior used by health checks.
+func (p *Pool) AcquireLinks(agentID string, allowed map[string]bool) (*Lease, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	candidates := make([]*Session, 0)
 	priority := int(^uint(0) >> 1)
 	for _, session := range p.sessions {
-		if session.AgentID != agentID || !session.Ready || session.SMux == nil || session.SMux.IsClosed() || session.active >= session.MaxStreams {
+		if session.AgentID != agentID || (allowed != nil && !allowed[session.LinkID]) || !session.Ready || session.SMux == nil || session.SMux.IsClosed() || session.active >= session.MaxStreams {
 			continue
 		}
 		if session.Priority < priority {

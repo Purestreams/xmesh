@@ -208,6 +208,12 @@ func removeAttachment(state *model.State, id string) {
 
 func removeLink(state *model.State, id string) {
 	delete(state.Links, id)
+	delete(state.LinkHistory, id)
+	for key := range state.UsageCounters {
+		if strings.HasSuffix(key, "/"+id) {
+			delete(state.UsageCounters, key)
+		}
+	}
 	for statusID, status := range state.LinkStatus {
 		if status.LinkID == id {
 			delete(state.LinkStatus, statusID)
@@ -217,6 +223,11 @@ func removeLink(state *model.State, id string) {
 
 func removeGrant(state *model.State, id string) {
 	delete(state.Grants, id)
+	for key := range state.UsageCounters {
+		if strings.HasPrefix(key, id+"/") {
+			delete(state.UsageCounters, key)
+		}
+	}
 	for statusID, status := range state.GrantStatus {
 		if status.GrantID == id {
 			delete(state.GrantStatus, statusID)

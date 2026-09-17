@@ -69,6 +69,8 @@ try {
 
     & docker run --rm --network $networkName --entrypoint /usr/local/bin/deploycheck $imageName probe
     Assert-LastExit 'multi-container TCP/UDP probe'
+    & docker run --rm --entrypoint /usr/local/bin/deploycheck --mount "type=bind,source=$(Join-Path $fixtureDir 'controller-data'),target=/state,readonly" $imageName verify-usage /state/controller-state.json
+    Assert-LastExit 'Gateway Link and user usage reporting'
     $passed = $true
     Write-Host 'Two-Gateway one-Agent REALITY deployment: PASS'
 }
