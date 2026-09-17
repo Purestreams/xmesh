@@ -18,6 +18,7 @@ func TestPanelBrowserFixture(t *testing.T) {
 	}
 	now := time.Now().UTC()
 	server, _ := testServer(t, func(s *model.State) error {
+		s.Updaters = map[string]model.Updater{}
 		for i, name := range []string{"Hong Kong Edge", "Singapore Edge", "Tokyo Standby"} {
 			id := "g" + strconv.Itoa(i+1)
 			s.Gateways[id] = model.Gateway{ID: id, Name: name, PublicHost: "edge" + strconv.Itoa(i+1) + ".example", RealityTarget: "target.example:443", VMessPort: 8080, VMessPath: "/proxy", Enabled: i != 2, DesiredVersion: 2, CredentialHash: "fixture-only"}
