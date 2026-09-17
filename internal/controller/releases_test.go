@@ -98,6 +98,49 @@ func TestReleaseManifestRejectsMissingOrDuplicateAssets(t *testing.T) {
 	}
 }
 
+func TestReleaseManifestAcceptsPackagedAssets(t *testing.T) {
+	// Keep this list independent of releaseAssets: it mirrors package.sh's SHA256SUMS inputs.
+	version := "v0.2.2"
+	packaged := []string{
+		"xmesh-" + version + "-linux-amd64.tar.gz",
+		"xmesh-" + version + "-linux-arm64.tar.gz",
+		"xmesh-" + version + "-windows-amd64.exe",
+		"install.sh", "install-docker.sh", "install-controller.sh", "backup-controller.sh", "THIRD_PARTY_NOTICES.md",
+	}
+	assets := make(map[string]string, len(packaged)+1)
+	var manifest strings.Builder
+	for _, name := range packaged {
+		assets[name] = "content of " + name
+		hash := sha256.Sum256([]byte(assets[name]))
+		fmt.Fprintf(&manifest, "%x  %s\n", hash, name)
+	}
+	if _, err := parseReleaseManifest(version, []byte(manifest.String())); err != nil {
+		t.Fatalf("Controller rejected package.sh manifest: %v", err)
+	}
+	assets["SHA256SUMS"] = manifest.String()
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		name := strings.TrimPrefix(r.URL.Path, "/"+version+"/")
+		if payload, ok := assets[name]; ok {
+			_, _ = w.Write([]byte(payload))
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer upstream.Close()
+	server, _ := testServer(t, nil)
+	server.cfg.ReleaseBaseURL = upstream.URL
+	server.cfg.ReleaseVersion = version
+	server.cfg.ReleaseDir = t.TempDir()
+	server.releaseHTTPClient = upstream.Client()
+	for _, name := range []string{"SHA256SUMS", "install-docker.sh", "THIRD_PARTY_NOTICES.md"} {
+		response := httptest.NewRecorder()
+		server.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/releases/"+version+"/"+name, nil))
+		if response.Code != http.StatusOK || response.Body.String() != assets[name] {
+			t.Fatalf("cached %s: status=%d body=%q", name, response.Code, response.Body.String())
+		}
+	}
+}
+
 func TestEnrollmentOffersBothSourcesAndBothInstallModes(t *testing.T) {
 	server, _ := testServer(t, func(s *model.State) error {
 		s.Agents["a1"] = model.Agent{ID: "a1", Name: "Agent", Enabled: true}

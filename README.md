@@ -1,6 +1,6 @@
 # XMesh
 
-[English](README.en.md) · [下载 v0.2.1](https://github.com/Purestreams/xmesh/releases/tag/v0.2.1)
+[English](README.en.md) · [下载 v0.2.2](https://github.com/Purestreams/xmesh/releases/tag/v0.2.2)
 
 ## 这是做什么的？
 
@@ -18,7 +18,7 @@ Controller -- 配置/状态 --> Gateway、Agent
 - **Gateway**：客户端入口。Xray 处理 VMess/WS，XMesh 将流量送入隧道。
 - **Agent**：主动连接 Gateway，是实际 TCP/UDP 出口。
 
-下面以三台 Debian/Ubuntu Linux 主机和 v0.2.1 为例；Controller、Gateway、Agent 分别部署。支持 amd64/arm64。Windows Release 只有独立可执行文件，没有节点安装器。选用 **systemd 或 Docker Compose 其中一种**，不要在同一主机运行两份相同角色。新建链路使用 REALITY；已有 `wss://` 链路仍可继续使用，但需要自行提供 TLS 终止服务。
+下面以三台 Debian/Ubuntu Linux 主机和 v0.2.2 为例；Controller、Gateway、Agent 分别部署。支持 amd64/arm64。Windows Release 只有独立可执行文件，没有节点安装器。选用 **systemd 或 Docker Compose 其中一种**，不要在同一主机运行两份相同角色。新建链路使用 REALITY；已有 `wss://` 链路仍可继续使用，但需要自行提供 TLS 终止服务。
 
 ## 1. 域名、端口和证书
 
@@ -63,7 +63,7 @@ sudo certbot renew --dry-run
 每台主机只需克隆已发布的固定 tag 一次；下面不使用 `wget | sh` 或移动的 `main` 分支：
 
 ```sh
-git clone --depth 1 --branch v0.2.1 https://github.com/Purestreams/xmesh.git
+git clone --depth 1 --branch v0.2.2 https://github.com/Purestreams/xmesh.git
 cd xmesh
 ```
 
@@ -75,11 +75,11 @@ export XMESH_ADMIN_PASSWORD
 
 # systemd：
 sudo --preserve-env=XMESH_ADMIN_PASSWORD sh scripts/install-controller.sh \
-  --version v0.2.1 --public-url https://panel.example.com
+  --version v0.2.2 --public-url https://panel.example.com
 
 # 或 Docker Compose（先安装 Docker Engine 和 Compose 插件）：
 # sudo --preserve-env=XMESH_ADMIN_PASSWORD sh scripts/install-docker.sh \
-#   --role controller --version v0.2.1 --public-url https://panel.example.com
+#   --role controller --version v0.2.2 --public-url https://panel.example.com
 
 unset XMESH_ADMIN_PASSWORD
 ```
@@ -144,17 +144,17 @@ read -rsp '一次性令牌: ' ENROLLMENT_TOKEN; echo
 # systemd：
 sudo sh scripts/install.sh --controller https://panel.example.com \
   --role "$ROLE" --enrollment-token "$ENROLLMENT_TOKEN" \
-  --version v0.2.1 \
+  --version v0.2.2 \
   --release-base-url https://github.com/Purestreams/xmesh/releases/download
 
 # 或 Docker Compose：
-# sudo sh scripts/install-docker.sh --role "$ROLE" --version v0.2.1 \
+# sudo sh scripts/install-docker.sh --role "$ROLE" --version v0.2.2 \
 #   --controller https://panel.example.com --enrollment-token "$ENROLLMENT_TOKEN"
 
 unset ENROLLMENT_TOKEN
 ```
 
-安装器会从 [v0.2.1 Release](https://github.com/Purestreams/xmesh/releases/tag/v0.2.1) 下载与架构匹配的包并校验 `SHA256SUMS`。Docker 方式使用主机网络，配置/数据默认放在 `/opt/xmesh-docker-<role>/config/` 和 `data/`；不需要再配置端口映射。Agent 必须能访问 Controller HTTPS 和 Gateway REALITY 端口。面板还提供经 Controller 按需缓存 Release 文件的安装链接，适用于节点访问 GitHub 不稳定的环境；Controller 自身必须能访问 GitHub。
+安装器会从 [v0.2.2 Release](https://github.com/Purestreams/xmesh/releases/tag/v0.2.2) 下载与架构匹配的包并校验 `SHA256SUMS`。Docker 方式使用主机网络，配置/数据默认放在 `/opt/xmesh-docker-<role>/config/` 和 `data/`；不需要再配置端口映射。Agent 必须能访问 Controller HTTPS 和 Gateway REALITY 端口。面板还提供经 Controller 按需缓存 Release 文件的安装链接，适用于节点访问 GitHub 不稳定的环境；Controller 自身必须能访问 GitHub。
 
 ## 6. 验收与排障
 
@@ -167,7 +167,7 @@ unset ENROLLMENT_TOKEN
 
 ## 开发
 
-v0.2.1 的[部署自动化流程](docs/automation.md)支持分别安装节点、批量绑定 Gateway、开通订阅，以及升级回滚和备份。现有 Controller 需先升级到 v0.2.1，面板才会提供这些功能。
+v0.2.2 的[部署自动化流程](docs/automation.md)支持分别安装节点、批量绑定 Gateway、开通订阅，以及升级回滚和备份。v0.2.1 的 Controller 按需缓存因清单校验缺项会返回 502；需将 Controller 升级到 v0.2.2 才能使用缓存安装链接。
 
 项目使用 mise 固定 Go 1.27.1：
 

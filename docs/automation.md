@@ -1,9 +1,11 @@
-# Deployment automation (v0.2.1)
+# Deployment automation (v0.2.2)
 
-These features require the v0.2.1 Controller and node binaries. Upgrade an
-existing Controller first and set its `release_version` to `v0.2.1`; an older
+This guide targets the v0.2.2 Controller and node binaries. Upgrade an
+existing Controller first and set its `release_version` to `v0.2.2`. The v0.2.0
 Controller does not offer the new panel controls. Node installers obtain
-verified v0.2.1 assets from GitHub or the Controller's on-demand cache.
+verified v0.2.2 assets from GitHub or the Controller's on-demand cache.
+The v0.2.1 Controller's on-demand cache rejects its release manifest and
+returns 502; upgrade the Controller before selecting a cached install command.
 
 ## Install nodes independently
 
@@ -57,14 +59,14 @@ same node identity atomically. The previous credential has a 15-minute grace
 period and is revoked as soon as the new node reports status. Unused tokens can
 be revoked from the panel. Subscription links can be reset separately.
 
-On a Docker Controller host with a v0.2.1 source checkout, run:
+On a Docker Controller host with a v0.2.2 source checkout, run:
 
 ```sh
 sudo sh scripts/backup-controller.sh /opt/xmesh-docker-controller /var/backups/xmesh-controller
 ```
 
-The helper is also a v0.2.1 release asset and is available from the
-Controller's on-demand `/releases/v0.2.1/backup-controller.sh` URL. If the
+The helper is also a v0.2.2 release asset and is available from the
+Controller's on-demand `/releases/v0.2.2/backup-controller.sh` URL. If the
 source checkout is absent, download the helper and `SHA256SUMS` from the same
 release source, verify the helper with `sha256sum -c`, then run it as root.
 
