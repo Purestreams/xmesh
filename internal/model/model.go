@@ -155,17 +155,37 @@ type GrantStatus struct {
 }
 
 type State struct {
-	Revision    uint64                 `json:"revision"`
-	Users       map[string]User        `json:"users"`
-	Gateways    map[string]Gateway     `json:"gateways"`
-	Agents      map[string]Agent       `json:"agents"`
-	Attachments map[string]Attachment  `json:"attachments"`
-	Links       map[string]Link        `json:"links"`
-	Grants      map[string]Grant       `json:"grants"`
-	Enrollments map[string]Enrollment  `json:"enrollments"`
-	NodeStatus  map[string]NodeStatus  `json:"node_status"`
-	LinkStatus  map[string]LinkStatus  `json:"link_status"`
-	GrantStatus map[string]GrantStatus `json:"grant_status"`
+	Revision    uint64                  `json:"revision"`
+	Users       map[string]User         `json:"users"`
+	Gateways    map[string]Gateway      `json:"gateways"`
+	Agents      map[string]Agent        `json:"agents"`
+	Attachments map[string]Attachment   `json:"attachments"`
+	Links       map[string]Link         `json:"links"`
+	Grants      map[string]Grant        `json:"grants"`
+	Enrollments map[string]Enrollment   `json:"enrollments"`
+	NodeStatus  map[string]NodeStatus   `json:"node_status"`
+	LinkStatus  map[string]LinkStatus   `json:"link_status"`
+	GrantStatus map[string]GrantStatus  `json:"grant_status"`
+	LinkHistory map[string][]LinkSample `json:"link_history,omitempty"`
+	Operations  []Operation             `json:"operations,omitempty"`
+}
+
+// LinkSample uses only the Gateway report so tunnel traffic is not counted twice.
+type LinkSample struct {
+	At            time.Time `json:"at"`
+	Generation    uint64    `json:"generation"`
+	UploadBytes   uint64    `json:"upload_bytes"`
+	DownloadBytes uint64    `json:"download_bytes"`
+	RTTMillis     float64   `json:"rtt_millis"`
+	Ready         bool      `json:"ready"`
+}
+
+// Operation deliberately excludes request bodies, credentials and result bodies.
+type Operation struct {
+	At     time.Time `json:"at"`
+	Actor  string    `json:"actor"`
+	Action string    `json:"action"`
+	Status int       `json:"status"`
 }
 
 func NewState() State {

@@ -17,6 +17,11 @@ jobs:
           install: true
           cache: true
       - run: mise exec -- go test ./...
+      - run: mise exec -- go vet ./...
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: node --test tests/panel.test.cjs
       - name: Download and verify pinned Xray builds
         shell: bash
         run: |

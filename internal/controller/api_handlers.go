@@ -216,6 +216,9 @@ func (s *Server) nodeStatus(w http.ResponseWriter, r *http.Request) {
 			status.LastSeen = now
 			status.ReporterNodeID = nodeID
 			state.LinkStatus[nodeID+"/"+status.LinkID] = status
+			if role == model.RoleGateway {
+				sampleLinkHistory(state, status, now)
+			}
 		}
 		for _, status := range report.Grants {
 			grant, ok := state.Grants[status.GrantID]

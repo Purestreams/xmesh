@@ -1,6 +1,6 @@
 # XMesh
 
-[简体中文](README.md) · [Download v0.2.5](https://github.com/Purestreams/xmesh/releases/tag/v0.2.5)
+[简体中文](README.md) · [Download v0.3.0](https://github.com/Purestreams/xmesh/releases/tag/v0.3.0)
 
 ## What is it for?
 
@@ -18,7 +18,7 @@ Controller -- config/status --> Gateway, Agent
 - **Gateway**: client entry point. Xray accepts VMess/WS; XMesh forwards it into the tunnel.
 - **Agent**: initiates the tunnel and provides the actual TCP/UDP exit.
 
-This guide uses three separate Debian/Ubuntu Linux hosts and release v0.2.5. Linux amd64 and arm64 are supported. The Windows release contains a standalone executable, not a node installer. Choose **either systemd or Docker Compose** per host; do not run both copies of the same role on one host. New links use REALITY; existing `wss://` links remain supported but need a separately managed TLS termination service.
+This guide uses three separate Debian/Ubuntu Linux hosts and release v0.3.0. Linux amd64 and arm64 are supported. The Windows release contains a standalone executable, not a node installer. Choose **either systemd or Docker Compose** per host; do not run both copies of the same role on one host. New links use REALITY; existing `wss://` links remain supported but need a separately managed TLS termination service.
 
 ## 1. DNS, ports, and certificates
 
@@ -63,7 +63,7 @@ sudo certbot renew --dry-run
 Clone the fixed release tag once on each host. This avoids piping a download into a shell or relying on the moving `main` branch:
 
 ```sh
-git clone --depth 1 --branch v0.2.5 https://github.com/Purestreams/xmesh.git
+git clone --depth 1 --branch v0.3.0 https://github.com/Purestreams/xmesh.git
 cd xmesh
 ```
 
@@ -75,11 +75,11 @@ export XMESH_ADMIN_PASSWORD
 
 # systemd:
 sudo --preserve-env=XMESH_ADMIN_PASSWORD sh scripts/install-controller.sh \
-  --version v0.2.5 --public-url https://panel.example.com
+  --version v0.3.0 --public-url https://panel.example.com
 
 # Or Docker Compose (install Docker Engine and the Compose plugin first):
 # sudo --preserve-env=XMESH_ADMIN_PASSWORD sh scripts/install-docker.sh \
-#   --role controller --version v0.2.5 --public-url https://panel.example.com
+#   --role controller --version v0.3.0 --public-url https://panel.example.com
 
 unset XMESH_ADMIN_PASSWORD
 ```
@@ -144,17 +144,17 @@ read -rsp 'One-time token: ' ENROLLMENT_TOKEN; echo
 # systemd:
 sudo sh scripts/install.sh --controller https://panel.example.com \
   --role "$ROLE" --enrollment-token "$ENROLLMENT_TOKEN" \
-  --version v0.2.5 \
+  --version v0.3.0 \
   --release-base-url https://github.com/Purestreams/xmesh/releases/download
 
 # Or Docker Compose:
-# sudo sh scripts/install-docker.sh --role "$ROLE" --version v0.2.5 \
+# sudo sh scripts/install-docker.sh --role "$ROLE" --version v0.3.0 \
 #   --controller https://panel.example.com --enrollment-token "$ENROLLMENT_TOKEN"
 
 unset ENROLLMENT_TOKEN
 ```
 
-The installers download the matching architecture from the [v0.2.5 release](https://github.com/Purestreams/xmesh/releases/tag/v0.2.5) and verify `SHA256SUMS`. Docker uses host networking and stores configuration/data under `/opt/xmesh-docker-<role>/config/` and `data/`; no port mapping is needed. The Agent must reach the Controller over HTTPS and the Gateway's REALITY port. The panel also offers install links via the Controller's on-demand release cache when nodes have unreliable GitHub access; the Controller itself must be able to reach GitHub. For a Gateway with a non-default VMess port, upgrade the Controller first and use a freshly generated install or upgrade command containing `--vmess-port 8086` (with your actual port); this makes the installer check the configured port instead of 8080.
+The installers download the matching architecture from the [v0.3.0 release](https://github.com/Purestreams/xmesh/releases/tag/v0.3.0) and verify `SHA256SUMS`. Docker uses host networking and stores configuration/data under `/opt/xmesh-docker-<role>/config/` and `data/`; no port mapping is needed. The Agent must reach the Controller over HTTPS and the Gateway's REALITY port. The panel also offers install links via the Controller's on-demand release cache when nodes have unreliable GitHub access; the Controller itself must be able to reach GitHub. For a Gateway with a non-default VMess port, upgrade the Controller first and use a freshly generated install or upgrade command containing `--vmess-port 8086` (with your actual port); this makes the installer check the configured port instead of 8080.
 
 ## 6. Verify and troubleshoot
 
@@ -167,7 +167,7 @@ For high-RTT links, also check host TCP buffers; see [high-latency deployment](d
 
 ## Development
 
-The [v0.2.5 deployment automation flow](docs/automation.md) covers independent node installation, multi-Gateway assignment, subscriptions, upgrade rollback, and backup. After a one-time host installation of the Docker Controller at v0.2.3, the panel can check GitHub's latest stable release and upgrade the Controller through a systemd host helper. The Controller container never receives the Docker socket. Gateway and Agent upgrades still run on their respective hosts. The v0.2.5 panel can edit and delete nodes, Links, assignments, and grants; deleting a node does not uninstall its host service, and subscriptions wait for Gateway configuration to apply after client-entry changes.
+The [v0.3.0 deployment automation flow](docs/automation.md) covers independent node installation, multi-Gateway assignment, subscriptions, upgrade rollback, and backup. After a one-time host installation of the Docker Controller at v0.2.3, the panel can check GitHub's latest stable release and upgrade the Controller through a systemd host helper. The Controller container never receives the Docker socket. Gateway and Agent upgrades still run on their respective hosts. The v0.3.0 panel can edit and delete nodes, Links, assignments, and grants; deleting a node does not uninstall its host service, and subscriptions wait for Gateway configuration to apply after client-entry changes.
 
 mise pins Go 1.27.1:
 
@@ -180,3 +180,7 @@ mise exec -- go build ./cmd/xmesh
 Do not commit node credentials, Controller state, private keys, or local configuration.
 
 For a Docker-based end-to-end check, run `pwsh tests/reality/multicontainer.ps1`. It starts separate Controller, two Gateways, one Agent, two clients, and a target, verifying TCP/UDP echo traffic through both REALITY routes.
+
+## v0.3.0 control center
+
+The panel now separates overview, network, subscriptions, deployment and maintenance. It includes topology and matrix views, deployment progress, bulk selection with previews, partial status refresh, 24-hour Link history and the last 100 administrative request results. Clearing a selection never revokes existing access. See [panel behavior and verification](docs/panel.md).

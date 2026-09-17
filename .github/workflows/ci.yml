@@ -5,6 +5,44 @@ on:
 permissions:
   contents: read
 jobs:
+  panel:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: jdx/mise-action@v3
+        with:
+          install: true
+          cache: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: node --test tests/panel.test.cjs
+      - name: Install isolated browser test tools
+        run: |
+          npm install --prefix "$RUNNER_TEMP/panel-tools" --no-save playwright@1.58.2
+          "$RUNNER_TEMP/panel-tools/node_modules/.bin/playwright" install --with-deps chromium
+      - name: Verify panel in a real browser
+        shell: bash
+        run: |
+          set -euo pipefail
+          XMESH_PANEL_TEST_ADDR=127.0.0.1:18088 mise exec -- go test ./internal/controller -run '^TestPanelBrowserFixture$' -v -timeout 10m > "$RUNNER_TEMP/panel-fixture.log" 2>&1 &
+          fixture_pid=$!
+          trap 'kill "$fixture_pid" 2>/dev/null || true' EXIT
+          ready=0
+          for attempt in $(seq 1 120); do
+            if curl --fail --silent http://127.0.0.1:18088/healthz; then ready=1; break; fi
+            if ! kill -0 "$fixture_pid" 2>/dev/null; then cat "$RUNNER_TEMP/panel-fixture.log"; exit 1; fi
+            sleep 2
+          done
+          if [ "$ready" != 1 ]; then cat "$RUNNER_TEMP/panel-fixture.log"; exit 1; fi
+          NODE_PATH="$RUNNER_TEMP/panel-tools/node_modules" node tests/panel.browser.cjs
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: panel-screenshots
+          path: tmp/panel-screenshots/
+          if-no-files-found: ignore
+          retention-days: 14
   test:
     runs-on: ubuntu-latest
     steps:
@@ -26,7 +64,7 @@ jobs:
       - run: docker run --rm --mount "type=bind,source=$PWD,target=/src" -w /src golang:1.27.1-bookworm sh tests/controller_updater_install.sh
 
   build:
-    needs: test
+    needs: [test, panel]
     runs-on: ubuntu-latest
     strategy:
       matrix:

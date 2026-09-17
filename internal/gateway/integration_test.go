@@ -34,7 +34,9 @@ func TestSOCKSTCPAndUDPOverTunnel(t *testing.T) {
 	if err := agentRuntime.ApplyConfig(controller.AgentConfig{Agent: model.Agent{ID: "agent-1", AllowedCIDRs: []string{"127.0.0.0/8"}}, GrantIDs: []string{"grant-1"}}); err != nil {
 		t.Fatal(err)
 	}
+	agentDone := make(chan struct{})
 	go func() {
+		defer close(agentDone)
 		for ctx.Err() == nil {
 			if err := agentRuntime.RunLink(ctx, controller.AgentLinkConfig{Link: link, GatewayID: "gateway-1", TunnelToken: "tunnel-secret"}); err != nil {
 				t.Logf("agent link retry: %v", err)
@@ -42,6 +44,14 @@ func TestSOCKSTCPAndUDPOverTunnel(t *testing.T) {
 			time.Sleep(20 * time.Millisecond)
 		}
 	}()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-agentDone:
+		case <-time.After(5 * time.Second):
+			t.Error("agent link worker did not stop")
+		}
+	})
 	waitFor(t, 5*time.Second, func() bool {
 		lease, err := gatewayRuntime.pool.Acquire("agent-1")
 		if err == nil {
@@ -172,7 +182,9 @@ func startUDPEcho(t *testing.T) *net.UDPConn {
 	if err != nil {
 		t.Fatal(err)
 	}
+	done := make(chan struct{})
 	go func() {
+		defer close(done)
 		buffer := make([]byte, 65535)
 		for {
 			n, addr, err := conn.ReadFromUDP(buffer)
@@ -185,6 +197,10 @@ func startUDPEcho(t *testing.T) *net.UDPConn {
 			}
 		}
 	}()
+	t.Cleanup(func() {
+		_ = conn.Close()
+		<-done
+	})
 	return conn
 }
 func waitFor(t *testing.T, timeout time.Duration, fn func() bool) {

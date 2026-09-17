@@ -85,6 +85,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /login", s.login)
 	mux.HandleFunc("POST /logout", s.requireAdmin(s.logout))
 	mux.HandleFunc("GET /", s.requireAdmin(s.panel))
+	mux.HandleFunc("GET /admin/dashboard", s.requireAdmin(s.dashboard))
 	mux.HandleFunc("POST /admin/users", s.requireAdmin(s.csrf(s.createUser)))
 	mux.HandleFunc("POST /admin/users/{id}/toggle", s.requireAdmin(s.csrf(s.toggleUser)))
 	mux.HandleFunc("POST /admin/users/{id}/reset-subscription", s.requireAdmin(s.csrf(s.resetSubscription)))
@@ -237,26 +238,12 @@ func (s *Server) csrf(next http.HandlerFunc) http.HandlerFunc {
 			http.Error(w, "invalid CSRF token", http.StatusForbidden)
 			return
 		}
-		next(w, r)
+		s.recordOperation(w, r, next)
 	}
 }
 
 func (s *Server) panel(w http.ResponseWriter, r *http.Request) {
-	state := s.store.Snapshot()
-	for id, status := range state.NodeStatus {
-		if s.now().Sub(status.LastSeen) > time.Duration(s.cfg.NodeOfflineAfterSeconds)*time.Second {
-			status.Online = false
-			status.Ready = false
-			state.NodeStatus[id] = status
-		}
-	}
-	for id, status := range state.LinkStatus {
-		if s.now().Sub(status.LastSeen) > time.Duration(s.cfg.NodeOfflineAfterSeconds)*time.Second {
-			status.Online = false
-			status.Ready = false
-			state.LinkStatus[id] = status
-		}
-	}
+	state := s.panelState()
 	cookie, _ := r.Cookie(sessionCookie)
 	data := panelData{
 		State: state, CSRF: auth.Derive(s.cfg.sessionKey(), "csrf", cookie.Value), Notice: r.URL.Query().Get("notice"),
