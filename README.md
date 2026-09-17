@@ -65,11 +65,11 @@ sudo apt update
 sudo apt install -y ca-certificates curl tar coreutils
 ```
 
-仅在 Controller 主机安装以下工具并取得源码。本文说明当前代码行为，安装示例固定使用仓库已有的 `v0.3.1` tag；选择其他已发布版本时，将 `VERSION` 改为对应的精确 tag，源码与安装包使用同一版本。可用版本见 [Releases](https://github.com/Purestreams/xmesh/releases)。
+仅在 Controller 主机安装以下工具并取得源码。本文说明当前代码行为，安装示例固定使用 `v0.3.2`；选择其他已发布版本时，将 `VERSION` 改为对应的精确 tag，源码与安装包使用同一版本。可用版本见 [Releases](https://github.com/Purestreams/xmesh/releases)。
 
 ```sh
 sudo apt install -y git nginx certbot
-VERSION=v0.3.1
+VERSION=v0.3.2
 git clone --depth 1 --branch "$VERSION" https://github.com/Purestreams/xmesh.git
 cd xmesh
 ```

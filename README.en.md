@@ -65,11 +65,11 @@ sudo apt update
 sudo apt install -y ca-certificates curl tar coreutils
 ```
 
-On the Controller host only, install these additional tools and obtain the source. This README describes the current code; the installation example pins the repository's existing `v0.3.1` tag. To use another published version, set `VERSION` to its exact tag and use matching source and release assets. See [Releases](https://github.com/Purestreams/xmesh/releases) for available versions.
+On the Controller host only, install these additional tools and obtain the source. This README describes the current code; the installation example pins release `v0.3.2`. To use another published version, set `VERSION` to its exact tag and use matching source and release assets. See [Releases](https://github.com/Purestreams/xmesh/releases) for available versions.
 
 ```sh
 sudo apt install -y git nginx certbot
-VERSION=v0.3.1
+VERSION=v0.3.2
 git clone --depth 1 --branch "$VERSION" https://github.com/Purestreams/xmesh.git
 cd xmesh
 ```
