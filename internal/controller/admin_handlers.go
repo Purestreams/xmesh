@@ -573,20 +573,23 @@ func (s *Server) createEnrollment(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
+	state = s.store.Snapshot()
+	portArgs := nodeInstallPortArgs(state, role, nodeID)
 	_, _ = fmt.Fprintf(w, "One-time enrollment token (expires in 30 minutes):\n%s\n\nPaste one command on the %s host. The installer prompts for the token; it is not embedded in the command.\n", token, role)
-	s.writeInstallOptions(w, "Controller on-demand cache", strings.TrimSuffix(s.cfg.PublicURL, "/")+"/releases", role)
-	s.writeInstallOptions(w, "GitHub release", strings.TrimSuffix(s.cfg.ReleaseBaseURL, "/"), role)
+	s.writeInstallOptions(w, "Controller on-demand cache", strings.TrimSuffix(s.cfg.PublicURL, "/")+"/releases", role, portArgs...)
+	s.writeInstallOptions(w, "GitHub release", strings.TrimSuffix(s.cfg.ReleaseBaseURL, "/"), role, portArgs...)
 	identityExists := role == model.RoleGateway && state.Gateways[nodeID].CredentialHash != "" || role == model.RoleAgent && state.Agents[nodeID].CredentialHash != ""
 	if identityExists {
 		_, _ = fmt.Fprintln(w, "\nTo ROTATE an existing Docker node credential, use one of these commands on that same host. The old credential has a 15-minute grace period and is revoked when the new node reports status:")
 		_, _ = fmt.Fprintln(w, "\nController cache / rotate:")
-		_, _ = fmt.Fprintln(w, s.installCommand(strings.TrimSuffix(s.cfg.PublicURL, "/")+"/releases", "install-docker.sh", role, "--rotate-credential"))
+		rotateArgs := append(append([]string{}, portArgs...), "--rotate-credential")
+		_, _ = fmt.Fprintln(w, s.installCommand(strings.TrimSuffix(s.cfg.PublicURL, "/")+"/releases", "install-docker.sh", role, rotateArgs...))
 		_, _ = fmt.Fprintln(w, "\nGitHub / rotate:")
-		_, _ = fmt.Fprintln(w, s.installCommand(strings.TrimSuffix(s.cfg.ReleaseBaseURL, "/"), "install-docker.sh", role, "--rotate-credential"))
+		_, _ = fmt.Fprintln(w, s.installCommand(strings.TrimSuffix(s.cfg.ReleaseBaseURL, "/"), "install-docker.sh", role, rotateArgs...))
 		_, _ = fmt.Fprintln(w, "\nController cache / systemd rotate:")
-		_, _ = fmt.Fprintln(w, s.installCommand(strings.TrimSuffix(s.cfg.PublicURL, "/")+"/releases", "install.sh", role, "--rotate-credential"))
+		_, _ = fmt.Fprintln(w, s.installCommand(strings.TrimSuffix(s.cfg.PublicURL, "/")+"/releases", "install.sh", role, rotateArgs...))
 		_, _ = fmt.Fprintln(w, "\nGitHub / systemd rotate:")
-		_, _ = fmt.Fprintln(w, s.installCommand(strings.TrimSuffix(s.cfg.ReleaseBaseURL, "/"), "install.sh", role, "--rotate-credential"))
+		_, _ = fmt.Fprintln(w, s.installCommand(strings.TrimSuffix(s.cfg.ReleaseBaseURL, "/"), "install.sh", role, rotateArgs...))
 	}
 }
 
@@ -607,9 +610,20 @@ func (s *Server) revokeEnrollment(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
-func (s *Server) writeInstallOptions(w http.ResponseWriter, label, base string, role model.Role) {
+func nodeInstallPortArgs(state model.State, role model.Role, nodeID string) []string {
+	if role != model.RoleGateway {
+		return nil
+	}
+	port := state.Gateways[nodeID].VMessPort
+	if port == 0 {
+		port = 8080
+	}
+	return []string{"--vmess-port", strconv.Itoa(port)}
+}
+
+func (s *Server) writeInstallOptions(w http.ResponseWriter, label, base string, role model.Role, extra ...string) {
 	for _, method := range []struct{ label, script string }{{"systemd", "install.sh"}, {"Docker Compose", "install-docker.sh"}} {
-		_, _ = fmt.Fprintf(w, "\n%s / %s:\n%s\n", label, method.label, s.installCommand(base, method.script, role))
+		_, _ = fmt.Fprintf(w, "\n%s / %s:\n%s\n", label, method.label, s.installCommand(base, method.script, role, extra...))
 	}
 }
 

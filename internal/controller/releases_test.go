@@ -165,6 +165,34 @@ func TestEnrollmentOffersBothSourcesAndBothInstallModes(t *testing.T) {
 	if strings.Contains(command, "--enrollment-token") || response.Header().Get("Cache-Control") != "no-store" {
 		t.Fatal("token leaked into command or response can be cached")
 	}
+	if strings.Contains(command, "--vmess-port") {
+		t.Fatal("Agent command contains a Gateway-only port option")
+	}
+}
+
+func TestGatewayInstallAndUpgradeCommandsUseConfiguredPort(t *testing.T) {
+	server, _ := testServer(t, func(s *model.State) error {
+		s.Gateways["g"] = model.Gateway{ID: "g", Name: "Gateway", VMessPort: 8086, Enabled: true, CredentialHash: "existing-credential-hash"}
+		return nil
+	})
+	server.cfg.ReleaseBaseURL = "https://github.com/example/xmesh/releases/download"
+	server.cfg.ReleaseVersion = "v0.2.5"
+	server.cfg.ReleaseDir = t.TempDir()
+	request := httptest.NewRequest(http.MethodPost, "/admin/enrollments", strings.NewReader("role=gateway&node_id=g"))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	response := httptest.NewRecorder()
+	server.createEnrollment(response, request)
+	if response.Code != http.StatusOK || strings.Count(response.Body.String(), "'--vmess-port' '8086'") != 8 {
+		t.Fatalf("Gateway install/rotation commands lost configured port: %d %s", response.Code, response.Body.String())
+	}
+	request = httptest.NewRequest(http.MethodGet, "/admin/upgrade/gateway/g", nil)
+	request.SetPathValue("role", "gateway")
+	request.SetPathValue("id", "g")
+	response = httptest.NewRecorder()
+	server.upgradeOptions(response, request)
+	if response.Code != http.StatusOK || strings.Count(response.Body.String(), "'--vmess-port' '8086'") != 4 {
+		t.Fatalf("Gateway upgrade commands lost configured port: %d %s", response.Code, response.Body.String())
+	}
 }
 
 func TestQuickSetupCreatesCompleteRouteAtomically(t *testing.T) {

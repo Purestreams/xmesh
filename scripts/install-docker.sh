@@ -11,6 +11,7 @@ admin_username='admin'
 release_base_url='https://github.com/Purestreams/xmesh/releases/download'
 install_dir=''
 rotate_credential=false
+vmess_port='8080'
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -23,6 +24,7 @@ while [ "$#" -gt 0 ]; do
     --admin-username) admin_username=$2; shift 2 ;;
     --release-base-url) release_base_url=$2; shift 2 ;;
     --install-dir) install_dir=$2; shift 2 ;;
+    --vmess-port) vmess_port=$2; shift 2 ;;
     --rotate-credential) rotate_credential=true; shift ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
@@ -33,6 +35,10 @@ case "$role" in controller|gateway|agent) ;; *) echo '--role must be controller,
 if [ -z "$version" ]; then echo '--version is required' >&2; exit 2; fi
 if [ "$rotate_credential" = true ] && [ "$role" = controller ]; then echo 'Controller credentials are not node credentials' >&2; exit 2; fi
 case "$version" in *[!a-zA-Z0-9._-]*|'') echo 'version must contain only letters, numbers, dots, underscores, or hyphens' >&2; exit 2;; esac
+if [ "$role" = gateway ]; then
+  case "$vmess_port" in ''|*[!0-9]*) echo '--vmess-port must be a TCP port from 1 to 65535' >&2; exit 2;; esac
+  if [ "$vmess_port" -lt 1 ] || [ "$vmess_port" -gt 65535 ]; then echo '--vmess-port must be a TCP port from 1 to 65535' >&2; exit 2; fi
+fi
 case "$release_base_url" in https://*) ;; *) echo '--release-base-url must use HTTPS' >&2; exit 2;; esac
 for tool in curl sha256sum tar mktemp; do
   command -v "$tool" >/dev/null 2>&1 || { echo "missing required tool: $tool" >&2; exit 1; }
@@ -50,7 +56,7 @@ if [ "$role" != controller ]; then
   }
 fi
 if [ ! -f "$install_dir/compose.yaml" ] && command -v ss >/dev/null 2>&1; then
-  if [ "$role" = controller ]; then ports=${listen##*:}; elif [ "$role" = gateway ]; then ports='8080 8443'; else ports=''; fi
+  if [ "$role" = controller ]; then ports=${listen##*:}; elif [ "$role" = gateway ]; then ports="$vmess_port 8443"; else ports=''; fi
   for port in $ports; do
     if ss -ltnH | awk '{print $4}' | grep -Eq ":$port\$"; then
       echo "TCP port $port is already in use; resolve the conflict before installing $role" >&2

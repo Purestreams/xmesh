@@ -9,6 +9,7 @@ release_base_url=''
 uninstall='false'
 purge='false'
 rotate_credential='false'
+vmess_port='8080'
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -20,6 +21,7 @@ while [ "$#" -gt 0 ]; do
     --uninstall) uninstall='true'; shift ;;
     --purge) purge='true'; shift ;;
     --rotate-credential) rotate_credential='true'; shift ;;
+    --vmess-port) vmess_port=$2; shift 2 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -44,6 +46,10 @@ case "$role" in gateway|agent) ;; *) echo '--role must be gateway or agent' >&2;
 if [ -z "$controller" ] || [ -z "$version" ] || [ -z "$release_base_url" ]; then echo '--controller, --version, and --release-base-url are required' >&2; exit 2; fi
 case "$controller" in https://*) ;; *) echo '--controller must use HTTPS' >&2; exit 2;; esac
 case "$version" in *[!a-zA-Z0-9._-]*|'') echo 'version must contain only letters, numbers, dots, underscores, or hyphens' >&2; exit 2;; esac
+if [ "$role" = gateway ]; then
+  case "$vmess_port" in ''|*[!0-9]*) echo '--vmess-port must be a TCP port from 1 to 65535' >&2; exit 2;; esac
+  if [ "$vmess_port" -lt 1 ] || [ "$vmess_port" -gt 65535 ]; then echo '--vmess-port must be a TCP port from 1 to 65535' >&2; exit 2; fi
+fi
 case "$release_base_url" in https://*) ;; *) echo '--release-base-url must use HTTPS' >&2; exit 2;; esac
 for tool in curl sha256sum tar mktemp; do
   command -v "$tool" >/dev/null 2>&1 || { echo "missing required tool: $tool" >&2; exit 1; }
@@ -53,7 +59,7 @@ curl --fail --silent --show-error --max-time 15 "${controller%/}/healthz" >/dev/
   exit 1
 }
 if [ ! -f /etc/xmesh/node.json ] && command -v ss >/dev/null 2>&1 && [ "$role" = gateway ]; then
-  for port in 8080 8443; do
+  for port in "$vmess_port" 8443; do
     if ss -ltnH | awk '{print $4}' | grep -Eq ":$port\$"; then
       echo "TCP port $port is already in use" >&2
       exit 1

@@ -232,6 +232,7 @@ func (s *Server) upgradeOptions(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	_, _ = fmt.Fprintf(w, "Upgrade %s %s to %s on its existing host. The installer preserves node identity and checks the reported version; a failed upgrade restores the previous image or binaries.\n", role, id, s.cfg.ReleaseVersion)
-	s.writeInstallOptions(w, "Controller on-demand cache", strings.TrimSuffix(s.cfg.PublicURL, "/")+"/releases", role)
-	s.writeInstallOptions(w, "GitHub release", strings.TrimSuffix(s.cfg.ReleaseBaseURL, "/"), role)
+	portArgs := nodeInstallPortArgs(state, role, id)
+	s.writeInstallOptions(w, "Controller on-demand cache", strings.TrimSuffix(s.cfg.PublicURL, "/")+"/releases", role, portArgs...)
+	s.writeInstallOptions(w, "GitHub release", strings.TrimSuffix(s.cfg.ReleaseBaseURL, "/"), role, portArgs...)
 }
