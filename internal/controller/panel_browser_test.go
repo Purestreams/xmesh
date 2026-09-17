@@ -26,8 +26,9 @@ func TestPanelBrowserFixture(t *testing.T) {
 		for i, name := range []string{"Home Network", "Office Network"} {
 			id := "a" + strconv.Itoa(i+1)
 			s.Agents[id] = model.Agent{ID: id, Name: name, Enabled: true, AllowedCIDRs: []string{"0.0.0.0/0"}, DesiredVersion: 2, CredentialHash: "fixture-only"}
-			s.NodeStatus[id] = model.NodeStatus{NodeID: id, Online: true, Ready: true, AppliedVersion: 2, LastSeen: now, BinaryVersion: "v0.3.0", TunnelConnections: 2}
+			s.NodeStatus[id] = model.NodeStatus{NodeID: id, Online: true, Ready: true, AppliedVersion: 2, LastSeen: now, BinaryVersion: "v0.3.4", TunnelConnections: 2}
 		}
+		s.Updaters["a1"] = model.Updater{NodeID: "a1", Role: model.RoleAgent, CredentialHash: "fixture-only", LastSeen: now, Mode: "systemd", Arch: "amd64", Version: "v0.3.3"}
 		for i := range 2 {
 			id := "r" + strconv.Itoa(i+1)
 			gateway := "g" + strconv.Itoa(i+1)

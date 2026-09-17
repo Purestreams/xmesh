@@ -322,36 +322,19 @@ if (typeof document !== "undefined")
       agents.forEach((n, i) =>
         positions.set(n.id, { x: 610, y: 55 + i * 100 }),
       );
-      routes.forEach((route, index) => {
+      routes.forEach((route) => {
         const a = positions.get(route.gateway_id),
           b = positions.get(route.agent_id);
         if (!a || !b) return;
-        const link = data.links.find(
-            (l) => l.route_id === route.id && l.enabled,
-          ),
-          label = `${stages[route.state]}${link?.status.rtt_millis ? " · " + link.status.rtt_millis.toFixed(1) + " ms" : ""}`;
+        const rtts = data.links
+          .filter((link) => link.route_id === route.id && link.enabled && link.status.online && link.status.ready && link.status.rtt_millis > 0)
+          .map((link) => `${link.name}: ${link.status.rtt_millis.toFixed(1)} ms`);
         const path = svgEl("path", {
           d: `M ${a.x + 225} ${a.y + 31} C 450 ${a.y + 31}, 450 ${b.y + 31}, ${b.x} ${b.y + 31}`,
           class: `edge ${route.state}`,
         });
-        path.append(svgEl("title", {}, `${routeName(route)} · ${label}`));
+        path.append(svgEl("title", {}, `${routeName(route)} · ${stages[route.state]}${rtts.length ? " · " + rtts.join(" / ") : ""}`));
         svg.append(path);
-        const t = svgEl(
-          "text",
-          {
-            x: 360 + (index % 3) * 42,
-            y: (a.y + b.y) / 2 + 24,
-            class: "route-label",
-            tabindex: 0,
-            role: "button",
-          },
-          label,
-        );
-        t.addEventListener("click", () => showRoute(route.id));
-        t.addEventListener("keydown", (e) => {
-          if (e.key === "Enter") showRoute(route.id);
-        });
-        svg.append(t);
       });
       nodes.forEach((n) => {
         const p = positions.get(n.id),
@@ -391,7 +374,41 @@ if (typeof document !== "undefined")
         });
         svg.append(g);
       });
-      $("#topology").replaceChildren(svg);
+      const routeList = el("div", null, "topology-routes"),
+        routeTable = el("table"),
+        routeHead = el("tr"),
+        routeBody = el("tbody");
+      routeList.append(el("h3", "线路延迟 · Gateway 上报"));
+      ["节点组合", "Link", "状态", "RTT", "详情"].forEach((name) =>
+        routeHead.append(el("th", name)),
+      );
+      const routeThead = el("thead");
+      routeThead.append(routeHead);
+      routeTable.append(routeThead);
+      routes.forEach((route) => {
+        const links = data.links.filter((link) => link.route_id === route.id && link.enabled);
+        (links.length ? links : [null]).forEach((link) => {
+          const row = el("tr"),
+            detail = el("button", "查看");
+          detail.type = "button";
+          detail.addEventListener("click", () => showRoute(route.id));
+          [
+            routeName(route),
+            link?.name || "无启用 Link",
+            stages[route.state],
+            link?.status.online && link.status.ready && link.status.rtt_millis > 0
+              ? `${link.status.rtt_millis.toFixed(1)} ms`
+              : "—",
+          ].forEach((value) => row.append(el("td", value)));
+          const action = el("td");
+          action.append(detail);
+          row.append(action);
+          routeBody.append(row);
+        });
+      });
+      routeTable.append(routeBody);
+      routeList.append(routeTable);
+      $("#topology").replaceChildren(svg, routeList);
       const table = el("table"),
         thead = el("thead"),
         tr = el("tr");
@@ -928,6 +945,15 @@ if (typeof document !== "undefined")
     function renderNodeUpgrades() {
       const section = $("#node-upgrades");
       if (!section || !data) return;
+      section.querySelectorAll('form[action="/admin/upgrades"] fieldset label').forEach((label) => {
+        const input = label.querySelector('input[name="node_id"]');
+        const node = data.nodes.find((item) => item.id === input?.value);
+        if (!node) return;
+        const up = data.updaters?.[node.id];
+        const textNode = [...label.childNodes].find((child) => child.nodeType === Node.TEXT_NODE);
+        if (textNode)
+          textNode.textContent = `${node.role} ${node.name} · ${up?.State || "未配对"} · ${node.status.binary_version || "—"} · ${label.dataset.links} Links / ${label.dataset.users} users`;
+      });
       const csrf = section.querySelector('form[action="/admin/upgrades"] input[name="csrf"]')?.value;
       const tables = section.querySelectorAll("table");
       const nodesBody = tables[0]?.querySelector("tbody");
@@ -938,7 +964,8 @@ if (typeof document !== "undefined")
           const match = action.match(/\/admin\/updaters\/(?:gateway|agent)\/([^/]+)\/pair$/);
           if (!match) continue;
           const up = data.updaters?.[match[1]];
-          row.cells[1].textContent = `${up?.State || "未配对"} · ${up?.Mode || "—"}/${up?.Arch || "—"} · ${up?.Version || "—"}`;
+          const node = data.nodes.find((n) => n.id === match[1]);
+          row.cells[1].textContent = `${up?.State || "未配对"} · ${up?.Mode || "—"}/${up?.Arch || "—"} · 节点 ${node?.status.binary_version || "—"} · 升级助手 ${up?.Version || "—"}`;
         }
       }
       if (!tasksBody) return;

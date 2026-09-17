@@ -69,7 +69,7 @@ sudo apt install -y ca-certificates curl tar coreutils
 
 ```sh
 sudo apt install -y git nginx certbot
-VERSION=v0.3.4
+VERSION=v0.3.5
 git clone --depth 1 --branch "$VERSION" https://github.com/Purestreams/xmesh.git
 cd xmesh
 ```

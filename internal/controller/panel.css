@@ -352,10 +352,16 @@ svg.network {
 .network .node {
   cursor: pointer;
 }
-.network .route-label {
-  font-size: 10px;
-  fill: #73859b;
-  cursor: pointer;
+.topology-routes {
+  padding: 14px 18px 18px;
+  background: white;
+  border-top: 1px solid #ecf0f6;
+}
+.topology-routes h3 {
+  margin: 0 0 10px;
+}
+.topology-routes button {
+  white-space: nowrap;
 }
 .matrix-cell {
   background: none;
