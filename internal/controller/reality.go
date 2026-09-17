@@ -16,8 +16,34 @@ import (
 	"xmesh/internal/model"
 )
 
+// Region is chosen by the administrator; hostnames do not reliably identify location.
+func defaultRealityTarget(region string) string {
+	switch region {
+	case "cn":
+		return "api.bilibili.com:443"
+	case "overseas":
+		return "www.swift.com:443"
+	default:
+		return ""
+	}
+}
+
+func validGatewayRegion(region string) bool {
+	return region == "" || region == "cn" || region == "overseas"
+}
+
 // provisionReality keeps one REALITY identity per Gateway and one VLESS identity per Link.
 func provisionReality(state *model.State, gatewayID, target, linkURL string) (string, string, error) {
+	gateway, ok := state.Gateways[gatewayID]
+	if !ok {
+		return "", "", errors.New("Gateway not found")
+	}
+	if target == "" {
+		target = gateway.RealityTarget
+		if target == "" {
+			target = defaultRealityTarget(gateway.Region)
+		}
+	}
 	u, err := url.Parse(linkURL)
 	if err != nil || u.Scheme != "reality" || u.Hostname() == "" || u.Port() == "" || u.Path == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
 		return "", "", errors.New("REALITY URL must be reality://host:port/tunnel-path")
@@ -32,10 +58,6 @@ func provisionReality(state *model.State, gatewayID, target, linkURL string) (st
 	name, port, err := net.SplitHostPort(target)
 	if err != nil || name == "" || port != "443" || !strings.Contains(name, ".") || strings.HasPrefix(name, ".") || strings.HasSuffix(name, ".") || strings.ContainsAny(name, "/\\?#@ \t\r\n") || net.ParseIP(name) != nil {
 		return "", "", errors.New("REALITY target must be a DNS name on port 443")
-	}
-	gateway, ok := state.Gateways[gatewayID]
-	if !ok {
-		return "", "", errors.New("Gateway not found")
 	}
 	if gateway.RealityPrivateKey == "" {
 		key, err := ecdh.X25519().GenerateKey(rand.Reader)

@@ -88,6 +88,11 @@ func (s *Server) resetSubscription(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) createGateway(w http.ResponseWriter, r *http.Request) {
+	region := strings.TrimSpace(r.FormValue("region"))
+	if !validGatewayRegion(region) {
+		http.Error(w, "invalid Gateway region", http.StatusBadRequest)
+		return
+	}
 	name := strings.TrimSpace(r.FormValue("name"))
 	host := strings.TrimSpace(r.FormValue("public_host"))
 	path := strings.TrimSpace(r.FormValue("vmess_path"))
@@ -109,7 +114,7 @@ func (s *Server) createGateway(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	err = s.store.Update(func(state *model.State) error {
-		state.Gateways[id] = model.Gateway{ID: id, Name: name, PublicHost: host, VMessPort: port, VMessPath: path, VMessHost: strings.TrimSpace(r.FormValue("vmess_host")), Enabled: true, DesiredVersion: 1, CreatedAt: s.now().UTC()}
+		state.Gateways[id] = model.Gateway{ID: id, Name: name, PublicHost: host, Region: region, VMessPort: port, VMessPath: path, VMessHost: strings.TrimSpace(r.FormValue("vmess_host")), Enabled: true, DesiredVersion: 1, CreatedAt: s.now().UTC()}
 		return nil
 	})
 	if err != nil {
@@ -154,6 +159,11 @@ func (s *Server) createAgent(w http.ResponseWriter, r *http.Request) {
 
 // quickSetup creates a minimal Gateway-Agent route as one desired-state transaction.
 func (s *Server) quickSetup(w http.ResponseWriter, r *http.Request) {
+	region := strings.TrimSpace(r.FormValue("region"))
+	if !validGatewayRegion(region) {
+		http.Error(w, "invalid Gateway region", http.StatusBadRequest)
+		return
+	}
 	gwName := strings.TrimSpace(r.FormValue("gateway_name"))
 	agtName := strings.TrimSpace(r.FormValue("agent_name"))
 	publicHost := strings.TrimSpace(r.FormValue("public_host"))
@@ -196,7 +206,7 @@ func (s *Server) quickSetup(w http.ResponseWriter, r *http.Request) {
 	}
 	now := s.now().UTC()
 	err = s.store.Update(func(state *model.State) error {
-		state.Gateways[gwID] = model.Gateway{ID: gwID, Name: gwName, PublicHost: publicHost, VMessPort: vmessPort, VMessPath: vmessPath, VMessHost: strings.TrimSpace(r.FormValue("vmess_host")), Enabled: true, DesiredVersion: 1, CreatedAt: now}
+		state.Gateways[gwID] = model.Gateway{ID: gwID, Name: gwName, PublicHost: publicHost, Region: region, VMessPort: vmessPort, VMessPath: vmessPath, VMessHost: strings.TrimSpace(r.FormValue("vmess_host")), Enabled: true, DesiredVersion: 1, CreatedAt: now}
 		state.Agents[agtID] = model.Agent{ID: agtID, Name: agtName, Enabled: true, AllowedCIDRs: allowedCIDRs, DeniedCIDRs: deniedCIDRs, DesiredVersion: 1, CreatedAt: now}
 		state.Attachments[attachmentID] = model.Attachment{ID: attachmentID, GatewayID: gwID, AgentID: agtID, Enabled: true, CreatedAt: now}
 		link := model.Link{ID: linkID, AttachmentID: attachmentID, Name: gwName + " / " + agtName, URL: linkURL, HTTPHost: strings.TrimSpace(r.FormValue("link_http_host")), TLSServerName: strings.TrimSpace(r.FormValue("tls_server_name")), TLSVerify: true, Priority: 10, Weight: 1, Connections: 2, MaxStreams: 256, Enabled: true, TunnelTokenHash: auth.SecretHash(auth.Derive(s.cfg.sessionKey(), "tunnel", linkID)), CreatedAt: now}

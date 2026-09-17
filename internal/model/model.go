@@ -21,6 +21,7 @@ type Gateway struct {
 	ID                          string    `json:"id"`
 	Name                        string    `json:"name"`
 	PublicHost                  string    `json:"public_host"`
+	Region                      string    `json:"region,omitempty"`
 	VMessPort                   int       `json:"vmess_port"`
 	VMessPath                   string    `json:"vmess_path"`
 	VMessHost                   string    `json:"vmess_host"`

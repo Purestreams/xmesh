@@ -4,7 +4,14 @@ const {
   sampleRates,
   selectionPlan,
   formatBytes,
+  defaultRealityTarget,
 } = require("../internal/controller/panel.js");
+
+test("REALITY defaults follow the explicitly selected Gateway region", () => {
+  assert.equal(defaultRealityTarget("cn"), "api.bilibili.com:443");
+  assert.equal(defaultRealityTarget("overseas"), "www.swift.com:443");
+  assert.equal(defaultRealityTarget(""), "");
+});
 const sample = (minute, bytes, generation = 1, ready = true) => ({
   at: new Date(Date.UTC(2026, 8, 17, 0, minute)).toISOString(),
   upload_bytes: bytes,

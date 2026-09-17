@@ -108,6 +108,17 @@ const fs = require("node:fs");
     await page.getByRole("cell", { name: /Browser QA user/ }).waitFor();
     // Native validation reveals advanced required fields instead of trapping focus.
     await page.goto(base + "/#create-route");
+    const region = page.locator("#create-route select[name=region]");
+    const realityTarget = page.locator(
+      "#create-route input[name=reality_target]",
+    );
+    await region.selectOption("cn");
+    assert.equal(await realityTarget.inputValue(), "api.bilibili.com:443");
+    await region.selectOption("overseas");
+    assert.equal(await realityTarget.inputValue(), "www.swift.com:443");
+    await realityTarget.fill("custom.example:443");
+    await region.selectOption("cn");
+    assert.equal(await realityTarget.inputValue(), "custom.example:443");
     await page
       .locator("#create-route input[name=gateway_name]")
       .fill("New edge");

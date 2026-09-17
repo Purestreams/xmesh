@@ -1,5 +1,11 @@
 "use strict";
 
+function defaultRealityTarget(region) {
+  if (region === "cn") return "api.bilibili.com:443";
+  if (region === "overseas") return "www.swift.com:443";
+  return "";
+}
+
 function sampleRates(samples) {
   return samples.map((sample, index) => {
     const previous = samples[index - 1];
@@ -55,7 +61,12 @@ function formatBytes(value) {
   return `${value.toFixed(i ? 1 : 0)} ${units[i]}`;
 }
 if (typeof module !== "undefined")
-  module.exports = { sampleRates, selectionPlan, formatBytes };
+  module.exports = {
+    sampleRates,
+    selectionPlan,
+    formatBytes,
+    defaultRealityTarget,
+  };
 
 if (typeof document !== "undefined")
   (() => {
@@ -890,7 +901,16 @@ if (typeof document !== "undefined")
               ? "已存在"
               : "将重新启用"
             : "可新增";
-        $(".choice-state", row).textContent = label;
+        const target =
+          kind === "assign"
+            ? node?.target ||
+              form.elements.reality_target.value.trim() ||
+              defaultRealityTarget(node?.region)
+            : "";
+        $(".choice-state", row).textContent =
+          kind === "assign"
+            ? `${label} · ${target || "需设置所在地或填写 target"}`
+            : label;
         row.hidden =
           !row.dataset.search.includes(query) ||
           (filter === "new" && !!existing) ||
@@ -905,6 +925,18 @@ if (typeof document !== "undefined")
       $(".selection-summary", form).textContent =
         `已选 ${selected.length} / 可选 ${checkboxes.filter((c) => !c.disabled).length} · 新增 ${plan.created} · 重新启用 ${plan.reenabled} · 已存在 ${plan.unchanged}。清除选择仅影响本次提交。`;
       $("button[type=submit]", form).disabled = !selected.length || submitting;
+      if (kind === "assign") {
+        const targets = new Set(
+          selected.map((id) => {
+            const node = data.nodes.find((n) => n.id === id);
+            return node?.target || defaultRealityTarget(node?.region);
+          }),
+        );
+        form.elements.reality_target.placeholder =
+          targets.size === 1 && !targets.has("")
+            ? `默认：${[...targets][0]}`
+            : "留空：按各 Gateway 所在地使用默认值";
+      }
     }
     function enhance(root = document) {
       $$("section[data-page] > form.stack", root).forEach((form) => {
@@ -1039,6 +1071,16 @@ if (typeof document !== "undefined")
       });
       const quick = $("#create-route form", root);
       if (quick) {
+        const region = quick.elements.region,
+          target = quick.elements.reality_target;
+        let previousDefault = defaultRealityTarget(region.value);
+        region.addEventListener("change", () => {
+          const nextDefault = defaultRealityTarget(region.value);
+          if (!target.value.trim() || target.value === previousDefault)
+            target.value = nextDefault;
+          previousDefault = nextDefault;
+          target.placeholder = nextDefault || "手动填写 REALITY target";
+        });
         const host = quick.elements.public_host,
           url = quick.elements.link_url;
         host.addEventListener("input", () => {

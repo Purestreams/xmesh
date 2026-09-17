@@ -11,6 +11,11 @@ import (
 )
 
 func (s *Server) editGateway(w http.ResponseWriter, r *http.Request) {
+	region := strings.TrimSpace(r.FormValue("region"))
+	if !validGatewayRegion(region) {
+		http.Error(w, "invalid Gateway region", http.StatusBadRequest)
+		return
+	}
 	name := strings.TrimSpace(r.FormValue("name"))
 	host := strings.TrimSpace(r.FormValue("public_host"))
 	path := strings.TrimSpace(r.FormValue("vmess_path"))
@@ -39,6 +44,9 @@ func (s *Server) editGateway(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		gateway.Name, gateway.PublicHost, gateway.VMessPort, gateway.VMessPath, gateway.VMessHost = name, host, port, path, vmessHost
+		if r.Form.Has("region") {
+			gateway.Region = region
+		}
 		gateway.DesiredVersion++
 		state.Gateways[gateway.ID] = gateway
 		if connectionChanged {

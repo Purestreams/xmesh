@@ -43,6 +43,7 @@ type dashboardNode struct {
 	Name     string           `json:"name"`
 	Role     string           `json:"role"`
 	Host     string           `json:"host"`
+	Region   string           `json:"region"`
 	Target   string           `json:"target"`
 	Enabled  bool             `json:"enabled"`
 	Enrolled bool             `json:"enrolled"`
@@ -114,7 +115,7 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 	state := s.panelState()
 	data := dashboardData{At: s.now().UTC(), Revision: state.Revision, Nodes: []dashboardNode{}, Routes: []dashboardRoute{}, Links: []dashboardLink{}, Users: []dashboardUser{}, Grants: []dashboardGrant{}, History: map[string][]model.LinkSample{}, Operations: state.Operations, Upgrade: s.controllerUpgradeStatus()}
 	for _, node := range sortedGateways(state) {
-		data.Nodes = append(data.Nodes, dashboardNode{ID: node.ID, Name: node.Name, Role: "Gateway", Host: node.PublicHost, Target: node.RealityTarget, Enabled: node.Enabled, Enrolled: node.CredentialHash != "", Desired: node.DesiredVersion, Status: state.NodeStatus[node.ID], Next: nextDeploymentAction(state, node.ID, model.RoleGateway)})
+		data.Nodes = append(data.Nodes, dashboardNode{ID: node.ID, Name: node.Name, Role: "Gateway", Host: node.PublicHost, Region: node.Region, Target: node.RealityTarget, Enabled: node.Enabled, Enrolled: node.CredentialHash != "", Desired: node.DesiredVersion, Status: state.NodeStatus[node.ID], Next: nextDeploymentAction(state, node.ID, model.RoleGateway)})
 	}
 	for _, node := range sortedAgents(state) {
 		data.Nodes = append(data.Nodes, dashboardNode{ID: node.ID, Name: node.Name, Role: "Agent", Enabled: node.Enabled, Enrolled: node.CredentialHash != "", Desired: node.DesiredVersion, Status: state.NodeStatus[node.ID], Next: nextDeploymentAction(state, node.ID, model.RoleAgent)})

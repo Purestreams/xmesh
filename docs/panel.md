@@ -1,4 +1,4 @@
-# Control center (v0.3.0)
+# Control center (v0.3.1)
 
 The Controller embeds its HTML, CSS and JavaScript; no frontend service, CDN or
 production Node.js runtime is required. Existing management POST endpoints and
@@ -7,6 +7,16 @@ for details, collapsed creation and advanced forms, search, topology and matrix
 views. Basic forms remain usable with JavaScript disabled.
 
 ## Deploy and grant access
+
+Choose the Gateway location when creating or editing a Gateway: China mainland
+defaults to `api.bilibili.com:443`, and overseas defaults to `www.swift.com:443`.
+In new-route setup the location selection fills the target and preserves a
+manually entered custom value. Batch assignment resolves blank targets per
+Gateway, so mixed-region selections get different defaults. Existing REALITY
+targets remain unchanged, even when a Gateway's location is edited. A manually
+entered batch target overrides defaults only for Gateways without an existing
+target. Older Gateways retain an unset location until it is explicitly selected;
+their location is never guessed from names or IP addresses.
 
 Use **部署向导** to create a new route or reuse existing nodes. New-route setup
 creates the Gateway, Agent, attachment and Link atomically. Entering a public
