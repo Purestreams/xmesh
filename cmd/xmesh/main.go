@@ -78,6 +78,7 @@ func runNode(logger *slog.Logger, role model.Role, args []string) error {
 	if cfg.Role != role {
 		return fmt.Errorf("config role is %s, command requires %s", cfg.Role, role)
 	}
+	cfg.BinaryVersion = version
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	switch role {
@@ -155,6 +156,7 @@ func enrollNode(args []string) error {
 	controllerURL := flags.String("controller", "", "controller public URL")
 	token := flags.String("token", "", "one-time enrollment token")
 	tokenStdin := flags.Bool("token-stdin", false, "read one-time enrollment token from stdin")
+	replace := flags.Bool("replace", false, "rotate credentials in an existing node config")
 	role := flags.String("role", "", "gateway or agent")
 	output := flags.String("output", "/etc/xmesh/node.json", "node config output")
 	if err := flags.Parse(args); err != nil {
@@ -176,12 +178,28 @@ func enrollNode(args []string) error {
 	if *token == "" {
 		return fmt.Errorf("enrollment token is required")
 	}
-	if _, err := os.Stat(*output); err == nil {
+	var existing map[string]any
+	if *replace {
+		b, err := os.ReadFile(*output)
+		if err != nil {
+			return fmt.Errorf("read existing node identity: %w", err)
+		}
+		if err := json.Unmarshal(b, &existing); err != nil || existing["role"] != *role {
+			return fmt.Errorf("invalid existing node identity")
+		}
+		if nodeID, ok := existing["node_id"].(string); !ok || nodeID == "" {
+			return fmt.Errorf("invalid existing node identity")
+		}
+	} else if _, err := os.Stat(*output); err == nil {
 		return fmt.Errorf("refusing to replace existing node identity at %s", *output)
 	} else if !os.IsNotExist(err) {
 		return err
 	}
-	payload, _ := json.Marshal(controller.EnrollmentRequest{Token: *token})
+	request := controller.EnrollmentRequest{Token: *token, Role: model.Role(*role)}
+	if *replace {
+		request.NodeID = existing["node_id"].(string)
+	}
+	payload, _ := json.Marshal(request)
 	client := &http.Client{Timeout: 20 * time.Second}
 	resp, err := client.Post(strings.TrimSuffix(*controllerURL, "/")+"/api/v1/enroll", "application/json", bytes.NewReader(payload))
 	if err != nil {
@@ -198,6 +216,33 @@ func enrollNode(args []string) error {
 	}
 	if string(result.Role) != *role {
 		return fmt.Errorf("enrollment role %s does not match requested role %s", result.Role, *role)
+	}
+	if *replace {
+		if existing["node_id"] != result.NodeID {
+			return fmt.Errorf("enrollment node %s does not match existing identity", result.NodeID)
+		}
+		existing["credential"] = result.Credential
+		b, err := json.MarshalIndent(existing, "", "  ")
+		if err != nil {
+			return err
+		}
+		file, err := os.CreateTemp(filepath.Dir(*output), ".node-rotate-*")
+		if err != nil {
+			return err
+		}
+		defer os.Remove(file.Name())
+		if err := file.Chmod(0o600); err != nil {
+			file.Close()
+			return err
+		}
+		if _, err := file.Write(b); err != nil {
+			file.Close()
+			return err
+		}
+		if err := file.Close(); err != nil {
+			return err
+		}
+		return os.Rename(file.Name(), *output)
 	}
 	config := map[string]any{"role": result.Role, "node_id": result.NodeID, "controller_url": strings.TrimSuffix(*controllerURL, "/"), "credential": result.Credential, "poll_interval": "15s", "status_interval": "10s", "gateway": map[string]any{"socks_listen": "127.0.0.1:18080", "tunnel_listen": "127.0.0.1:18081", "tunnel_path": "/tunnel", "xray_binary": "/usr/local/lib/xmesh/xray", "xray_config_path": "/var/lib/xmesh/xray.json", "reality_listen": "0.0.0.0:8443", "udp_idle_timeout": "2m", "max_udp_associations": 1024}}
 	b, err := json.MarshalIndent(config, "", "  ")

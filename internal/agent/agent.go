@@ -447,7 +447,7 @@ func (r *Runtime) report(ctx context.Context) error {
 		ready = ready || copy.Ready
 	}
 	last, _ := r.lastError.Load().(string)
-	node := model.NodeStatus{NodeID: r.local.NodeID, Role: model.RoleAgent, Online: true, Ready: ready, DesiredVersion: config.Revision, AppliedVersion: config.Revision, LastSeen: time.Now().UTC(), TunnelConnections: tunnels, TCPConnections: int(r.tcpConnections.Load()), UDPAssociations: int(r.udpAssociations.Load()), LastError: last}
+	node := model.NodeStatus{NodeID: r.local.NodeID, Role: model.RoleAgent, BinaryVersion: r.local.BinaryVersion, Online: true, Ready: ready, DesiredVersion: config.Revision, AppliedVersion: config.Revision, LastSeen: time.Now().UTC(), TunnelConnections: tunnels, TCPConnections: int(r.tcpConnections.Load()), UDPAssociations: int(r.udpAssociations.Load()), LastError: last}
 	return r.client.Report(ctx, node, links, nil)
 }
 func (r *Runtime) setError(value string) { r.lastError.Store(value) }

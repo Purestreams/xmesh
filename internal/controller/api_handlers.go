@@ -17,6 +17,17 @@ type StatusReport struct {
 	Grants []model.GrantStatus `json:"grants,omitempty"`
 }
 
+func (s *Server) selfStatus(w http.ResponseWriter, r *http.Request) {
+	_, nodeID, ok := s.authenticateNode(r)
+	if !ok {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	status := s.store.Snapshot().NodeStatus[nodeID]
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, status)
+}
+
 func (s *Server) enroll(w http.ResponseWriter, r *http.Request) {
 	var request EnrollmentRequest
 	if !decodeJSON(w, r, &request) {
@@ -45,11 +56,18 @@ func (s *Server) enroll(w http.ResponseWriter, r *http.Request) {
 		if !found || !enrollment.UsedAt.IsZero() || !s.now().Before(enrollment.ExpiresAt) {
 			return fmt.Errorf("invalid or expired enrollment token")
 		}
+		if request.Role != "" && request.Role != enrollment.Role || request.NodeID != "" && request.NodeID != enrollment.NodeID {
+			return fmt.Errorf("enrollment token is for a different node")
+		}
 		switch enrollment.Role {
 		case model.RoleGateway:
 			node, ok := state.Gateways[enrollment.NodeID]
 			if !ok {
 				return fmt.Errorf("gateway no longer exists")
+			}
+			if node.CredentialHash != "" {
+				node.PreviousCredentialHash = node.CredentialHash
+				node.PreviousCredentialExpiresAt = s.now().Add(15 * time.Minute).UTC()
 			}
 			node.CredentialHash = auth.SecretHash(credential)
 			state.Gateways[node.ID] = node
@@ -57,6 +75,10 @@ func (s *Server) enroll(w http.ResponseWriter, r *http.Request) {
 			node, ok := state.Agents[enrollment.NodeID]
 			if !ok {
 				return fmt.Errorf("agent no longer exists")
+			}
+			if node.CredentialHash != "" {
+				node.PreviousCredentialHash = node.CredentialHash
+				node.PreviousCredentialExpiresAt = s.now().Add(15 * time.Minute).UTC()
 			}
 			node.CredentialHash = auth.SecretHash(credential)
 			state.Agents[node.ID] = node
@@ -88,6 +110,8 @@ func (s *Server) nodeConfig(w http.ResponseWriter, r *http.Request) {
 	case model.RoleGateway:
 		gateway := state.Gateways[nodeID]
 		gateway.CredentialHash = ""
+		gateway.PreviousCredentialHash = ""
+		gateway.PreviousCredentialExpiresAt = time.Time{}
 		response := GatewayConfig{Revision: gateway.DesiredVersion, Gateway: gateway}
 		for _, attachment := range state.Attachments {
 			if attachment.GatewayID != nodeID || !attachment.Enabled {
@@ -111,6 +135,8 @@ func (s *Server) nodeConfig(w http.ResponseWriter, r *http.Request) {
 	case model.RoleAgent:
 		agent := state.Agents[nodeID]
 		agent.CredentialHash = ""
+		agent.PreviousCredentialHash = ""
+		agent.PreviousCredentialExpiresAt = time.Time{}
 		response := AgentConfig{Revision: agent.DesiredVersion, Agent: agent}
 		for _, attachment := range state.Attachments {
 			if attachment.AgentID != nodeID || !attachment.Enabled {
@@ -157,6 +183,22 @@ func (s *Server) nodeStatus(w http.ResponseWriter, r *http.Request) {
 		now := s.now().UTC()
 		report.Status.NodeID, report.Status.Role, report.Status.LastSeen = nodeID, role, now
 		state.NodeStatus[nodeID] = report.Status
+		credential := strings.TrimSpace(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "))
+		if role == model.RoleGateway {
+			gateway := state.Gateways[nodeID]
+			if auth.EqualSecretHash(gateway.CredentialHash, credential) {
+				gateway.PreviousCredentialHash = ""
+				gateway.PreviousCredentialExpiresAt = time.Time{}
+				state.Gateways[nodeID] = gateway
+			}
+		} else {
+			agent := state.Agents[nodeID]
+			if auth.EqualSecretHash(agent.CredentialHash, credential) {
+				agent.PreviousCredentialHash = ""
+				agent.PreviousCredentialExpiresAt = time.Time{}
+				state.Agents[nodeID] = agent
+			}
+		}
 		allowedLinks := map[string]bool{}
 		for _, attachment := range state.Attachments {
 			if (role == model.RoleGateway && attachment.GatewayID == nodeID) || (role == model.RoleAgent && attachment.AgentID == nodeID) {
@@ -220,12 +262,12 @@ func (s *Server) authenticateNode(r *http.Request) (model.Role, string, bool) {
 	}
 	state := s.store.Snapshot()
 	for id, gateway := range state.Gateways {
-		if gateway.Enabled && gateway.CredentialHash != "" && auth.EqualSecretHash(gateway.CredentialHash, credential) {
+		if gateway.Enabled && (gateway.CredentialHash != "" && auth.EqualSecretHash(gateway.CredentialHash, credential) || s.now().Before(gateway.PreviousCredentialExpiresAt) && gateway.PreviousCredentialHash != "" && auth.EqualSecretHash(gateway.PreviousCredentialHash, credential)) {
 			return model.RoleGateway, id, true
 		}
 	}
 	for id, agent := range state.Agents {
-		if agent.Enabled && agent.CredentialHash != "" && auth.EqualSecretHash(agent.CredentialHash, credential) {
+		if agent.Enabled && (agent.CredentialHash != "" && auth.EqualSecretHash(agent.CredentialHash, credential) || s.now().Before(agent.PreviousCredentialExpiresAt) && agent.PreviousCredentialHash != "" && auth.EqualSecretHash(agent.PreviousCredentialHash, credential)) {
 			return model.RoleAgent, id, true
 		}
 	}

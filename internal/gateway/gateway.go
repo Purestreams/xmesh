@@ -158,7 +158,7 @@ func (r *Runtime) report(ctx context.Context) error {
 	xrayError, _ := r.xrayError.Load().(string)
 	ready := lastError == "" && r.xrayReady.Load()
 	grantList, upload, download := r.grantSnapshot()
-	nodeStatus := model.NodeStatus{NodeID: r.local.NodeID, Role: model.RoleGateway, Online: true, Ready: ready, DesiredVersion: config.Revision, AppliedVersion: r.xrayAppliedRevision.Load(), XrayReady: r.xrayReady.Load(), XrayError: xrayError, LastSeen: time.Now().UTC(), TunnelConnections: tunnelCount, TCPConnections: int(r.tcpConnections.Load()), UDPAssociations: int(r.udpAssociations.Load()), UploadBytes: upload, DownloadBytes: download, LastError: lastError, FailureCounters: map[string]uint64{"udp_queue_drops": r.udpQueueDrops.Load()}}
+	nodeStatus := model.NodeStatus{NodeID: r.local.NodeID, Role: model.RoleGateway, BinaryVersion: r.local.BinaryVersion, Online: true, Ready: ready, DesiredVersion: config.Revision, AppliedVersion: r.xrayAppliedRevision.Load(), XrayReady: r.xrayReady.Load(), XrayError: xrayError, LastSeen: time.Now().UTC(), TunnelConnections: tunnelCount, TCPConnections: int(r.tcpConnections.Load()), UDPAssociations: int(r.udpAssociations.Load()), UploadBytes: upload, DownloadBytes: download, LastError: lastError, FailureCounters: map[string]uint64{"udp_queue_drops": r.udpQueueDrops.Load()}}
 	return r.client.Report(ctx, nodeStatus, linkList, grantList)
 }
 

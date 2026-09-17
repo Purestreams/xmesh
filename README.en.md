@@ -1,6 +1,6 @@
 # XMesh
 
-[简体中文](README.md) · [Download v0.2.0](https://github.com/Purestreams/xmesh/releases/tag/v0.2.0)
+[简体中文](README.md) · [Download v0.2.1](https://github.com/Purestreams/xmesh/releases/tag/v0.2.1)
 
 ## What is it for?
 
@@ -18,7 +18,7 @@ Controller -- config/status --> Gateway, Agent
 - **Gateway**: client entry point. Xray accepts VMess/WS; XMesh forwards it into the tunnel.
 - **Agent**: initiates the tunnel and provides the actual TCP/UDP exit.
 
-This guide uses three separate Debian/Ubuntu Linux hosts and release v0.2.0. Linux amd64 and arm64 are supported. The Windows release contains a standalone executable, not a node installer. Choose **either systemd or Docker Compose** per host; do not run both copies of the same role on one host. New links use REALITY; existing `wss://` links remain supported but need a separately managed TLS termination service.
+This guide uses three separate Debian/Ubuntu Linux hosts and release v0.2.1. Linux amd64 and arm64 are supported. The Windows release contains a standalone executable, not a node installer. Choose **either systemd or Docker Compose** per host; do not run both copies of the same role on one host. New links use REALITY; existing `wss://` links remain supported but need a separately managed TLS termination service.
 
 ## 1. DNS, ports, and certificates
 
@@ -63,7 +63,7 @@ sudo certbot renew --dry-run
 Clone the fixed release tag once on each host. This avoids piping a download into a shell or relying on the moving `main` branch:
 
 ```sh
-git clone --depth 1 --branch v0.2.0 https://github.com/Purestreams/xmesh.git
+git clone --depth 1 --branch v0.2.1 https://github.com/Purestreams/xmesh.git
 cd xmesh
 ```
 
@@ -75,11 +75,11 @@ export XMESH_ADMIN_PASSWORD
 
 # systemd:
 sudo --preserve-env=XMESH_ADMIN_PASSWORD sh scripts/install-controller.sh \
-  --version v0.2.0 --public-url https://panel.example.com
+  --version v0.2.1 --public-url https://panel.example.com
 
 # Or Docker Compose (install Docker Engine and the Compose plugin first):
 # sudo --preserve-env=XMESH_ADMIN_PASSWORD sh scripts/install-docker.sh \
-#   --role controller --version v0.2.0 --public-url https://panel.example.com
+#   --role controller --version v0.2.1 --public-url https://panel.example.com
 
 unset XMESH_ADMIN_PASSWORD
 ```
@@ -103,6 +103,12 @@ server {
     ssl_certificate /etc/letsencrypt/live/panel.example.com/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/panel.example.com/privkey.pem;
 
+    location ^~ /subscription/ {
+        access_log off;  # Subscription URLs contain bearer tokens.
+        proxy_pass http://127.0.0.1:8088;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
     location / {
         proxy_pass http://127.0.0.1:8088;
         proxy_set_header Host $host;
@@ -138,17 +144,17 @@ read -rsp 'One-time token: ' ENROLLMENT_TOKEN; echo
 # systemd:
 sudo sh scripts/install.sh --controller https://panel.example.com \
   --role "$ROLE" --enrollment-token "$ENROLLMENT_TOKEN" \
-  --version v0.2.0 \
+  --version v0.2.1 \
   --release-base-url https://github.com/Purestreams/xmesh/releases/download
 
 # Or Docker Compose:
-# sudo sh scripts/install-docker.sh --role "$ROLE" --version v0.2.0 \
+# sudo sh scripts/install-docker.sh --role "$ROLE" --version v0.2.1 \
 #   --controller https://panel.example.com --enrollment-token "$ENROLLMENT_TOKEN"
 
 unset ENROLLMENT_TOKEN
 ```
 
-The installers download the matching architecture from the [v0.2.0 release](https://github.com/Purestreams/xmesh/releases/tag/v0.2.0) and verify `SHA256SUMS`. Docker uses host networking and stores configuration/data under `/opt/xmesh-docker-<role>/config/` and `data/`; no port mapping is needed. The Agent must reach the Controller over HTTPS and the Gateway's REALITY port. The panel also offers install links via the Controller's on-demand release cache when nodes have unreliable GitHub access; the Controller itself must be able to reach GitHub.
+The installers download the matching architecture from the [v0.2.1 release](https://github.com/Purestreams/xmesh/releases/tag/v0.2.1) and verify `SHA256SUMS`. Docker uses host networking and stores configuration/data under `/opt/xmesh-docker-<role>/config/` and `data/`; no port mapping is needed. The Agent must reach the Controller over HTTPS and the Gateway's REALITY port. The panel also offers install links via the Controller's on-demand release cache when nodes have unreliable GitHub access; the Controller itself must be able to reach GitHub.
 
 ## 6. Verify and troubleshoot
 
@@ -161,6 +167,8 @@ For high-RTT links, also check host TCP buffers; see [high-latency deployment](d
 
 ## Development
 
+The [v0.2.1 deployment automation flow](docs/automation.md) covers independent node installation, multi-Gateway assignment, subscriptions, upgrade rollback, and backup. Upgrade an existing Controller to v0.2.1 before expecting these controls in its panel.
+
 mise pins Go 1.27.1:
 
 ```sh
@@ -171,4 +179,4 @@ mise exec -- go build ./cmd/xmesh
 
 Do not commit node credentials, Controller state, private keys, or local configuration.
 
-For a Docker-based end-to-end check, run `pwsh tests/reality/multicontainer.ps1`. It starts separate Controller, Gateway, Agent, client, and target containers and verifies TCP/UDP echo traffic through REALITY.
+For a Docker-based end-to-end check, run `pwsh tests/reality/multicontainer.ps1`. It starts separate Controller, two Gateways, one Agent, two clients, and a target, verifying TCP/UDP echo traffic through both REALITY routes.

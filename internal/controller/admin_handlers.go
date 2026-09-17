@@ -561,6 +561,18 @@ func (s *Server) createEnrollment(w http.ResponseWriter, r *http.Request) {
 	_, _ = fmt.Fprintf(w, "One-time enrollment token (expires in 30 minutes):\n%s\n\nPaste one command on the %s host. The installer prompts for the token; it is not embedded in the command.\n", token, role)
 	s.writeInstallOptions(w, "Controller on-demand cache", strings.TrimSuffix(s.cfg.PublicURL, "/")+"/releases", role)
 	s.writeInstallOptions(w, "GitHub release", strings.TrimSuffix(s.cfg.ReleaseBaseURL, "/"), role)
+	identityExists := role == model.RoleGateway && state.Gateways[nodeID].CredentialHash != "" || role == model.RoleAgent && state.Agents[nodeID].CredentialHash != ""
+	if identityExists {
+		_, _ = fmt.Fprintln(w, "\nTo ROTATE an existing Docker node credential, use one of these commands on that same host. The old credential has a 15-minute grace period and is revoked when the new node reports status:")
+		_, _ = fmt.Fprintln(w, "\nController cache / rotate:")
+		_, _ = fmt.Fprintln(w, s.installCommand(strings.TrimSuffix(s.cfg.PublicURL, "/")+"/releases", "install-docker.sh", role, "--rotate-credential"))
+		_, _ = fmt.Fprintln(w, "\nGitHub / rotate:")
+		_, _ = fmt.Fprintln(w, s.installCommand(strings.TrimSuffix(s.cfg.ReleaseBaseURL, "/"), "install-docker.sh", role, "--rotate-credential"))
+		_, _ = fmt.Fprintln(w, "\nController cache / systemd rotate:")
+		_, _ = fmt.Fprintln(w, s.installCommand(strings.TrimSuffix(s.cfg.PublicURL, "/")+"/releases", "install.sh", role, "--rotate-credential"))
+		_, _ = fmt.Fprintln(w, "\nGitHub / systemd rotate:")
+		_, _ = fmt.Fprintln(w, s.installCommand(strings.TrimSuffix(s.cfg.ReleaseBaseURL, "/"), "install.sh", role, "--rotate-credential"))
+	}
 }
 
 func (s *Server) revokeEnrollment(w http.ResponseWriter, r *http.Request) {
@@ -586,11 +598,15 @@ func (s *Server) writeInstallOptions(w http.ResponseWriter, label, base string, 
 	}
 }
 
-func (s *Server) installCommand(base, script string, role model.Role) string {
+func (s *Server) installCommand(base, script string, role model.Role, extra ...string) string {
 	versionBase := strings.TrimSuffix(base, "/") + "/" + s.cfg.ReleaseVersion
-	return fmt.Sprintf("(set -eu; work=$(mktemp -d); trap 'rm -rf \"$work\"' EXIT; curl -fL --retry 3 --proto '=https' --proto-redir '=https' -o \"$work/SHA256SUMS\" %s; curl -fL --retry 3 --proto '=https' --proto-redir '=https' -o \"$work/%s\" %s; (cd \"$work\" && grep '  %s$' SHA256SUMS | sha256sum -c -); sudo sh \"$work/%s\" --controller %s --role %s --version %s --release-base-url %s)",
+	extraArgs := ""
+	for _, arg := range extra {
+		extraArgs += " " + shellQuote(arg)
+	}
+	return fmt.Sprintf("(set -eu; work=$(mktemp -d); trap 'rm -rf \"$work\"' EXIT; curl -fL --retry 3 --proto '=https' --proto-redir '=https' -o \"$work/SHA256SUMS\" %s; curl -fL --retry 3 --proto '=https' --proto-redir '=https' -o \"$work/%s\" %s; (cd \"$work\" && grep '  %s$' SHA256SUMS | sha256sum -c -); sudo sh \"$work/%s\" --controller %s --role %s --version %s --release-base-url %s%s)",
 		shellQuote(versionBase+"/SHA256SUMS"), script, shellQuote(versionBase+"/"+script), script, script,
-		shellQuote(s.cfg.PublicURL), shellQuote(string(role)), shellQuote(s.cfg.ReleaseVersion), shellQuote(base))
+		shellQuote(s.cfg.PublicURL), shellQuote(string(role)), shellQuote(s.cfg.ReleaseVersion), shellQuote(base), extraArgs)
 }
 
 func bumpGatewayForAttachment(state *model.State, attachmentID string) {

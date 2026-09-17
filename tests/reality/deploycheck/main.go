@@ -102,6 +102,26 @@ func setup(dir string) error {
 	state.Links["link"] = model.Link{ID: "link", AttachmentID: "attachment", Name: "Docker REALITY", URL: "reality://gateway:8443/tunnel", RealityUUID: realityUUID, RealityShortID: hex.EncodeToString(short), TLSVerify: true, Priority: 10, Weight: 1, Connections: 2, MaxStreams: 256, Enabled: true, TunnelTokenHash: auth.SecretHash(token), CreatedAt: now}
 	state.Users["user"] = model.User{ID: "user", Name: "Test user", Enabled: true, CreatedAt: now}
 	state.Grants["grant"] = model.Grant{ID: "grant", UserID: "user", AttachmentID: "attachment", VMessUUID: vmessUUID, SOCKSUsername: grantUser, SOCKSPassword: grantPassword, Enabled: true, CreatedAt: now}
+	key2, err := ecdh.X25519().GenerateKey(rand.Reader)
+	if err != nil {
+		return err
+	}
+	short2 := make([]byte, 8)
+	if _, err := rand.Read(short2); err != nil {
+		return err
+	}
+	realityUUID2, err := identity.UUID()
+	if err != nil {
+		return err
+	}
+	vmessUUID2, err := identity.UUID()
+	if err != nil {
+		return err
+	}
+	state.Gateways["gateway2"] = model.Gateway{ID: "gateway2", Name: "Gateway 2", PublicHost: "gateway2", VMessPort: 8080, VMessPath: "/proxy", Enabled: true, CredentialHash: auth.SecretHash("gateway2-test-credential"), DesiredVersion: 1, RealityTarget: "target:443", RealityName: "target.test", RealityPrivateKey: base64.RawURLEncoding.EncodeToString(key2.Bytes()), RealityPublicKey: base64.RawURLEncoding.EncodeToString(key2.PublicKey().Bytes()), CreatedAt: now}
+	state.Attachments["attachment2"] = model.Attachment{ID: "attachment2", GatewayID: "gateway2", AgentID: "agent", Enabled: true, CreatedAt: now}
+	state.Links["link2"] = model.Link{ID: "link2", AttachmentID: "attachment2", Name: "Docker REALITY 2", URL: "reality://gateway2:8443/tunnel", RealityUUID: realityUUID2, RealityShortID: hex.EncodeToString(short2), TLSVerify: true, Priority: 10, Weight: 1, Connections: 2, MaxStreams: 256, Enabled: true, TunnelTokenHash: auth.SecretHash(auth.Derive(secret, "tunnel", "link2")), CreatedAt: now}
+	state.Grants["grant2"] = model.Grant{ID: "grant2", UserID: "user", AttachmentID: "attachment2", VMessUUID: vmessUUID2, SOCKSUsername: "grant2-test", SOCKSPassword: grantPassword, Enabled: true, CreatedAt: now}
 	if err := writeJSON(filepath.Join(dir, "controller-data", "controller-state.json"), state); err != nil {
 		return err
 	}
@@ -113,12 +133,22 @@ func setup(dir string) error {
 	if err := writeJSON(filepath.Join(dir, "gateway.json"), gateway); err != nil {
 		return err
 	}
+	gateway2 := map[string]any{"role": "gateway", "node_id": "gateway2", "controller_url": "http://controller:8088", "credential": "gateway2-test-credential", "poll_interval": "1s", "status_interval": "1s", "gateway": map[string]any{"socks_listen": "0.0.0.0:18080", "tunnel_listen": "127.0.0.1:18081", "tunnel_path": "/tunnel", "reality_listen": "0.0.0.0:8443", "xray_binary": "/usr/local/lib/xmesh/xray", "xray_config_path": "/var/lib/xmesh/xray.json"}}
+	if err := writeJSON(filepath.Join(dir, "gateway2.json"), gateway2); err != nil {
+		return err
+	}
 	agent := map[string]any{"role": "agent", "node_id": "agent", "controller_url": "http://controller:8088", "credential": agentCredential, "poll_interval": "1s", "status_interval": "1s"}
 	if err := writeJSON(filepath.Join(dir, "agent.json"), agent); err != nil {
 		return err
 	}
-	client := map[string]any{"log": map[string]string{"loglevel": "warning"}, "inbounds": []any{map[string]any{"listen": "0.0.0.0", "port": 1080, "protocol": "socks", "settings": map[string]any{"auth": "noauth", "udp": true, "ip": "0.0.0.0"}}}, "outbounds": []any{map[string]any{"protocol": "vmess", "settings": map[string]any{"vnext": []any{map[string]any{"address": "gateway", "port": 8080, "users": []any{map[string]any{"id": vmessUUID, "alterId": 0, "security": "auto"}}}}}, "streamSettings": map[string]any{"network": "ws", "security": "none", "wsSettings": map[string]any{"path": "/proxy"}}}}}
-	return writeJSON(filepath.Join(dir, "client-xray.json"), client)
+	if err := writeJSON(filepath.Join(dir, "client-xray.json"), clientConfig("gateway", vmessUUID)); err != nil {
+		return err
+	}
+	return writeJSON(filepath.Join(dir, "client2-xray.json"), clientConfig("gateway2", vmessUUID2))
+}
+
+func clientConfig(gateway, uuid string) map[string]any {
+	return map[string]any{"log": map[string]string{"loglevel": "warning"}, "inbounds": []any{map[string]any{"listen": "0.0.0.0", "port": 1080, "protocol": "socks", "settings": map[string]any{"auth": "noauth", "udp": true, "ip": "0.0.0.0"}}}, "outbounds": []any{map[string]any{"protocol": "vmess", "settings": map[string]any{"vnext": []any{map[string]any{"address": gateway, "port": 8080, "users": []any{map[string]any{"id": uuid, "alterId": 0, "security": "auto"}}}}}, "streamSettings": map[string]any{"network": "ws", "security": "none", "wsSettings": map[string]any{"path": "/proxy"}}}}}
 }
 
 func target() error {
@@ -206,19 +236,23 @@ func probe() error {
 	deadline := time.Now().Add(90 * time.Second)
 	var last error
 	for time.Now().Before(deadline) {
-		if err := runProbe(); err == nil {
-			log.Print("controller + VMess/WS + REALITY + Agent TCP/UDP: PASS")
-			return nil
+		if err := runProbe("client"); err == nil {
+			if err := runProbe("client2"); err == nil {
+				log.Print("two Gateways + one Agent + VMess/WS + REALITY TCP/UDP: PASS")
+				return nil
+			} else {
+				last = err
+			}
 		} else {
 			last = err
-			log.Printf("waiting for multi-container route: %v", err)
 		}
+		log.Printf("waiting for multi-container route: %v", last)
 		time.Sleep(time.Second)
 	}
 	return fmt.Errorf("multi-container route did not become ready: %w", last)
 }
 
-func runProbe() error {
+func runProbe(clientName string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	request, _ := http.NewRequestWithContext(ctx, http.MethodGet, "http://controller:8088/healthz", nil)
@@ -244,7 +278,7 @@ func runProbe() error {
 	if targetIP == nil {
 		return errors.New("target has no IPv4 address")
 	}
-	tcpConn, _, err := dialSOCKS(1, targetIP, 19000)
+	tcpConn, _, err := dialSOCKS(clientName, 1, targetIP, 19000)
 	if err != nil {
 		return fmt.Errorf("TCP SOCKS: %w", err)
 	}
@@ -261,13 +295,13 @@ func runProbe() error {
 	if !bytes.Equal(reply, payload) {
 		return fmt.Errorf("TCP echo mismatch: %q", reply)
 	}
-	control, bound, err := dialSOCKS(3, net.IPv4zero, 0)
+	control, bound, err := dialSOCKS(clientName, 3, net.IPv4zero, 0)
 	if err != nil {
 		return fmt.Errorf("UDP SOCKS: %w", err)
 	}
 	defer control.Close()
 	if bound.IP.IsUnspecified() {
-		ips, err := net.LookupIP("client")
+		ips, err := net.LookupIP(clientName)
 		if err != nil {
 			return err
 		}
@@ -303,8 +337,8 @@ func runProbe() error {
 	return nil
 }
 
-func dialSOCKS(command byte, targetIP net.IP, targetPort int) (net.Conn, *net.UDPAddr, error) {
-	conn, err := net.DialTimeout("tcp", "client:1080", 3*time.Second)
+func dialSOCKS(clientName string, command byte, targetIP net.IP, targetPort int) (net.Conn, *net.UDPAddr, error) {
+	conn, err := net.DialTimeout("tcp", clientName+":1080", 3*time.Second)
 	if err != nil {
 		return nil, nil, err
 	}

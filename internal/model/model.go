@@ -18,32 +18,36 @@ type User struct {
 }
 
 type Gateway struct {
-	ID                string    `json:"id"`
-	Name              string    `json:"name"`
-	PublicHost        string    `json:"public_host"`
-	VMessPort         int       `json:"vmess_port"`
-	VMessPath         string    `json:"vmess_path"`
-	VMessHost         string    `json:"vmess_host"`
-	RealityTarget     string    `json:"reality_target,omitempty"`
-	RealityName       string    `json:"reality_name,omitempty"`
-	RealityPrivateKey string    `json:"reality_private_key,omitempty"`
-	RealityPublicKey  string    `json:"reality_public_key,omitempty"`
-	Enabled           bool      `json:"enabled"`
-	CredentialHash    string    `json:"credential_hash,omitempty"`
-	DesiredVersion    uint64    `json:"desired_version"`
-	CreatedAt         time.Time `json:"created_at"`
+	ID                          string    `json:"id"`
+	Name                        string    `json:"name"`
+	PublicHost                  string    `json:"public_host"`
+	VMessPort                   int       `json:"vmess_port"`
+	VMessPath                   string    `json:"vmess_path"`
+	VMessHost                   string    `json:"vmess_host"`
+	RealityTarget               string    `json:"reality_target,omitempty"`
+	RealityName                 string    `json:"reality_name,omitempty"`
+	RealityPrivateKey           string    `json:"reality_private_key,omitempty"`
+	RealityPublicKey            string    `json:"reality_public_key,omitempty"`
+	Enabled                     bool      `json:"enabled"`
+	CredentialHash              string    `json:"credential_hash,omitempty"`
+	PreviousCredentialHash      string    `json:"previous_credential_hash,omitempty"`
+	PreviousCredentialExpiresAt time.Time `json:"previous_credential_expires_at,omitempty"`
+	DesiredVersion              uint64    `json:"desired_version"`
+	CreatedAt                   time.Time `json:"created_at"`
 }
 
 type Agent struct {
-	ID             string    `json:"id"`
-	Name           string    `json:"name"`
-	Enabled        bool      `json:"enabled"`
-	AllowedCIDRs   []string  `json:"allowed_cidrs"`
-	DeniedCIDRs    []string  `json:"denied_cidrs,omitempty"`
-	AllowedPorts   []int     `json:"allowed_ports,omitempty"`
-	CredentialHash string    `json:"credential_hash,omitempty"`
-	DesiredVersion uint64    `json:"desired_version"`
-	CreatedAt      time.Time `json:"created_at"`
+	ID                          string    `json:"id"`
+	Name                        string    `json:"name"`
+	Enabled                     bool      `json:"enabled"`
+	AllowedCIDRs                []string  `json:"allowed_cidrs"`
+	DeniedCIDRs                 []string  `json:"denied_cidrs,omitempty"`
+	AllowedPorts                []int     `json:"allowed_ports,omitempty"`
+	CredentialHash              string    `json:"credential_hash,omitempty"`
+	PreviousCredentialHash      string    `json:"previous_credential_hash,omitempty"`
+	PreviousCredentialExpiresAt time.Time `json:"previous_credential_expires_at,omitempty"`
+	DesiredVersion              uint64    `json:"desired_version"`
+	CreatedAt                   time.Time `json:"created_at"`
 }
 
 type Attachment struct {
@@ -98,6 +102,7 @@ type Enrollment struct {
 type NodeStatus struct {
 	NodeID            string            `json:"node_id"`
 	Role              Role              `json:"role"`
+	BinaryVersion     string            `json:"binary_version,omitempty"`
 	Online            bool              `json:"online"`
 	Ready             bool              `json:"ready"`
 	DesiredVersion    uint64            `json:"desired_version"`

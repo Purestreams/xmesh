@@ -37,7 +37,7 @@ type releaseAssetStatus struct {
 
 func releaseAssets(version string) []string {
 	return []string{
-		"SHA256SUMS", "install.sh", "install-docker.sh", "install-controller.sh",
+		"SHA256SUMS", "install.sh", "install-docker.sh", "install-controller.sh", "backup-controller.sh",
 		"xmesh-" + version + "-linux-amd64.tar.gz",
 		"xmesh-" + version + "-linux-arm64.tar.gz",
 		"xmesh-" + version + "-windows-amd64.exe",

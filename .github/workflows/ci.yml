@@ -19,7 +19,8 @@ jobs:
         run: |
           docker build -f tests/reality/Dockerfile -t xmesh-reality-test:ci tests/reality
           docker run --rm --mount "type=bind,source=$PWD,target=/src" xmesh-reality-test:ci
-      - run: sh -n scripts/install.sh scripts/install-controller.sh scripts/install-docker.sh scripts/package.sh
+      - run: sh -n scripts/install.sh scripts/install-controller.sh scripts/install-docker.sh scripts/backup-controller.sh scripts/package.sh tests/install_docker_rollback.sh
+      - run: sudo sh tests/install_docker_rollback.sh
 
   build:
     needs: test

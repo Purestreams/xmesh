@@ -56,6 +56,16 @@ getent group xmesh >/dev/null 2>&1 || groupadd --system xmesh
 id xmesh >/dev/null 2>&1 || useradd --system --gid xmesh --home-dir /var/lib/xmesh-controller --shell /usr/sbin/nologin xmesh
 install -d -m 0750 -o xmesh -g xmesh /etc/xmesh /var/lib/xmesh-controller
 
+if [ -f /etc/xmesh/controller.json ]; then
+  grep -q '"release_version"[[:space:]]*:' /etc/xmesh/controller.json || {
+    echo 'existing Controller configuration has no release_version' >&2
+    exit 1
+  }
+  cp -p /etc/xmesh/controller.json "$work/controller.previous.json"
+  sed "s/\"release_version\"[[:space:]]*:[[:space:]]*\"[^\"]*\"/\"release_version\": \"$version\"/" /etc/xmesh/controller.json >"$work/controller.updated.json"
+  install -m 0600 -o xmesh -g xmesh "$work/controller.updated.json" /etc/xmesh/controller.json
+fi
+
 if [ ! -f /etc/xmesh/controller.json ]; then
   if [ -z "$public_url" ]; then echo '--public-url is required for a new installation' >&2; exit 2; fi
   case "$public_url" in https://*) ;; *) echo '--public-url must use HTTPS' >&2; exit 2;; esac
@@ -110,11 +120,30 @@ CapabilityBoundingSet=
 WantedBy=multi-user.target
 EOF
 systemctl daemon-reload
-if ! systemctl enable --now xmesh-controller.service || ! systemctl --no-pager --full status xmesh-controller.service; then
+started=true
+if ! systemctl enable xmesh-controller.service || ! systemctl restart xmesh-controller.service || ! systemctl --no-pager --full status xmesh-controller.service; then
+  started=false
+fi
+if [ "$started" = true ]; then
+  configured_listen=$(sed -n 's/.*"listen"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' /etc/xmesh/controller.json | head -n 1)
+  case "$configured_listen" in 0.0.0.0:*) configured_listen="127.0.0.1:${configured_listen##*:}";; esac
+  started=false
+  attempt=0
+  while [ "$attempt" -lt 10 ]; do
+    if [ -n "$configured_listen" ] && curl --fail --silent --show-error --max-time 3 "http://$configured_listen/healthz" >/dev/null 2>&1; then
+      started=true
+      break
+    fi
+    attempt=$((attempt + 1))
+    sleep 1
+  done
+fi
+if [ "$started" != true ]; then
   journalctl -u xmesh-controller.service -n 80 --no-pager || true
   if [ -x "$work/xmesh.previous" ]; then install -m 0755 "$work/xmesh.previous" /usr/local/bin/xmesh; fi
+  if [ -f "$work/controller.previous.json" ]; then cp -p "$work/controller.previous.json" /etc/xmesh/controller.json; fi
   systemctl restart xmesh-controller.service 2>/dev/null || true
-  echo 'installation failed; the previous binary was restored when available' >&2
+  echo 'installation or health check failed; previous binary and configuration were restored when available' >&2
   exit 1
 fi
 echo 'xmesh Controller installed; logs: journalctl -u xmesh-controller.service -f'

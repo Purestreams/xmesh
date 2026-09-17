@@ -33,6 +33,7 @@ try {
     & docker run --rm --entrypoint /usr/local/bin/deploycheck --mount "type=bind,source=$fixtureDir,target=/fixture" $imageName setup /fixture
     Assert-LastExit 'generate isolated test configuration'
     New-Item -ItemType Directory -Path (Join-Path $fixtureDir 'gateway-data') -Force | Out-Null
+    New-Item -ItemType Directory -Path (Join-Path $fixtureDir 'gateway2-data') -Force | Out-Null
 
     & docker network create $networkName | Out-Null
     Assert-LastExit 'create isolated Docker network'
@@ -50,6 +51,10 @@ try {
         '--mount', "type=bind,source=$(Join-Path $fixtureDir 'gateway.json'),target=/etc/xmesh/node.json,readonly",
         '--mount', "type=bind,source=$(Join-Path $fixtureDir 'gateway-data'),target=/var/lib/xmesh"
     ) @('gateway', '-config', '/etc/xmesh/node.json')
+    Start-TestContainer 'gateway2' @(
+        '--mount', "type=bind,source=$(Join-Path $fixtureDir 'gateway2.json'),target=/etc/xmesh/node.json,readonly",
+        '--mount', "type=bind,source=$(Join-Path $fixtureDir 'gateway2-data'),target=/var/lib/xmesh"
+    ) @('gateway', '-config', '/etc/xmesh/node.json')
     Start-TestContainer 'agent' @(
         '--mount', "type=bind,source=$(Join-Path $fixtureDir 'agent.json'),target=/etc/xmesh/node.json,readonly"
     ) @('agent', '-config', '/etc/xmesh/node.json')
@@ -57,11 +62,15 @@ try {
         '--entrypoint', '/usr/local/lib/xmesh/xray',
         '--mount', "type=bind,source=$(Join-Path $fixtureDir 'client-xray.json'),target=/etc/xmesh/client-xray.json,readonly"
     ) @('run', '-config', '/etc/xmesh/client-xray.json')
+    Start-TestContainer 'client2' @(
+        '--entrypoint', '/usr/local/lib/xmesh/xray',
+        '--mount', "type=bind,source=$(Join-Path $fixtureDir 'client2-xray.json'),target=/etc/xmesh/client-xray.json,readonly"
+    ) @('run', '-config', '/etc/xmesh/client-xray.json')
 
     & docker run --rm --network $networkName --entrypoint /usr/local/bin/deploycheck $imageName probe
     Assert-LastExit 'multi-container TCP/UDP probe'
     $passed = $true
-    Write-Host 'Multi-container REALITY deployment: PASS'
+    Write-Host 'Two-Gateway one-Agent REALITY deployment: PASS'
 }
 finally {
     if (-not $passed) {

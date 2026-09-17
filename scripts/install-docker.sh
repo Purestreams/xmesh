@@ -10,6 +10,7 @@ listen='127.0.0.1:8088'
 admin_username='admin'
 release_base_url='https://github.com/Purestreams/xmesh/releases/download'
 install_dir=''
+rotate_credential=false
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -22,6 +23,7 @@ while [ "$#" -gt 0 ]; do
     --admin-username) admin_username=$2; shift 2 ;;
     --release-base-url) release_base_url=$2; shift 2 ;;
     --install-dir) install_dir=$2; shift 2 ;;
+    --rotate-credential) rotate_credential=true; shift ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -29,13 +31,33 @@ done
 if [ "$(id -u)" -ne 0 ]; then echo 'run this installer as root' >&2; exit 1; fi
 case "$role" in controller|gateway|agent) ;; *) echo '--role must be controller, gateway, or agent' >&2; exit 2;; esac
 if [ -z "$version" ]; then echo '--version is required' >&2; exit 2; fi
+if [ "$rotate_credential" = true ] && [ "$role" = controller ]; then echo 'Controller credentials are not node credentials' >&2; exit 2; fi
 case "$version" in *[!a-zA-Z0-9._-]*|'') echo 'version must contain only letters, numbers, dots, underscores, or hyphens' >&2; exit 2;; esac
 case "$release_base_url" in https://*) ;; *) echo '--release-base-url must use HTTPS' >&2; exit 2;; esac
+for tool in curl sha256sum tar mktemp; do
+  command -v "$tool" >/dev/null 2>&1 || { echo "missing required tool: $tool" >&2; exit 1; }
+done
 if ! docker compose version >/dev/null 2>&1; then echo 'Docker with the Compose plugin is required' >&2; exit 1; fi
 case "$(uname -s)/$(uname -m)" in Linux/x86_64|Linux/amd64) arch=amd64;; Linux/aarch64|Linux/arm64) arch=arm64;; *) echo 'Docker deployment supports Linux amd64 and arm64 hosts' >&2; exit 1;; esac
 if [ -z "$install_dir" ]; then install_dir="/opt/xmesh-docker-$role"; fi
 case "$install_dir" in /*) ;; *) echo '--install-dir must be an absolute path' >&2; exit 2;; esac
 case "$install_dir" in /|/etc|/opt|/var|/usr) echo '--install-dir must name a dedicated directory' >&2; exit 2;; esac
+if [ "$role" != controller ]; then
+  case "$controller" in https://*) ;; *) echo '--controller must use HTTPS' >&2; exit 2;; esac
+  curl --fail --silent --show-error --max-time 15 "${controller%/}/healthz" >/dev/null || {
+    echo "Controller HTTPS health check failed: ${controller%/}/healthz" >&2
+    exit 1
+  }
+fi
+if [ ! -f "$install_dir/compose.yaml" ] && command -v ss >/dev/null 2>&1; then
+  if [ "$role" = controller ]; then ports=${listen##*:}; elif [ "$role" = gateway ]; then ports='8080 8443'; else ports=''; fi
+  for port in $ports; do
+    if ss -ltnH | awk '{print $4}' | grep -Eq ":$port\$"; then
+      echo "TCP port $port is already in use; resolve the conflict before installing $role" >&2
+      exit 1
+    fi
+  done
+fi
 
 archive="xmesh-${version}-linux-${arch}.tar.gz"
 base="${release_base_url%/}/${version}"
@@ -81,7 +103,11 @@ if [ "$role" = 'controller' ]; then
 EOF
   fi
 else
-  if [ ! -f "$install_dir/config/$config_name" ]; then
+  if [ "$rotate_credential" = true ] && [ ! -f "$install_dir/config/$config_name" ]; then
+    echo '--rotate-credential requires an existing node installation' >&2
+    exit 2
+  fi
+  if [ ! -f "$install_dir/config/$config_name" ] || [ "$rotate_credential" = true ]; then
     if [ -z "$controller" ]; then echo '--controller is required for a new node' >&2; exit 2; fi
     case "$controller" in https://*) ;; *) echo '--controller must use HTTPS' >&2; exit 2;; esac
     if [ -z "$token" ]; then
@@ -95,8 +121,33 @@ else
       trap 'rm -rf "$work"' EXIT HUP INT TERM
       printf '\n' >/dev/tty
     fi
-    printf '%s' "$token" | "$work/xmesh" enroll --controller "$controller" --role "$role" --token-stdin --output "$install_dir/config/$config_name"
+    if [ "$rotate_credential" = true ]; then
+      printf '%s' "$token" | "$work/xmesh" enroll --controller "$controller" --role "$role" --token-stdin --replace --output "$install_dir/config/$config_name"
+    else
+      printf '%s' "$token" | "$work/xmesh" enroll --controller "$controller" --role "$role" --token-stdin --output "$install_dir/config/$config_name"
+    fi
   fi
+fi
+
+previous="$work/previous"
+had_previous=false
+if [ -f "$install_dir/compose.yaml" ] && [ -x "$install_dir/image/xmesh" ]; then
+  had_previous=true
+  mkdir -p "$previous/image"
+  cp -p "$install_dir/compose.yaml" "$previous/compose.yaml"
+  cp -p "$install_dir/image/xmesh" "$previous/image/xmesh"
+  cp -p "$install_dir/image/xray" "$previous/image/xray"
+  cp -p "$install_dir/image/Dockerfile" "$previous/image/Dockerfile"
+  if [ "$role" = controller ]; then cp -p "$install_dir/config/controller.json" "$previous/controller.json"; fi
+fi
+
+if [ "$role" = controller ] && [ "$had_previous" = true ]; then
+  grep -q '"release_version"[[:space:]]*:' "$install_dir/config/controller.json" || {
+    echo 'existing Controller configuration has no release_version; update it manually before upgrading' >&2
+    exit 1
+  }
+  sed "s/\"release_version\"[[:space:]]*:[[:space:]]*\"[^\"]*\"/\"release_version\": \"$version\"/" "$install_dir/config/controller.json" >"$work/controller-updated.json"
+  install -m 0600 "$work/controller-updated.json" "$install_dir/config/controller.json"
 fi
 
 install -m 0755 "$work/xmesh" "$install_dir/image/xmesh"
@@ -128,5 +179,55 @@ services:
 EOF
 chown -R 10001:10001 "$install_dir/config" "$install_dir/data"
 printf '%s\n' "$role" >"$install_dir/.role"
-(cd "$install_dir" && docker compose up -d --build)
-echo "xmesh $role is running from $install_dir; logs: cd $install_dir && docker compose logs -f"
+if ! (cd "$install_dir" && docker compose up -d --build); then
+  started=false
+else
+  started=false
+  attempt=0
+  while [ "$attempt" -lt 10 ]; do
+    container=$(cd "$install_dir" && docker compose ps -q xmesh)
+    if [ -n "$container" ] && [ "$(docker inspect -f '{{.State.Running}}' "$container" 2>/dev/null)" = true ]; then
+      started=true
+    else
+      started=false
+      break
+    fi
+    attempt=$((attempt + 1))
+    sleep 1
+  done
+fi
+if [ "$started" = true ]; then
+  if [ "$role" = controller ]; then
+    configured_listen=$(sed -n 's/.*"listen"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$install_dir/config/controller.json" | head -n 1)
+    case "$configured_listen" in *:*) configured_port=${configured_listen##*:};; *) configured_port='';; esac
+    if [ -z "$configured_port" ] || ! curl --fail --silent --show-error --max-time 10 "http://127.0.0.1:$configured_port/healthz" >/dev/null; then started=false; fi
+  else
+    credential=$(sed -n 's/.*"credential"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$install_dir/config/node.json" | head -n 1)
+    started=false
+    attempt=0
+    while [ "$attempt" -lt 30 ]; do
+      status=$(printf 'header = "Authorization: Bearer %s"\n' "$credential" | curl --config - --fail --silent --show-error --max-time 5 "${controller%/}/api/v1/self/status" 2>/dev/null) || status=''
+      if printf '%s' "$status" | grep -Fq "\"binary_version\":\"$version\""; then
+        started=true
+        break
+      fi
+      attempt=$((attempt + 1))
+      sleep 2
+    done
+  fi
+fi
+if [ "$started" != true ]; then
+  echo 'new container failed its startup or Controller status check' >&2
+  (cd "$install_dir" && docker compose logs --tail=50) >&2 || true
+  if [ "$had_previous" = true ]; then
+    cp -p "$previous/compose.yaml" "$install_dir/compose.yaml"
+    cp -p "$previous/image/xmesh" "$install_dir/image/xmesh"
+    cp -p "$previous/image/xray" "$install_dir/image/xray"
+    cp -p "$previous/image/Dockerfile" "$install_dir/image/Dockerfile"
+    if [ "$role" = controller ]; then cp -p "$previous/controller.json" "$install_dir/config/controller.json"; fi
+    (cd "$install_dir" && docker compose up -d --build) || echo 'automatic rollback failed; inspect the previous installation' >&2
+    echo 'previous image and Compose definition restored' >&2
+  fi
+  exit 1
+fi
+echo "xmesh $role is running from $install_dir; logs: sudo docker compose -f $install_dir/compose.yaml logs -f"

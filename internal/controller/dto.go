@@ -31,7 +31,9 @@ type AgentLinkConfig struct {
 }
 
 type EnrollmentRequest struct {
-	Token string `json:"token"`
+	Token  string     `json:"token"`
+	Role   model.Role `json:"role,omitempty"`
+	NodeID string     `json:"node_id,omitempty"`
 }
 
 type EnrollmentResponse struct {

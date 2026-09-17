@@ -2,6 +2,7 @@ package controller
 
 import (
 	"crypto/subtle"
+	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -22,6 +23,9 @@ import (
 )
 
 const sessionCookie = "xmesh_admin"
+
+//go:embed panel.js
+var panelJS string
 
 type Server struct {
 	cfg               Config
@@ -63,6 +67,11 @@ func New(cfg Config, state *store.Store, logger *slog.Logger) (*Server, error) {
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.health)
+	mux.HandleFunc("GET /assets/panel.js", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store")
+		_, _ = w.Write([]byte(panelJS))
+	})
 	mux.HandleFunc("GET /login", s.loginPage)
 	mux.HandleFunc("POST /login", s.login)
 	mux.HandleFunc("POST /logout", s.requireAdmin(s.logout))
@@ -75,6 +84,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /admin/gateways/{id}/toggle", s.requireAdmin(s.csrf(s.toggleGateway)))
 	mux.HandleFunc("POST /admin/agents", s.requireAdmin(s.csrf(s.createAgent)))
 	mux.HandleFunc("POST /admin/agents/{id}/toggle", s.requireAdmin(s.csrf(s.toggleAgent)))
+	mux.HandleFunc("POST /admin/agents/{id}/assign-gateways", s.requireAdmin(s.csrf(s.assignGateways)))
+	mux.HandleFunc("POST /admin/assign-gateways", s.requireAdmin(s.csrf(s.assignGateways)))
 	mux.HandleFunc("POST /admin/attachments", s.requireAdmin(s.csrf(s.createAttachment)))
 	mux.HandleFunc("POST /admin/attachments/{id}/toggle", s.requireAdmin(s.csrf(s.toggleAttachment)))
 	mux.HandleFunc("POST /admin/links", s.requireAdmin(s.csrf(s.createLink)))
@@ -82,14 +93,18 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /admin/links/{id}/policy", s.requireAdmin(s.csrf(s.updateLinkPolicy)))
 	mux.HandleFunc("POST /admin/grants", s.requireAdmin(s.csrf(s.createGrant)))
 	mux.HandleFunc("POST /admin/grants/{id}/toggle", s.requireAdmin(s.csrf(s.toggleGrant)))
+	mux.HandleFunc("POST /admin/users/{id}/subscribe", s.requireAdmin(s.csrf(s.openSubscription)))
+	mux.HandleFunc("POST /admin/subscribe", s.requireAdmin(s.csrf(s.openSubscription)))
 	mux.HandleFunc("POST /admin/enrollments", s.requireAdmin(s.csrf(s.createEnrollment)))
 	mux.HandleFunc("POST /admin/enrollments/{id}/revoke", s.requireAdmin(s.csrf(s.revokeEnrollment)))
+	mux.HandleFunc("GET /admin/upgrade/{role}/{id}", s.requireAdmin(s.upgradeOptions))
 	mux.HandleFunc("GET /releases/{version}/{asset}", s.releaseAsset)
 	mux.HandleFunc("HEAD /releases/{version}/{asset}", s.releaseAsset)
 	mux.HandleFunc("GET /subscription/{token}", s.subscription)
 	mux.HandleFunc("POST /api/v1/enroll", s.enroll)
 	mux.HandleFunc("GET /api/v1/config", s.nodeConfig)
 	mux.HandleFunc("POST /api/v1/status", s.nodeStatus)
+	mux.HandleFunc("GET /api/v1/self/status", s.selfStatus)
 	return s.securityHeaders(s.accessLog(mux))
 }
 
@@ -186,9 +201,10 @@ func (s *Server) panel(w http.ResponseWriter, r *http.Request) {
 		UserList:  sortedUsers(state), GatewayList: sortedGateways(state), AgentList: sortedAgents(state),
 		AttachmentList: sortedAttachments(state), LinkList: sortedLinks(state), GrantList: sortedGrants(state),
 		LinkSummary: summarizeLinks(state), LinkReports: sortedLinkReports(state), GrantSummary: summarizeGrants(state),
-		Release:     s.releaseStatus(),
-		Deployments: deploymentStatuses(state),
-		Enrollments: enrollmentStatuses(state, s.now()),
+		Release:            s.releaseStatus(),
+		Deployments:        deploymentStatuses(state),
+		Enrollments:        enrollmentStatuses(state, s.now()),
+		SubscriptionCounts: subscriptionCounts(state),
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := s.templates.ExecuteTemplate(w, "panel", data); err != nil {
@@ -231,7 +247,7 @@ func (s *Server) securityHeaders(next http.Handler) http.Handler {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Referrer-Policy", "no-referrer")
-		w.Header().Set("Content-Security-Policy", "default-src 'self'; style-src 'unsafe-inline'; script-src 'none'; frame-ancestors 'none'")
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; style-src 'unsafe-inline'; script-src 'self'; frame-ancestors 'none'")
 		next.ServeHTTP(w, r)
 	})
 }
@@ -240,7 +256,11 @@ func (s *Server) accessLog(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := s.now()
 		next.ServeHTTP(w, r)
-		s.logger.Info("http request", "method", r.Method, "path", r.URL.Path, "duration", s.now().Sub(start))
+		path := r.URL.Path
+		if strings.HasPrefix(path, "/subscription/") {
+			path = "/subscription/[redacted]"
+		}
+		s.logger.Info("http request", "method", r.Method, "path", path, "duration", s.now().Sub(start))
 	})
 }
 
@@ -290,20 +310,38 @@ func newID(prefix string) (string, error) {
 
 type panelData struct {
 	model.State
-	CSRF           string
-	PublicURL      string
-	UserList       []model.User
-	GatewayList    []model.Gateway
-	AgentList      []model.Agent
-	AttachmentList []model.Attachment
-	LinkList       []model.Link
-	GrantList      []model.Grant
-	LinkSummary    map[string]model.LinkStatus
-	LinkReports    []model.LinkStatus
-	GrantSummary   map[string]model.GrantStatus
-	Release        releaseStatus
-	Deployments    []deploymentStatus
-	Enrollments    []enrollmentStatus
+	CSRF               string
+	PublicURL          string
+	UserList           []model.User
+	GatewayList        []model.Gateway
+	AgentList          []model.Agent
+	AttachmentList     []model.Attachment
+	LinkList           []model.Link
+	GrantList          []model.Grant
+	LinkSummary        map[string]model.LinkStatus
+	LinkReports        []model.LinkStatus
+	GrantSummary       map[string]model.GrantStatus
+	Release            releaseStatus
+	Deployments        []deploymentStatus
+	Enrollments        []enrollmentStatus
+	SubscriptionCounts map[string]string
+}
+
+func subscriptionCounts(state model.State) map[string]string {
+	result := make(map[string]string, len(state.Users))
+	for _, user := range state.Users {
+		available, total := 0, 0
+		for _, grant := range state.Grants {
+			if grant.UserID == user.ID && grant.Enabled {
+				total++
+				if grant.Published {
+					available++
+				}
+			}
+		}
+		result[user.ID] = fmt.Sprintf("%d/%d published", available, total)
+	}
+	return result
 }
 
 type enrollmentStatus struct {
@@ -327,24 +365,65 @@ func enrollmentStatuses(state model.State, now time.Time) []enrollmentStatus {
 }
 
 type deploymentStatus struct {
-	Name, Role, ID, Identity, Online, Applied, Runtime string
+	Name, Role, ID, Version, Identity, Online, Applied, Runtime, Next string
 }
 
 func deploymentStatuses(state model.State) []deploymentStatus {
 	result := make([]deploymentStatus, 0, len(state.Gateways)+len(state.Agents))
 	for _, gateway := range sortedGateways(state) {
 		st := state.NodeStatus[gateway.ID]
-		result = append(result, deploymentStatus{Name: gateway.Name, Role: "Gateway", ID: gateway.ID,
+		result = append(result, deploymentStatus{Name: gateway.Name, Role: "Gateway", ID: gateway.ID, Version: st.BinaryVersion,
 			Identity: yesNo(gateway.CredentialHash != ""), Online: yesNo(st.Online),
-			Applied: configStage(st.AppliedVersion, gateway.DesiredVersion, st.ApplyError), Runtime: yesNo(st.Ready && st.XrayReady)})
+			Applied: configStage(st.AppliedVersion, gateway.DesiredVersion, st.ApplyError), Runtime: yesNo(st.Ready && st.XrayReady), Next: nextDeploymentAction(state, gateway.ID, model.RoleGateway)})
 	}
 	for _, agent := range sortedAgents(state) {
 		st := state.NodeStatus[agent.ID]
-		result = append(result, deploymentStatus{Name: agent.Name, Role: "Agent", ID: agent.ID,
+		result = append(result, deploymentStatus{Name: agent.Name, Role: "Agent", ID: agent.ID, Version: st.BinaryVersion,
 			Identity: yesNo(agent.CredentialHash != ""), Online: yesNo(st.Online),
-			Applied: configStage(st.AppliedVersion, agent.DesiredVersion, st.ApplyError), Runtime: yesNo(st.Ready)})
+			Applied: configStage(st.AppliedVersion, agent.DesiredVersion, st.ApplyError), Runtime: yesNo(st.Ready), Next: nextDeploymentAction(state, agent.ID, model.RoleAgent)})
 	}
 	return result
+}
+
+func nextDeploymentAction(state model.State, id string, role model.Role) string {
+	status := state.NodeStatus[id]
+	if role == model.RoleGateway && state.Gateways[id].CredentialHash == "" || role == model.RoleAgent && state.Agents[id].CredentialHash == "" {
+		return "Generate the install command and enroll this node"
+	}
+	if !status.Online {
+		return "Check container/service logs and Controller HTTPS reachability"
+	}
+	if status.ApplyError != "" {
+		return "Fix configuration error: " + status.ApplyError
+	}
+	if role == model.RoleGateway && !status.XrayReady {
+		return "Check Xray error, listener ports and REALITY target"
+	}
+	if role == model.RoleGateway && status.AppliedVersion < state.Gateways[id].DesiredVersion || role == model.RoleAgent && status.AppliedVersion < state.Agents[id].DesiredVersion {
+		return "Wait for the node to apply the current configuration"
+	}
+	assigned := false
+	ready := false
+	for _, attachment := range state.Attachments {
+		if !attachment.Enabled || role == model.RoleGateway && attachment.GatewayID != id || role == model.RoleAgent && attachment.AgentID != id {
+			continue
+		}
+		assigned = true
+		for _, link := range state.Links {
+			if link.AttachmentID == attachment.ID && link.Enabled {
+				if status, ok := state.LinkStatus[id+"/"+link.ID]; ok && status.Ready && status.Online {
+					ready = true
+				}
+			}
+		}
+	}
+	if !assigned {
+		return "Assign a Gateway/Agent route"
+	}
+	if !ready {
+		return "Check Link URL, port 8443, REALITY target and peer status"
+	}
+	return "Ready; grant users access to the route"
 }
 
 func yesNo(ok bool) string {

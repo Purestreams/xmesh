@@ -8,6 +8,7 @@ version=''
 release_base_url=''
 uninstall='false'
 purge='false'
+rotate_credential='false'
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -18,6 +19,7 @@ while [ "$#" -gt 0 ]; do
     --release-base-url) release_base_url=$2; shift 2 ;;
     --uninstall) uninstall='true'; shift ;;
     --purge) purge='true'; shift ;;
+    --rotate-credential) rotate_credential='true'; shift ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -43,6 +45,21 @@ if [ -z "$controller" ] || [ -z "$version" ] || [ -z "$release_base_url" ]; then
 case "$controller" in https://*) ;; *) echo '--controller must use HTTPS' >&2; exit 2;; esac
 case "$version" in *[!a-zA-Z0-9._-]*|'') echo 'version must contain only letters, numbers, dots, underscores, or hyphens' >&2; exit 2;; esac
 case "$release_base_url" in https://*) ;; *) echo '--release-base-url must use HTTPS' >&2; exit 2;; esac
+for tool in curl sha256sum tar mktemp; do
+  command -v "$tool" >/dev/null 2>&1 || { echo "missing required tool: $tool" >&2; exit 1; }
+done
+curl --fail --silent --show-error --max-time 15 "${controller%/}/healthz" >/dev/null || {
+  echo "Controller HTTPS health check failed: ${controller%/}/healthz" >&2
+  exit 1
+}
+if [ ! -f /etc/xmesh/node.json ] && command -v ss >/dev/null 2>&1 && [ "$role" = gateway ]; then
+  for port in 8080 8443; do
+    if ss -ltnH | awk '{print $4}' | grep -Eq ":$port\$"; then
+      echo "TCP port $port is already in use" >&2
+      exit 1
+    fi
+  done
+fi
 
 case "$(uname -m)" in x86_64|amd64) arch=amd64;; aarch64|arm64) arch=arm64;; *) echo "unsupported architecture: $(uname -m)" >&2; exit 1;; esac
 archive="xmesh-${version}-linux-${arch}.tar.gz"
@@ -59,7 +76,11 @@ if [ "$role" = gateway ] && [ ! -x "$work/xray" ]; then echo 'gateway release do
 getent group xmesh >/dev/null 2>&1 || groupadd --system xmesh
 id xmesh >/dev/null 2>&1 || useradd --system --gid xmesh --home-dir /var/lib/xmesh --shell /usr/sbin/nologin xmesh
 install -d -m 0750 -o xmesh -g xmesh /etc/xmesh /var/lib/xmesh /usr/local/lib/xmesh
-if [ ! -f /etc/xmesh/node.json ]; then
+if [ "$rotate_credential" = true ] && [ ! -f /etc/xmesh/node.json ]; then
+  echo '--rotate-credential requires an existing node identity' >&2
+  exit 2
+fi
+if [ ! -f /etc/xmesh/node.json ] || [ "$rotate_credential" = true ]; then
   if [ -z "$token" ]; then
     if [ ! -r /dev/tty ]; then echo 'a terminal or --enrollment-token is required for a new node' >&2; exit 2; fi
     printf 'One-time enrollment token: ' >/dev/tty
@@ -71,7 +92,11 @@ if [ ! -f /etc/xmesh/node.json ]; then
     trap 'rm -rf "$work"' EXIT HUP INT TERM
     printf '\n' >/dev/tty
   fi
-  printf '%s' "$token" | "$work/xmesh" enroll --controller "$controller" --role "$role" --token-stdin --output /etc/xmesh/node.json
+  if [ "$rotate_credential" = true ]; then
+    printf '%s' "$token" | "$work/xmesh" enroll --controller "$controller" --role "$role" --token-stdin --replace --output /etc/xmesh/node.json
+  else
+    printf '%s' "$token" | "$work/xmesh" enroll --controller "$controller" --role "$role" --token-stdin --output /etc/xmesh/node.json
+  fi
   chown xmesh:xmesh /etc/xmesh/node.json
   chmod 0600 /etc/xmesh/node.json
 else
@@ -110,12 +135,30 @@ CapabilityBoundingSet=
 WantedBy=multi-user.target
 EOF
 systemctl daemon-reload
-if ! systemctl enable --now xmesh.service || ! systemctl --no-pager --full status xmesh.service; then
+started=true
+if ! systemctl enable xmesh.service || ! systemctl restart xmesh.service || ! systemctl --no-pager --full status xmesh.service; then
+  started=false
+fi
+if [ "$started" = true ]; then
+  credential=$(sed -n 's/.*"credential"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' /etc/xmesh/node.json | head -n 1)
+  started=false
+  attempt=0
+  while [ "$attempt" -lt 30 ]; do
+    status=$(printf 'header = "Authorization: Bearer %s"\n' "$credential" | curl --config - --fail --silent --show-error --max-time 5 "${controller%/}/api/v1/self/status" 2>/dev/null) || status=''
+    if printf '%s' "$status" | grep -Fq "\"binary_version\":\"$version\""; then
+      started=true
+      break
+    fi
+    attempt=$((attempt + 1))
+    sleep 2
+  done
+fi
+if [ "$started" != true ]; then
   journalctl -u xmesh.service -n 80 --no-pager || true
   if [ -x "$work/xmesh.previous" ]; then install -m 0755 "$work/xmesh.previous" /usr/local/bin/xmesh; fi
   if [ -x "$work/xray.previous" ]; then install -m 0755 "$work/xray.previous" /usr/local/lib/xmesh/xray; fi
   systemctl restart xmesh.service 2>/dev/null || true
-  echo 'installation failed; previous binaries were restored when available' >&2
+  echo 'installation or Controller status check failed; previous binaries were restored when available' >&2
   exit 1
 fi
 echo 'xmesh installed; logs: journalctl -u xmesh.service -f'

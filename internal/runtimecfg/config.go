@@ -10,6 +10,7 @@ import (
 )
 
 type Config struct {
+	BinaryVersion     string     `json:"-"`
 	Role              model.Role `json:"role"`
 	NodeID            string     `json:"node_id"`
 	ControllerURL     string     `json:"controller_url"`
