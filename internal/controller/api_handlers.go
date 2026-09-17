@@ -3,6 +3,7 @@ package controller
 import (
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -131,6 +132,8 @@ func (s *Server) nodeConfig(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
+		sort.Slice(response.Links, func(i, j int) bool { return response.Links[i].ID < response.Links[j].ID })
+		sort.Slice(response.Grants, func(i, j int) bool { return response.Grants[i].ID < response.Grants[j].ID })
 		writeJSON(w, 200, response)
 	case model.RoleAgent:
 		agent := state.Agents[nodeID]
@@ -157,6 +160,8 @@ func (s *Server) nodeConfig(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
+		sort.Slice(response.Links, func(i, j int) bool { return response.Links[i].ID < response.Links[j].ID })
+		sort.Strings(response.GrantIDs)
 		writeJSON(w, 200, response)
 	}
 }

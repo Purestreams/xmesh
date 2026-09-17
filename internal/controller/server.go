@@ -527,7 +527,9 @@ func sortedAttachments(s model.State) []model.Attachment {
 	for _, v := range s.Attachments {
 		result = append(result, v)
 	}
-	sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
+	sort.Slice(result, func(i, j int) bool {
+		return routeNameLess(routeDisplayName(s, result[i]), result[i].ID, routeDisplayName(s, result[j]), result[j].ID)
+	})
 	return result
 }
 func sortedLinks(s model.State) []model.Link {

@@ -5,9 +5,27 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 
 	"xmesh/internal/model"
 )
+
+func routeDisplayName(state model.State, route model.Attachment) string {
+	return state.Gateways[route.GatewayID].Name + " / " + state.Agents[route.AgentID].Name
+}
+
+// Compare the visible route names, not randomly generated identifiers. IDs only
+// break ties, so repeated subscriptions and panel refreshes remain deterministic.
+func routeNameLess(leftName, leftID, rightName, rightID string) bool {
+	left, right := strings.ToLower(leftName), strings.ToLower(rightName)
+	if left != right {
+		return left < right
+	}
+	if leftName != rightName {
+		return leftName < rightName
+	}
+	return leftID < rightID
+}
 
 type vmessShare struct {
 	Version string `json:"v"`
@@ -30,8 +48,10 @@ func BuildSubscription(state model.State, userID string) (string, error) {
 		return "", fmt.Errorf("user unavailable")
 	}
 	type item struct {
-		nodeID string
-		link   string
+		name    string
+		nodeID  string
+		grantID string
+		link    string
 	}
 	items := make([]item, 0)
 	for _, grant := range state.Grants {
@@ -48,7 +68,7 @@ func BuildSubscription(state model.State, userID string) (string, error) {
 			continue
 		}
 		share := vmessShare{
-			Version: "2", Name: gateway.Name + " / " + agent.Name,
+			Version: "2", Name: routeDisplayName(state, attachment),
 			Address: gateway.PublicHost, Port: fmt.Sprintf("%d", gateway.VMessPort),
 			ID: grant.VMessUUID, AlterID: "0", Net: "ws", Type: "none",
 			Host: gateway.VMessHost, Path: gateway.VMessPath, TLS: "", Cipher: "auto",
@@ -58,11 +78,19 @@ func BuildSubscription(state model.State, userID string) (string, error) {
 			return "", err
 		}
 		items = append(items, item{
-			nodeID: attachment.ID,
-			link:   "vmess://" + base64.RawStdEncoding.EncodeToString(payload),
+			name:    share.Name,
+			nodeID:  attachment.ID,
+			grantID: grant.ID,
+			link:    "vmess://" + base64.RawStdEncoding.EncodeToString(payload),
 		})
 	}
-	sort.Slice(items, func(i, j int) bool { return items[i].nodeID < items[j].nodeID })
+	sort.Slice(items, func(i, j int) bool {
+		left, right := items[i], items[j]
+		if left.name == right.name && left.nodeID == right.nodeID {
+			return left.grantID < right.grantID
+		}
+		return routeNameLess(left.name, left.nodeID, right.name, right.nodeID)
+	})
 	plain := ""
 	for i, item := range items {
 		if i != 0 {

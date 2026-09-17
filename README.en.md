@@ -1,46 +1,103 @@
 # XMesh
 
-[简体中文](README.md) · [Download v0.3.1](https://github.com/Purestreams/xmesh/releases/tag/v0.3.1)
+[简体中文](README.md) · [Download releases](https://github.com/Purestreams/xmesh/releases) · [Panel guide](docs/panel.md) · [Deployment and maintenance](docs/automation.md)
 
-## What is it for?
+**Use a machine without a public IP as your proxy exit.**
 
-Some machines are suitable as the actual proxy exit (proxy endpoint) but have no public IP, or sit behind NAT, so clients cannot connect to them directly. XMesh lets these machines serve as proxy exits: deploy a publicly reachable Gateway elsewhere, and the Agent on the private machine initiates a REALITY tunnel to it. The Agent needs neither a public IP nor an inbound port mapping.
+XMesh separates the client entry point from the actual exit. A reachable Gateway accepts clients; an Agent initiates a tunnel from its private network to the Gateway and accesses destinations through its own network. The Controller manages nodes, routes, user access and subscriptions without carrying user traffic.
 
-Clients still connect to the Gateway. It forwards authenticated traffic through the tunnel to the Agent, which accesses the destination network. The Controller manages configuration, authorization, and status; it does not carry user traffic. **The Gateway still needs an address reachable by clients; XMesh does not eliminate the need for every public entry point.**
+Use it when an exit machine sits behind NAT, cannot accept inbound connections, or needs to serve several Gateways. The Gateway must remain reachable by both clients and the Agent. The Agent needs neither a public IP nor inbound port forwarding.
 
 ```text
-Client -- VMess/WS --> Gateway (public entry) -- tunnel traffic --> Agent (no public IP needed) --> destination
-                            ^--------------- Agent initiates REALITY ---------------
-Controller -- config/status --> Gateway, Agent
+Traffic:       Client ── VMess / WebSocket ──► Gateway ── tunnel ──► Agent ──► destination
+Tunnel setup:                                Gateway ◄── REALITY ── Agent initiates
+Management:                  Controller ◄── HTTPS config polling / status ── Gateway, Agent
 ```
 
-- **Controller**: admin panel, users, nodes, links, and subscriptions.
-- **Gateway**: client entry point. Xray accepts VMess/WS; XMesh forwards it into the tunnel.
-- **Agent**: initiates the tunnel and provides the actual TCP/UDP exit.
+## Capabilities
 
-This guide uses three separate Debian/Ubuntu Linux hosts and release v0.3.1. Linux amd64 and arm64 are supported. The Windows release contains a standalone executable, not a node installer. Choose **either systemd or Docker Compose** per host; do not run both copies of the same role on one host. New links use REALITY; existing `wss://` links remain supported but need a separately managed TLS termination service.
+| Capability | Behavior |
+| --- | --- |
+| Central management | Embedded web panel with overview, network, users and subscriptions, deployment and maintenance; no separate frontend service |
+| Multiple entries and exits | Many-to-many Gateway–Agent assignments, including assigning several Gateways to one Agent in a single operation |
+| TCP / UDP forwarding | VMess/WS client entry; destination DNS resolution and outbound connections on the Agent, with allowed and denied CIDRs |
+| REALITY tunnels | Generated Gateway keys and Link identities; embedded Xray-core on the Agent and a bundled, supervised Xray process on the Gateway |
+| Multiple Links | Priority, weight, connection count and stream capacity; new sessions select healthy paths while existing sessions stay on their original tunnel |
+| Access and subscriptions | Per-user, per-route grants; VMess/WS subscriptions publish after Gateway configuration acknowledgement; grants can be disabled and subscription links reset |
+| Deployment and maintenance | One-time enrollment tokens, systemd / Docker Compose commands, release caching, node upgrades and credential rotation |
+| Status and history | Topology, Gateway × Agent matrix, deployment progress, 15-second partial refresh, 24-hour Link history and the latest 100 management request results |
 
-## 1. DNS, ports, and certificates
+New routes use `reality://`. Existing `wss://` Links remain supported with external TLS termination. The generated client entry is **VMess/WS with TLS off**; REALITY encryption between Gateway and Agent does not enable TLS on the client entry. The current subscription generator has no client TLS setting, so adding an HTTPS reverse proxy alone will not make the generated subscription match it.
 
-Create these DNS records first and wait for them to resolve:
+## Four objects to know
 
-| Example name | Points to | Purpose |
-| --- | --- | --- |
-| `panel.example.com` | Controller public IP | HTTPS admin panel and node API |
-| `edge.example.com` | Gateway public IP | Agent tunnel at `reality://edge.example.com:8443/tunnel`; clients at `edge.example.com:8080` |
+| Object | Meaning |
+| --- | --- |
+| Gateway / Agent | The client entry and actual exit, installed and reporting status independently |
+| Node / route association (Attachment) | One `Gateway × Agent` pair: the unit used for access grants and subscription entries |
+| Link | A transport path for that pair; adding Links does not add subscription entries |
+| Grant | One `User × Node` authorization with its own VMess UUID |
 
-Allow inbound TCP 80/443 on the Controller and TCP 8080/8443 on the Gateway. The Agent needs outbound access to Controller HTTPS, the Gateway REALITY port, and the destination network it serves. Controller port 80 is for certificate issuance and renewal. Gateway's bundled Xray listens for REALITY directly on 8443; no Gateway Nginx or certificate for `edge.example.com` is required. **Do not expose** Controller port 8088 or Gateway ports 18080 (SOCKS) and 18081 (tunnel backend); they bind to loopback by default. The client-facing VMess/WS endpoint `:8080/proxy` is currently cleartext and separate from the encrypted Agent REALITY tunnel. Client-side TLS would require a separately designed entry point and subscription configuration.
+One Agent can initiate connections to several Gateways, and one Gateway can use several Agents through separate routes. Link scheduling applies to new TCP connections or UDP associations. It neither migrates existing sessions nor splits one session across multiple Links.
 
-Install the base tools on all three hosts. Only the Controller needs Nginx and Certbot:
+## Deployment
+
+This walkthrough uses three separate Linux hosts for Controller, Gateway and Agent. The systemd installers support Debian/Ubuntu on amd64 and arm64. The Docker installer supports Linux amd64 and arm64, requires Docker Engine with the Compose plugin, and uses host networking. Windows amd64 releases contain only a standalone executable, without a Windows service installer or bundled Xray.
+
+Choose one installation method per role on a host. The systemd installers use fixed service names and paths; deploy the Controller separately from nodes.
+
+### 1. Prepare networking and installation files
+
+These ports match the default configuration:
+
+| Host | Example address | Inbound ports | Purpose |
+| --- | --- | --- | --- |
+| Controller | `panel.example.com` | TCP 80 / 443 | 80 handles ACME validation and redirects below; 443 serves the panel, node API, subscriptions and installation files |
+| Gateway | `edge.example.com` or a public IP | TCP 8080 / 8443 | 8080 accepts VMess/WS clients; 8443 accepts Agent REALITY tunnels |
+| Agent | No public address required | None required | Needs outbound access to Controller, Gateway and proxy destinations |
+
+Keep Controller `127.0.0.1:8088`, Gateway SOCKS `127.0.0.1:18080` and tunnel backend `127.0.0.1:18081` local. Gateway REALITY needs neither a certificate for `edge.example.com` nor Nginx. A different public port requires matching firewall rules, a listener or port mapping, and the Link URL; changing the URL alone does not change the host listener.
+
+Replace the example names with your own addresses and configure DNS. Install the base tools on all three Debian/Ubuntu hosts:
 
 ```sh
 sudo apt update
-sudo apt install -y git wget curl tar coreutils
-# Run only on the Controller host:
-sudo apt install -y nginx certbot
+sudo apt install -y ca-certificates curl tar coreutils
 ```
 
-First create a minimal HTTP site for the Controller certificate validation. Run this only on the Controller host:
+On the Controller host only, install these additional tools and obtain the source. This README describes the current code; the installation example pins the repository's existing `v0.3.1` tag. To use another published version, set `VERSION` to its exact tag and use matching source and release assets. See [Releases](https://github.com/Purestreams/xmesh/releases) for available versions.
+
+```sh
+sudo apt install -y git nginx certbot
+VERSION=v0.3.1
+git clone --depth 1 --branch "$VERSION" https://github.com/Purestreams/xmesh.git
+cd xmesh
+```
+
+### 2. Install the Controller
+
+Run this in Bash on the Controller host. Install Docker Engine and the Compose plugin first if choosing Docker. Run only one of the two installation commands.
+
+```bash
+read -rsp 'Admin password: ' XMESH_ADMIN_PASSWORD; echo
+export XMESH_ADMIN_PASSWORD
+
+# systemd
+sudo --preserve-env=XMESH_ADMIN_PASSWORD sh scripts/install-controller.sh \
+  --version "$VERSION" --public-url https://panel.example.com
+
+# Or Docker Compose
+# sudo --preserve-env=XMESH_ADMIN_PASSWORD sh scripts/install-docker.sh \
+#   --role controller --version "$VERSION" --public-url https://panel.example.com
+
+unset XMESH_ADMIN_PASSWORD
+```
+
+The default administrator is `admin`; use `--admin-username` on the initial installation to choose another name. The installer downloads the architecture-specific archive, verifies `SHA256SUMS`, generates the password hash and session secret, and checks service health after startup.
+
+### 3. Enable HTTPS for the Controller
+
+The Controller itself serves HTTP only. Create an ACME validation site first, obtain the certificate, then enable HTTPS:
 
 ```sh
 DOMAIN=panel.example.com
@@ -50,45 +107,7 @@ sudo nginx -t && sudo systemctl reload nginx
 sudo certbot certonly --webroot -w /var/www/letsencrypt -d "$DOMAIN"
 ```
 
-After the certificate exists, replace `/etc/nginx/conf.d/xmesh.conf` with the complete configuration in step 3. Do not enable the 443 configuration before the certificate files exist. Add a deploy hook to reload Nginx after automatic renewal and test renewal:
-
-```sh
-printf '#!/bin/sh\nsystemctl reload nginx\n' | sudo tee /etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh
-sudo chmod 755 /etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh
-sudo certbot renew --dry-run
-```
-
-## 2. Install the Controller
-
-Clone the fixed release tag once on each host. This avoids piping a download into a shell or relying on the moving `main` branch:
-
-```sh
-git clone --depth 1 --branch v0.3.1 https://github.com/Purestreams/xmesh.git
-cd xmesh
-```
-
-On the Controller host, choose one method. Run these commands in Bash; the password is passed through an environment variable, not on the command line:
-
-```bash
-read -rsp 'Admin password: ' XMESH_ADMIN_PASSWORD; echo
-export XMESH_ADMIN_PASSWORD
-
-# systemd:
-sudo --preserve-env=XMESH_ADMIN_PASSWORD sh scripts/install-controller.sh \
-  --version v0.3.1 --public-url https://panel.example.com
-
-# Or Docker Compose (install Docker Engine and the Compose plugin first):
-# sudo --preserve-env=XMESH_ADMIN_PASSWORD sh scripts/install-docker.sh \
-#   --role controller --version v0.3.1 --public-url https://panel.example.com
-
-unset XMESH_ADMIN_PASSWORD
-```
-
-With systemd, the configuration and state live in `/etc/xmesh/controller.json` and `/var/lib/xmesh-controller/`. Docker uses `/opt/xmesh-docker-controller/config/` and `data/`. These paths contain secrets: restrict access and back them up. Installers do not overwrite an existing configuration.
-
-## 3. Configure Nginx for the Controller
-
-On the Controller host, replace `/etc/nginx/conf.d/xmesh.conf` with the following. The certificate name must match `--public-url`:
+Replace `/etc/nginx/conf.d/xmesh.conf` with the configuration below. The hostname and certificate paths must match `--public-url`:
 
 ```nginx
 server {
@@ -103,84 +122,150 @@ server {
     ssl_certificate /etc/letsencrypt/live/panel.example.com/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/panel.example.com/privkey.pem;
 
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Real-IP $remote_addr;
+
     location ^~ /subscription/ {
-        access_log off;  # Subscription URLs contain bearer tokens.
+        access_log off;
         proxy_pass http://127.0.0.1:8088;
-        proxy_set_header Host $host;
-        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+    location ^~ /releases/ {
+        proxy_read_timeout 600s;
+        proxy_buffering off;
+        proxy_pass http://127.0.0.1:8088;
     }
     location / {
         proxy_pass http://127.0.0.1:8088;
-        proxy_set_header Host $host;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_set_header X-Real-IP $remote_addr;
     }
 }
 ```
 
-Run `sudo nginx -t && sudo systemctl reload nginx`, then open `https://panel.example.com/login`. `curl -fsS https://panel.example.com/healthz` should return `{"status":"ok"}`. Never expose the Controller's HTTP port 8088 directly.
+Subscription URLs contain bearer tokens, so access logging is disabled for `/subscription/`; any outer proxy should also avoid logging complete subscription URLs. The first `/releases/` request may wait for the Controller to download and verify an asset from GitHub, so this location has a longer proxy read timeout and disables response buffering.
 
-## 4. Prepare the Gateway REALITY entry point
-
-Gateway's bundled Xray accepts Agent REALITY connections on `0.0.0.0:8443` and passes authenticated traffic to the loopback-only tunnel handler. Allow TCP 8443 through the firewall. There is no need to install Nginx on the Gateway, expose port 18081, or obtain a certificate for `edge.example.com`. The default systemd service runs as an unprivileged user; using port 443 instead requires a port mapping or explicit privileged-listener setup.
-
-The Controller also needs a **REALITY target**, such as `www.example.com:443`, that is reachable from the Gateway and supports TLS 1.3. Xray uses that site as the handshake target; its certificate must match its actual hostname. `edge.example.com` in the Link URL is the Gateway address, not the camouflage SNI. Do not select a target you are not authorized to use or cannot reliably reach.
-
-## 5. Create a link and install the Gateway and Agent
-
-Sign in to the Controller and proceed in order:
-
-1. Create a Gateway (Public host=`edge.example.com`, VMess port=`8080`, WS path=`/proxy`) and an Agent.
-2. Create a **Node** association between them, then a **Link** with URL=`reality://edge.example.com:8443/tunnel` and REALITY target=`www.example.com:443`. The Controller generates an X25519 Gateway key pair plus a per-Link VLESS UUID and short ID, and sends the required public parameters to the Agent; no certificate fingerprint needs to be copied manually. The panel's **Create route** action can create the Gateway, Agent, Node, and Link together.
-3. Create a User and a Grant for that Node. A usable subscription appears after the nodes run and apply their configuration.
-4. Click **Generate one-time install command** for each Gateway and Agent to get separate tokens, valid for 30 minutes. Do not put tokens in the repository or type them directly into shell history.
-
-Clone the same tag on the Gateway and Agent hosts (step 2), then read that host's token in Bash and choose an installation method:
-
-```bash
-ROLE=gateway  # Use agent on the Agent host.
-read -rsp 'One-time token: ' ENROLLMENT_TOKEN; echo
-
-# systemd:
-sudo sh scripts/install.sh --controller https://panel.example.com \
-  --role "$ROLE" --enrollment-token "$ENROLLMENT_TOKEN" \
-  --version v0.3.1 \
-  --release-base-url https://github.com/Purestreams/xmesh/releases/download
-
-# Or Docker Compose:
-# sudo sh scripts/install-docker.sh --role "$ROLE" --version v0.3.1 \
-#   --controller https://panel.example.com --enrollment-token "$ENROLLMENT_TOKEN"
-
-unset ENROLLMENT_TOKEN
+```sh
+sudo nginx -t && sudo systemctl reload nginx
+printf '#!/bin/sh\nsystemctl reload nginx\n' | sudo tee /etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh
+sudo chmod 755 /etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh
+sudo certbot renew --dry-run
+curl -fsS https://panel.example.com/healthz
 ```
 
-The installers download the matching architecture from the [v0.3.1 release](https://github.com/Purestreams/xmesh/releases/tag/v0.3.1) and verify `SHA256SUMS`. Docker uses host networking and stores configuration/data under `/opt/xmesh-docker-<role>/config/` and `data/`; no port mapping is needed. The Agent must reach the Controller over HTTPS and the Gateway's REALITY port. The panel also offers install links via the Controller's on-demand release cache when nodes have unreliable GitHub access; the Controller itself must be able to reach GitHub. For a Gateway with a non-default VMess port, upgrade the Controller first and use a freshly generated install or upgrade command containing `--vmess-port 8086` (with your actual port); this makes the installer check the configured port instead of 8080.
+The health check should return `{"status":"ok"}`. Sign in at `https://panel.example.com/login`.
 
-## 6. Verify and troubleshoot
+### 4. Create a route in the deployment wizard
 
-- The Controller should show the Gateway, Agent, and Link as `online/ready`, with configuration version `applied`; Gateway Xray should be ready.
-- systemd: `sudo systemctl status xmesh` for nodes or `sudo systemctl status xmesh-controller` for the Controller. Follow logs with `sudo journalctl -u xmesh -f` or `sudo journalctl -u xmesh-controller -f`.
-- Docker: enter the corresponding `/opt/xmesh-docker-<role>` directory and run `sudo docker compose ps` or `sudo docker compose logs -f`.
-- Use the subscription from the panel. The client endpoint is `edge.example.com:8080` with path `/proxy`, **not** the Agent's REALITY port 8443. If the Link stays offline, check the Gateway 8443 firewall, TLS 1.3 reachability of the REALITY target, applied Gateway/Agent configuration, and Xray status.
+For the first deployment, **Create route** creates a Gateway, Agent, Node association and Link in one operation:
 
-For high-RTT links, also check host TCP buffers; see [high-latency deployment](docs/deployment.md#high-latency-links). More internals are in the [architecture guide](docs/architecture.md).
+| Field | Example or meaning |
+| --- | --- |
+| Gateway public host | `edge.example.com` or a public IP, without a scheme or path |
+| Gateway location | Select China mainland or overseas to choose the default for a new REALITY target |
+| VMess port / WS path | Defaults to `8080` / `/proxy`, used by clients |
+| Agent allowed / denied CIDRs | Controls reachable destination addresses; defaults to allowing `0.0.0.0/0, ::/0`, which you can narrow or supplement with denied ranges |
+| Agent → Gateway Link URL | `reality://edge.example.com:8443/tunnel`, used by the Agent |
+| REALITY target | A TLS destination reachable from the Gateway; must be a DNS hostname followed by `:443` |
 
-## Development
+For a new target, China mainland defaults to `api.bilibili.com:443` and overseas to `www.swift.com:443`. These are configuration defaults, not proof of availability in your network: check TLS 1.3 support and the target's certificate name during deployment. If no location or existing target is set, enter a target manually. The Gateway address in the Link URL and the target's TLS name are separate fields.
 
-The [v0.3.1 deployment automation flow](docs/automation.md) covers independent node installation, multi-Gateway assignment, subscriptions, upgrade rollback, and backup. After a one-time host installation of the Docker Controller at v0.2.3, the panel can check GitHub's latest stable release and upgrade the Controller through a systemd host helper. The Controller container never receives the Docker socket. Gateway and Agent upgrades still run on their respective hosts. The v0.3.1 panel can edit and delete nodes, Links, assignments, and grants; deleting a node does not uninstall its host service, and subscriptions wait for Gateway configuration to apply after client-entry changes.
+Each Gateway shares one REALITY key pair and target; each Link has a separate VLESS UUID and short ID generated by the Controller. **Changing the Gateway location does not replace an existing target.** Explicitly changing the shared target in the Link editor affects all REALITY Links on that Gateway.
 
-mise pins Go 1.27.1:
+You can also create nodes separately in the network section, then use **Assign multiple Gateways to an Agent**. Missing associations and Links are created together, disabled routes are re-enabled, and active routes are left unchanged. For mixed-region assignments, a blank target resolves from each Gateway's location while existing targets take precedence.
+
+### 5. Install the Gateway and Agent
+
+Click **Install Gateway** and **Install Agent** separately, choose systemd or Docker Compose, run each generated command on its corresponding host, and enter that node's one-time token at the prompt. Node hosts do not need a repository checkout.
+
+- Tokens expire after 30 minutes and can be used once. Issuing a new token for the same node revokes its previous unused token.
+- Choose direct GitHub downloads or the Controller cache. Caching still requires GitHub access from the Controller, and files enter the cache only after successful verification.
+- Generated commands pin a version and verify the installation script; the installer then verifies the binary archive. A custom VMess port is passed through `--vmess-port` for the installer's port check.
+- The panel generates commands; it does not install over SSH. Docker uses host networking and needs no additional Compose port mapping.
+
+Follow enrollment, heartbeat, applied configuration and runtime status in the deployment progress view. An `online` node alone does not establish a usable route.
+
+### 6. Grant access and import the subscription
+
+Create a User under users and subscriptions, then select that user and the permitted routes in **Open VMess/WS subscription**. This creates or re-enables Grants. Clearing the selection only clears the form; disable or delete Grants separately to revoke access.
+
+A Grant publishes after the Gateway reports the corresponding configuration applied and Xray ready. Copy the subscription URL into a client supporting VMess/WS subscriptions. The response is a Base64-encoded list of `vmess://` entries. Clients connect to `edge.example.com:8080/proxy`; the Agent tunnel uses `8443`.
+
+**Subscription publication is separate from route health.** Before accepting the deployment, check that both nodes are online with their configuration applied, Gateway Xray is ready, and the same enabled Link reports ready at both Gateway and Agent. Then test actual destination access.
+
+## Operations
+
+### Configuration, state and logs
+
+| Installation | Configuration | State / data | Logs |
+| --- | --- | --- | --- |
+| systemd Controller | `/etc/xmesh/controller.json` | `/var/lib/xmesh-controller/` | `sudo journalctl -u xmesh-controller -f` |
+| systemd Gateway / Agent | `/etc/xmesh/node.json` | `/var/lib/xmesh/` | `sudo journalctl -u xmesh -f` |
+| Docker, default paths | `/opt/xmesh-docker-<role>/config/` | `/opt/xmesh-docker-<role>/data/` | Run `sudo docker compose logs -f` from that installation directory |
+
+Controller state lives in `controller-state.json`; no separate database is required. Configuration, state and backups contain credentials or private keys and need restricted access. Do not commit them, enrollment tokens or subscription URLs.
+
+The panel refreshes status every 15 seconds while preserving inputs. Link history comes from Gateway reports, sampled at most every five minutes and retained for 24 hours. Restarts, counter resets and long sampling gaps leave missing throughput points. The latest 100 management request results are stored with Controller state; accepting an upgrade request and completing an upgrade are displayed separately.
+
+### Upgrades, rotation and backups
+
+- **Upgrade the Controller before Gateways and Agents.** Controller installers preserve existing settings and update `release_version`. Passing `--public-url` or an administrator password again does not overwrite the existing configuration. Older configurations missing `release_dir` need that field added manually and a restart to enable caching.
+- A Docker Controller can check GitHub's latest stable release and upgrade from the panel when the host has systemd, `flock`, `sort` and the updater helper. The host helper verifies assets, backs up and performs the upgrade; the Controller container has no Docker socket mount. Older installations first need a host-side run of a Docker installer that provides the helper.
+- Upgrade a systemd Controller with the matching release's `install-controller.sh`. Run generated Gateway / Agent upgrade commands on their existing hosts. Installers check startup, and node upgrades also check the reported version, restoring the previous installation when available on failure. An offline peer and an unhealthy Link are assessed separately from local upgrade failure.
+- Rotate node credentials with a new enrollment token and the panel's **rotate** command, preserving node identity. The old credential has up to 15 minutes of grace and is revoked on the first status report using the new credential. Use **Reset link** separately for a leaked subscription URL.
+- Deleting a Gateway / Agent in the panel removes related management objects but does not remotely uninstall its service. Stop or uninstall the service on the corresponding host.
+
+For a Docker Controller, run this from a matching source checkout:
+
+```sh
+sudo sh scripts/backup-controller.sh \
+  /opt/xmesh-docker-controller /var/backups/xmesh-controller
+```
+
+The script archives configuration and any existing state file, extracts and compares them, and generates a SHA-256 checksum file. Keep both the archive and checksum off-host. For systemd deployments, back up the configuration and state files listed above. Restore is manual and should first be tested in an isolated environment. See [deployment automation](docs/automation.md) for details.
+
+### Troubleshooting order
+
+| Symptom | Check first |
+| --- | --- |
+| Installation or enrollment fails | Controller HTTPS `/healthz`, system time, expired or replaced tokens; regenerate commands for a custom Gateway port |
+| Node is online but route is pending | Desired / applied configuration on both nodes, ApplyError, Gateway Xray and both reports for the same Link |
+| REALITY Link cannot connect | Gateway TCP 8443, firewall/mapping, Link URL versus actual listener, and Gateway access to the target |
+| Empty subscription or missing new route | Enabled User / Grant / Node, an enabled Link, and Gateway acknowledgement of the new configuration and Xray readiness |
+| Subscription contains a route but access fails | Actual Link health, Agent outbound network, DNS and CIDR policy |
+| Release cache returns errors | Controller access to GitHub, `release_version` / `release_dir`, disk space and proxy timeouts; use a direct GitHub command if needed |
+| Low throughput at high RTT | Host TCP buffers and Link write stalls, capacity and rejection counters; see [high-latency links](docs/deployment.md#high-latency-links) |
+
+## Development and verification
+
+XMesh is written in Go. `mise.toml` pins Go **1.27.1**; `versions.env` pins the external Gateway Xray version, while `go.mod` manages the Agent's embedded Xray-core dependency.
 
 ```sh
 mise install
 mise exec -- go test ./...
-mise exec -- go build ./cmd/xmesh
+mise exec -- go vet ./...
+mise exec -- go build -o bin/xmesh ./cmd/xmesh
+node --test tests/panel.test.cjs
 ```
 
-Do not commit node credentials, Controller state, private keys, or local configuration.
+Node.js is used for panel tests, not production. Real-browser regression tests require Playwright; see [panel verification](docs/panel.md#verification). The multi-container end-to-end test requires Docker and PowerShell:
 
-For a Docker-based end-to-end check, run `pwsh tests/reality/multicontainer.ps1`. It starts separate Controller, two Gateways, one Agent, two clients, and a target, verifying TCP/UDP echo traffic through both REALITY routes.
+```sh
+pwsh tests/reality/multicontainer.ps1
+```
 
-## v0.3.1 control center
+It starts a Controller, two Gateways, one Agent, two clients and a destination service, and checks TCP/UDP echo through both REALITY routes. Full CI also checks installer ports, rollback and the Controller updater; see the [CI configuration](.github/workflows/ci.yml).
 
-The panel now separates overview, network, subscriptions, deployment and maintenance. It includes topology and matrix views, deployment progress, bulk selection with previews, partial status refresh, 24-hour Link history and the last 100 administrative request results. Clearing a selection never revokes existing access. See [panel behavior and verification](docs/panel.md).
+| Path / document | Contents |
+| --- | --- |
+| `cmd/xmesh/` | Shared entry point for Controller, Gateway, Agent, enrollment and secret utilities |
+| `internal/controller/` | Panel, management API, subscriptions, deployment orchestration and release caching |
+| `internal/gateway/`, `internal/agent/` | Client entry, tunnels, outbound connections and access policy |
+| `internal/protocol/`, `internal/scheduler/` | Framing, smux sessions and Link selection |
+| `configs/`, `scripts/`, `tests/` | Configuration templates, installation/packaging scripts and regression checks; replace template placeholders |
+| [Panel guide](docs/panel.md) | Wizard, bulk selection, refresh, history and browser verification |
+| [Deployment automation](docs/automation.md) | Installation, access grants, upgrades, credential rotation and backups |
+| [Deployment details](docs/deployment.md) | Manual configuration, release caching and network tuning |
+| [Architecture](docs/architecture.md) | Authorization model, scheduling and TCP/UDP transport |
+
+## License
+
+XMesh uses the [MIT License](LICENSE). See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for third-party components used or distributed with releases.

@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -100,6 +101,12 @@ func (r *Runtime) ApplyConfig(config controller.AgentConfig) error {
 	if _, err := compilePolicy(config.Agent); err != nil {
 		return err
 	}
+	// Config arrays are sets built from Controller maps. Their wire order may
+	// change between polls without any actual configuration change.
+	config.Links = append([]controller.AgentLinkConfig(nil), config.Links...)
+	sort.Slice(config.Links, func(i, j int) bool { return config.Links[i].ID < config.Links[j].ID })
+	config.GrantIDs = append([]string(nil), config.GrantIDs...)
+	sort.Strings(config.GrantIDs)
 	b, _ := json.Marshal(config)
 	r.mu.Lock()
 	changed := r.configFingerprint != "" && r.configFingerprint != string(b)
