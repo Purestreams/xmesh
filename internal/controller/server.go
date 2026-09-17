@@ -98,6 +98,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /admin/enrollments", s.requireAdmin(s.csrf(s.createEnrollment)))
 	mux.HandleFunc("POST /admin/enrollments/{id}/revoke", s.requireAdmin(s.csrf(s.revokeEnrollment)))
 	mux.HandleFunc("GET /admin/upgrade/{role}/{id}", s.requireAdmin(s.upgradeOptions))
+	mux.HandleFunc("POST /admin/controller/upgrade-latest", s.requireAdmin(s.csrf(s.requestControllerUpgrade)))
 	mux.HandleFunc("GET /releases/{version}/{asset}", s.releaseAsset)
 	mux.HandleFunc("HEAD /releases/{version}/{asset}", s.releaseAsset)
 	mux.HandleFunc("GET /subscription/{token}", s.subscription)
@@ -205,6 +206,7 @@ func (s *Server) panel(w http.ResponseWriter, r *http.Request) {
 		Deployments:        deploymentStatuses(state),
 		Enrollments:        enrollmentStatuses(state, s.now()),
 		SubscriptionCounts: subscriptionCounts(state),
+		ControllerUpgrade:  s.controllerUpgradeStatus(),
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := s.templates.ExecuteTemplate(w, "panel", data); err != nil {
@@ -325,6 +327,7 @@ type panelData struct {
 	Deployments        []deploymentStatus
 	Enrollments        []enrollmentStatus
 	SubscriptionCounts map[string]string
+	ControllerUpgrade  controllerUpgradeView
 }
 
 func subscriptionCounts(state model.State) map[string]string {

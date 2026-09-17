@@ -1,9 +1,9 @@
-# Deployment automation (v0.2.2)
+# Deployment automation (v0.2.3)
 
-This guide targets the v0.2.2 Controller and node binaries. Upgrade an
-existing Controller first and set its `release_version` to `v0.2.2`. The v0.2.0
+This guide targets the v0.2.3 Controller and node binaries. Upgrade an
+existing Controller first and set its `release_version` to `v0.2.3`. The v0.2.0
 Controller does not offer the new panel controls. Node installers obtain
-verified v0.2.2 assets from GitHub or the Controller's on-demand cache.
+verified v0.2.3 assets from GitHub or the Controller's on-demand cache.
 The v0.2.1 Controller's on-demand cache rejects its release manifest and
 returns 502; upgrade the Controller before selecting a cached install command.
 
@@ -59,14 +59,14 @@ same node identity atomically. The previous credential has a 15-minute grace
 period and is revoked as soon as the new node reports status. Unused tokens can
 be revoked from the panel. Subscription links can be reset separately.
 
-On a Docker Controller host with a v0.2.2 source checkout, run:
+On a Docker Controller host with a v0.2.3 source checkout, run:
 
 ```sh
 sudo sh scripts/backup-controller.sh /opt/xmesh-docker-controller /var/backups/xmesh-controller
 ```
 
-The helper is also a v0.2.2 release asset and is available from the
-Controller's on-demand `/releases/v0.2.2/backup-controller.sh` URL. If the
+The helper is also a v0.2.3 release asset and is available from the
+Controller's on-demand `/releases/v0.2.3/backup-controller.sh` URL. If the
 source checkout is absent, download the helper and `SHA256SUMS` from the same
 release source, verify the helper with `sha256sum -c`, then run it as root.
 
@@ -76,3 +76,26 @@ generates a SHA-256 checksum. Store both files off-host and restrict access:
 they contain keys and credentials. Restore is deliberately manual; test it on
 an isolated host before relying on a backup. Release binaries and the cache can
 be downloaded again and are not part of the backup.
+
+## One-click Controller upgrade
+
+The first upgrade from an older Docker Controller to v0.2.3 is manual. Use the
+verified v0.2.3 `install-docker.sh` from GitHub on the Controller host; the
+v0.2.1 Controller cache is broken. On a systemd host the installer registers
+`xmesh-controller-updater.timer` and a root-owned helper outside the Controller
+container. It does **not** mount the Docker socket into the web process.
+
+The panel's **Check GitHub and upgrade Controller to latest** button queues a
+request in the Controller data volume. The host helper polls every 15 seconds,
+accepts only GitHub's latest stable `vMAJOR.MINOR.PATCH` release newer than the
+installed version, verifies the release scripts against `SHA256SUMS`, creates a
+verified Controller backup, then invokes the existing Docker installer. The
+installer checks startup and restores the previous image and configuration on
+failure. The panel shows queued, running, succeeded, failed, or up-to-date;
+host-side details are in `journalctl -u xmesh-controller-updater.service`.
+
+This button upgrades the **Controller only**. Gateway and Agent upgrades still
+require running their generated commands on their respective hosts. The host
+helper needs GitHub access, systemd, `flock`, `sort`, Docker Compose, and the
+same trust in GitHub release assets as the manual installer. Keep backups
+off-host. If systemd is unavailable, the panel leaves the button disabled.

@@ -39,8 +39,9 @@ if [ "$1" = version ]; then echo v-test; exit 0; fi
 exit 1
 EOF
 printf 'new-xray\n' >"$test_dir/package/xray"
-chmod 755 "$test_dir/bin/curl" "$test_dir/bin/docker" "$test_dir/package/xmesh" "$test_dir/package/xray"
-tar -C "$test_dir/package" -czf "$test_dir/assets/xmesh-v-test-linux-amd64.tar.gz" xmesh xray
+printf 'new-updater\n' >"$test_dir/package/controller-updater.sh"
+chmod 755 "$test_dir/bin/curl" "$test_dir/bin/docker" "$test_dir/package/xmesh" "$test_dir/package/xray" "$test_dir/package/controller-updater.sh"
+tar -C "$test_dir/package" -czf "$test_dir/assets/xmesh-v-test-linux-amd64.tar.gz" xmesh xray controller-updater.sh
 (cd "$test_dir/assets" && sha256sum xmesh-v-test-linux-amd64.tar.gz >SHA256SUMS)
 
 printf 'old-compose\n' >"$test_dir/install/compose.yaml"

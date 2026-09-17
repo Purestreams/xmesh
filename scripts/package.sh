@@ -30,8 +30,9 @@ for arch in amd64 arm64; do
     echo "Xray $arch version is trusted from its independently verified upstream archive; cannot execute on $host_arch"
   fi
   install -m 0755 "$xray_path" "$package/xray"
+  install -m 0755 "$root/scripts/controller-updater.sh" "$package/controller-updater.sh"
   install -m 0644 "$root/THIRD_PARTY_NOTICES.md" "$package/THIRD_PARTY_NOTICES.md"
-  tar -C "$package" -czf "$root/dist/xmesh-${version}-linux-${arch}.tar.gz" xmesh xray THIRD_PARTY_NOTICES.md
+  tar -C "$package" -czf "$root/dist/xmesh-${version}-linux-${arch}.tar.gz" xmesh xray controller-updater.sh THIRD_PARTY_NOTICES.md
 done
 CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "-s -w -X main.version=$version" -o "$root/dist/xmesh-${version}-windows-amd64.exe" ./cmd/xmesh
 install -m 0755 "$root/scripts/install.sh" "$root/dist/install.sh"

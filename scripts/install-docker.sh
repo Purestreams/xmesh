@@ -66,7 +66,7 @@ trap 'rm -rf "$work"' EXIT HUP INT TERM
 curl --fail --location --retry 3 --proto '=https' --proto-redir '=https' --output "$work/$archive" "$base/$archive"
 curl --fail --location --retry 3 --proto '=https' --proto-redir '=https' --output "$work/SHA256SUMS" "$base/SHA256SUMS"
 (cd "$work" && grep "  $archive\$" SHA256SUMS | sha256sum -c -)
-tar -xzf "$work/$archive" -C "$work" xmesh xray
+tar -xzf "$work/$archive" -C "$work" xmesh xray controller-updater.sh
 "$work/xmesh" version >/dev/null
 
 install -d -m 0750 "$install_dir" "$install_dir/config" "$install_dir/data" "$install_dir/image"
@@ -229,5 +229,47 @@ if [ "$started" != true ]; then
     echo 'previous image and Compose definition restored' >&2
   fi
   exit 1
+fi
+if [ "$role" = controller ]; then
+  rm -f "$install_dir/data/controller-updater.ready"
+  if [ -d /run/systemd/system ] && command -v systemctl >/dev/null 2>&1 && command -v flock >/dev/null 2>&1 && command -v sort >/dev/null 2>&1; then
+    case "$install_dir" in
+      *[!a-zA-Z0-9_./-]*) echo 'Controller one-click updater requires an install directory without spaces or shell metacharacters' >&2 ;;
+      *)
+        install -d -m 0700 "$install_dir/updater"
+        install -m 0700 "$work/controller-updater.sh" "$install_dir/updater/controller-updater.sh.new"
+        mv -f "$install_dir/updater/controller-updater.sh.new" "$install_dir/updater/controller-updater.sh"
+        cat >/etc/systemd/system/xmesh-controller-updater.service <<EOF
+[Unit]
+Description=xmesh Controller release updater
+After=docker.service network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh $install_dir/updater/controller-updater.sh $install_dir
+EOF
+        cat >/etc/systemd/system/xmesh-controller-updater.timer <<'EOF'
+[Unit]
+Description=Check for approved xmesh Controller upgrade requests
+
+[Timer]
+OnBootSec=30s
+OnUnitActiveSec=15s
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target
+EOF
+        if systemctl daemon-reload && systemctl enable --now xmesh-controller-updater.timer; then
+          printf 'ready\n' >"$install_dir/data/controller-updater.ready"
+          chmod 0644 "$install_dir/data/controller-updater.ready"
+        else
+          echo 'Controller is running, but one-click updater timer could not be enabled' >&2
+        fi
+        ;;
+    esac
+  else
+    echo 'Controller is running; one-click upgrades require systemd, flock, and sort on this host' >&2
+  fi
 fi
 echo "xmesh $role is running from $install_dir; logs: sudo docker compose -f $install_dir/compose.yaml logs -f"
