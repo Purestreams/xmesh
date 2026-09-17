@@ -34,10 +34,11 @@ if [ ! -d /run/systemd/system ]; then echo 'systemd is required' >&2; exit 1; fi
 if [ -e /etc/systemd/system/xmesh-controller.service ]; then echo 'a Controller service already uses /usr/local/bin/xmesh; install nodes on separate hosts' >&2; exit 1; fi
 
 if [ "$uninstall" = 'true' ]; then
+  systemctl disable --now xmesh-updater.service 2>/dev/null || true
   systemctl disable --now xmesh.service 2>/dev/null || true
-  rm -f /etc/systemd/system/xmesh.service /usr/local/bin/xmesh /usr/local/lib/xmesh/xray
+  rm -f /etc/systemd/system/xmesh.service /etc/systemd/system/xmesh-updater.service /usr/local/bin/xmesh /usr/local/bin/xmesh-updater /usr/local/lib/xmesh/xray
   systemctl daemon-reload
-  if [ "$purge" = 'true' ]; then rm -rf /etc/xmesh /var/lib/xmesh; fi
+  if [ "$purge" = 'true' ]; then rm -rf /etc/xmesh /var/lib/xmesh /var/lib/xmesh-updater; fi
   echo 'xmesh removed; identity and state were preserved unless --purge was supplied'
   exit 0
 fi
@@ -81,7 +82,9 @@ if [ "$role" = gateway ] && [ ! -x "$work/xray" ]; then echo 'gateway release do
 
 getent group xmesh >/dev/null 2>&1 || groupadd --system xmesh
 id xmesh >/dev/null 2>&1 || useradd --system --gid xmesh --home-dir /var/lib/xmesh --shell /usr/sbin/nologin xmesh
-install -d -m 0750 -o xmesh -g xmesh /etc/xmesh /var/lib/xmesh /usr/local/lib/xmesh
+install -d -m 0750 -o root -g xmesh /etc/xmesh
+install -d -m 0750 -o xmesh -g xmesh /var/lib/xmesh
+install -d -m 0755 -o root -g root /usr/local/lib/xmesh
 if [ "$rotate_credential" = true ] && [ ! -f /etc/xmesh/node.json ]; then
   echo '--rotate-credential requires an existing node identity' >&2
   exit 2
@@ -99,9 +102,9 @@ if [ ! -f /etc/xmesh/node.json ] || [ "$rotate_credential" = true ]; then
     printf '\n' >/dev/tty
   fi
   if [ "$rotate_credential" = true ]; then
-    printf '%s' "$token" | "$work/xmesh" enroll --controller "$controller" --role "$role" --token-stdin --replace --output /etc/xmesh/node.json
+    printf '%s' "$token" | "$work/xmesh" enroll --controller "$controller" --role "$role" --token-stdin --replace --output /etc/xmesh/node.json --updater-output /etc/xmesh/updater.json --updater-mode systemd
   else
-    printf '%s' "$token" | "$work/xmesh" enroll --controller "$controller" --role "$role" --token-stdin --output /etc/xmesh/node.json
+    printf '%s' "$token" | "$work/xmesh" enroll --controller "$controller" --role "$role" --token-stdin --output /etc/xmesh/node.json --updater-output /etc/xmesh/updater.json --updater-mode systemd
   fi
   chown xmesh:xmesh /etc/xmesh/node.json
   chmod 0600 /etc/xmesh/node.json
@@ -110,11 +113,76 @@ else
   if [ "$existing_role" != "$role" ]; then echo "existing identity is $existing_role, refusing to rebind as $role" >&2; exit 1; fi
 fi
 
+install_updater_service() {
+  if [ ! -f /etc/xmesh/updater.json ]; then
+    echo 'updater identity is missing; generate a pairing token in the Controller panel' >&2
+    return
+  fi
+  updater_tmp="/usr/local/bin/xmesh-updater.new.$$"
+  install -m 0700 "$work/xmesh-updater" "$updater_tmp"
+  mv -f "$updater_tmp" /usr/local/bin/xmesh-updater
+  cat >/etc/systemd/system/xmesh-updater.service <<'EOF'
+[Unit]
+Description=xmesh host upgrade assistant
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/xmesh-updater run --config /etc/xmesh/updater.json
+Restart=always
+RestartSec=10s
+ProtectHome=true
+NoNewPrivileges=true
+ReadWritePaths=/var/lib/xmesh-updater /usr/local/bin /usr/local/lib/xmesh
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  install -d -m 0700 /var/lib/xmesh-updater
+  systemctl daemon-reload
+  systemctl enable xmesh-updater.service
+  systemctl restart xmesh-updater.service
+}
+
+if [ -x /usr/local/bin/xmesh ] && [ -f /etc/xmesh/updater.json ]; then
+  archive_sha=$(grep "  $archive\$" "$work/SHA256SUMS" | cut -d ' ' -f 1)
+  systemctl stop xmesh-updater.service
+  if ! "$work/xmesh-updater" local --config /etc/xmesh/updater.json --version "$version" --archive "$work/$archive" --sha256 "$archive_sha"; then
+    systemctl restart xmesh-updater.service 2>/dev/null || true
+    exit 1
+  fi
+  install_updater_service
+  echo 'xmesh installed; logs: journalctl -u xmesh.service -f'
+  exit 0
+fi
+
 if [ -x /usr/local/bin/xmesh ]; then cp -p /usr/local/bin/xmesh "$work/xmesh.previous"; fi
 if [ -x /usr/local/lib/xmesh/xray ]; then cp -p /usr/local/lib/xmesh/xray "$work/xray.previous"; fi
+restore_previous_binaries() {
+  restore_failed=false
+  if [ -f "$work/xmesh.previous" ]; then
+    if ! cp -p "$work/xmesh.previous" /usr/local/bin/xmesh.restore.$$ || ! mv -f /usr/local/bin/xmesh.restore.$$ /usr/local/bin/xmesh; then restore_failed=true; fi
+  else
+    rm -f /usr/local/bin/xmesh || restore_failed=true
+  fi
+  if [ "$role" = gateway ]; then
+    if [ -f "$work/xray.previous" ]; then
+      if ! cp -p "$work/xray.previous" /usr/local/lib/xmesh/xray.restore.$$ || ! mv -f /usr/local/lib/xmesh/xray.restore.$$ /usr/local/lib/xmesh/xray; then restore_failed=true; fi
+    else
+      rm -f /usr/local/lib/xmesh/xray || restore_failed=true
+    fi
+  fi
+  [ "$restore_failed" = false ]
+}
 install -m 0755 "$work/xmesh" /usr/local/bin/xmesh.new
-mv -f /usr/local/bin/xmesh.new /usr/local/bin/xmesh
-if [ "$role" = gateway ]; then install -m 0755 "$work/xray" /usr/local/lib/xmesh/xray; fi
+if [ "$role" = gateway ]; then install -m 0755 "$work/xray" /usr/local/lib/xmesh/xray.new; fi
+if ! mv -f /usr/local/bin/xmesh.new /usr/local/bin/xmesh || { [ "$role" = gateway ] && ! mv -f /usr/local/lib/xmesh/xray.new /usr/local/lib/xmesh/xray; }; then
+  restore_previous_binaries || echo 'restoring previous binaries also failed' >&2
+  systemctl restart xmesh.service 2>/dev/null || true
+  echo 'binary switch failed; previous binaries were restored when available' >&2
+  exit 1
+fi
 
 cat >/etc/systemd/system/xmesh.service <<EOF
 [Unit]
@@ -161,10 +229,11 @@ if [ "$started" = true ]; then
 fi
 if [ "$started" != true ]; then
   journalctl -u xmesh.service -n 80 --no-pager || true
-  if [ -x "$work/xmesh.previous" ]; then install -m 0755 "$work/xmesh.previous" /usr/local/bin/xmesh; fi
-  if [ -x "$work/xray.previous" ]; then install -m 0755 "$work/xray.previous" /usr/local/lib/xmesh/xray; fi
+  restore_previous_binaries || echo 'restoring previous binaries also failed' >&2
   systemctl restart xmesh.service 2>/dev/null || true
+  if [ -f /etc/xmesh/updater.json ]; then systemctl restart xmesh-updater.service 2>/dev/null || true; fi
   echo 'installation or Controller status check failed; previous binaries were restored when available' >&2
   exit 1
 fi
+install_updater_service
 echo 'xmesh installed; logs: journalctl -u xmesh.service -f'

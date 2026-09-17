@@ -854,6 +854,56 @@ if (typeof document !== "undefined")
           p.firstChild.textContent = `${user.name} (${user.publication}): `;
       });
     }
+    function renderNodeUpgrades() {
+      const section = $("#node-upgrades");
+      if (!section || !data) return;
+      const csrf = section.querySelector('form[action="/admin/upgrades"] input[name="csrf"]')?.value;
+      const tables = section.querySelectorAll("table");
+      const nodesBody = tables[0]?.querySelector("tbody");
+      const tasksBody = tables[1]?.querySelector("tbody");
+      if (nodesBody) {
+        for (const row of nodesBody.rows) {
+          const action = row.querySelector("form")?.getAttribute("action") || "";
+          const match = action.match(/\/admin\/updaters\/(?:gateway|agent)\/([^/]+)\/pair$/);
+          if (!match) continue;
+          const up = data.updaters?.[match[1]];
+          row.cells[1].textContent = `${up?.State || "未配对"} · ${up?.Mode || "—"}/${up?.Arch || "—"} · ${up?.Version || "—"}`;
+        }
+      }
+      if (!tasksBody) return;
+      tasksBody.replaceChildren();
+      for (const task of data.upgrade_tasks || []) {
+        const row = document.createElement("tr");
+        for (const value of [
+          `${task.role} ${task.node_id}`,
+          `${task.from_version || "—"} → ${task.target_version}`,
+          `${task.stage} · batch ${data.upgrade_batches?.[task.batch_id]?.stage || "—"}${data.upgrade_batches?.[task.batch_id]?.error ? ": " + data.upgrade_batches[task.batch_id].error : ""} · ${task.updated_at}`,
+          task.error || "",
+        ]) row.append(el("td", value));
+        const action = el("td");
+        if (["pending", "preparing"].includes(task.stage)) {
+          const form = document.createElement("form");
+          form.method = "post";
+          form.action = `/admin/upgrades/${encodeURIComponent(task.id)}/cancel`;
+          const hidden = document.createElement("input");
+          hidden.type = "hidden";
+          hidden.name = "csrf";
+          hidden.value = csrf || "";
+          const button = el("button", "取消");
+          form.append(hidden, button);
+          action.append(form);
+        }
+        row.append(action);
+        tasksBody.append(row);
+      }
+      if (!tasksBody.children.length) {
+        const row = document.createElement("tr");
+        const cell = el("td", "暂无升级任务");
+        cell.colSpan = 5;
+        row.append(cell);
+        tasksBody.append(row);
+      }
+    }
     function updateChooser(form) {
       if (!data) return;
       const kind = form.closest("section").id,
@@ -1152,6 +1202,7 @@ if (typeof document !== "undefined")
         renderHistory();
         renderOperations();
         updateLiveTables();
+        renderNodeUpgrades();
         $$(".chooser").forEach((f) => {
           const group = $(".selection-group", f),
             old = group.value;

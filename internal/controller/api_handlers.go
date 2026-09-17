@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"sort"
@@ -11,6 +12,8 @@ import (
 	"xmesh/internal/identity"
 	"xmesh/internal/model"
 )
+
+var errEnrollmentUpgradeActive = errors.New("node has an active upgrade; retry credential rotation after it finishes")
 
 type StatusReport struct {
 	Status model.NodeStatus    `json:"status"`
@@ -43,6 +46,14 @@ func (s *Server) enroll(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "credential generation failed", 500)
 		return
 	}
+	updaterCredential := ""
+	if request.WantUpdater {
+		updaterCredential, err = identity.Token(32)
+		if err != nil {
+			http.Error(w, "credential generation failed", 500)
+			return
+		}
+	}
 	var response EnrollmentResponse
 	err = s.store.Update(func(state *model.State) error {
 		var enrollment model.Enrollment
@@ -59,6 +70,9 @@ func (s *Server) enroll(w http.ResponseWriter, r *http.Request) {
 		}
 		if request.Role != "" && request.Role != enrollment.Role || request.NodeID != "" && request.NodeID != enrollment.NodeID {
 			return fmt.Errorf("enrollment token is for a different node")
+		}
+		if nodeHasActiveUpgrade(state, enrollment.NodeID) {
+			return errEnrollmentUpgradeActive
 		}
 		switch enrollment.Role {
 		case model.RoleGateway:
@@ -88,10 +102,20 @@ func (s *Server) enroll(w http.ResponseWriter, r *http.Request) {
 		}
 		enrollment.UsedAt = s.now().UTC()
 		state.Enrollments[enrollment.ID] = enrollment
-		response = EnrollmentResponse{Role: enrollment.Role, NodeID: enrollment.NodeID, Credential: credential, ConfigURL: strings.TrimSuffix(s.cfg.PublicURL, "/") + "/api/v1/config"}
+		if request.WantUpdater {
+			if state.Updaters == nil {
+				state.Updaters = map[string]model.Updater{}
+			}
+			state.Updaters[enrollment.NodeID] = model.Updater{NodeID: enrollment.NodeID, Role: enrollment.Role, CredentialHash: auth.SecretHash(updaterCredential)}
+		}
+		response = EnrollmentResponse{Role: enrollment.Role, NodeID: enrollment.NodeID, Credential: credential, ConfigURL: strings.TrimSuffix(s.cfg.PublicURL, "/") + "/api/v1/config", UpdaterCredential: updaterCredential}
 		return nil
 	})
 	if err != nil {
+		if errors.Is(err, errEnrollmentUpgradeActive) {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
 		http.Error(w, err.Error(), http.StatusUnauthorized)
 		return
 	}

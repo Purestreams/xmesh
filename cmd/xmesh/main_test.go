@@ -43,6 +43,37 @@ func TestEnrollReplacePreservesExistingNodeSettings(t *testing.T) {
 	}
 }
 
+func TestEnrollReplaceKeepsPairedUpdaterCredential(t *testing.T) {
+	root := t.TempDir()
+	nodePath, updaterPath := filepath.Join(root, "node.json"), filepath.Join(root, "updater.json")
+	if err := os.WriteFile(nodePath, []byte(`{"role":"agent","node_id":"a","credential":"old"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	previous := []byte(`{"credential":"paired-helper"}`)
+	if err := os.WriteFile(updaterPath, previous, 0600); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request controller.EnrollmentRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Error(err)
+		}
+		if request.WantUpdater {
+			t.Error("business credential rotation replaced paired helper credential")
+		}
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(controller.EnrollmentResponse{Role: model.RoleAgent, NodeID: "a", Credential: "new"})
+	}))
+	defer server.Close()
+	if err := enrollNode([]string{"--controller", server.URL, "--role", "agent", "--token", "rotate", "--replace", "--output", nodePath, "--updater-output", updaterPath, "--updater-mode", "systemd"}); err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.ReadFile(updaterPath)
+	if err != nil || string(after) != string(previous) {
+		t.Fatalf("paired helper config changed: %s %v", after, err)
+	}
+}
+
 func TestEnrollReplaceRejectsDifferentNode(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "node.json")
 	original := []byte(`{"role":"gateway","node_id":"g","credential":"old"}`)

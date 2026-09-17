@@ -1,4 +1,4 @@
-# Control center (v0.3.2)
+# Control center (v0.3.3)
 
 The Controller embeds its HTML, CSS and JavaScript; no frontend service, CDN or
 production Node.js runtime is required. Existing management POST endpoints and
@@ -68,6 +68,13 @@ and HTTP outcome; request bodies and returned installation secrets are excluded.
 An accepted upgrade request is not an upgrade completion: its current queued,
 running or terminal status is displayed separately. Logging failures are emitted
 to the Controller log. Existing Controller backups include these additive fields.
+
+The **Node upgrades** section shows each Gateway / Agent host helper, its version,
+installation mode and latest task stage. Generate a pairing token for an older
+host and run the verified migration command there once. Select one or more
+nodes and a fixed release version to create a serial batch. The Controller
+prepares and checks each release archive before a helper can claim its task.
+Pending tasks may be cancelled; a claimed task completes or rolls back.
 
 ## Verification
 

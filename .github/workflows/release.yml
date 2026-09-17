@@ -47,6 +47,7 @@ jobs:
           XRAY_AMD64="$PWD/xray-download/amd64/xray" XRAY_ARM64="$PWD/xray-download/arm64/xray" mise exec -- sh scripts/package.sh "$version"
           for arch in amd64 arm64; do
             tar -tzf "dist/xmesh-${version}-linux-${arch}.tar.gz" | grep -Fx controller-updater.sh
+            tar -tzf "dist/xmesh-${version}-linux-${arch}.tar.gz" | grep -Fx xmesh-updater
           done
           (cd dist && sha256sum -c SHA256SUMS)
       - name: Publish immutable release assets

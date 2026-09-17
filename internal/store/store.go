@@ -97,6 +97,15 @@ func (s *Store) ensureMaps() {
 	if s.state.GrantStatus == nil {
 		s.state.GrantStatus = map[string]model.GrantStatus{}
 	}
+	if s.state.Updaters == nil {
+		s.state.Updaters = map[string]model.Updater{}
+	}
+	if s.state.UpgradeTasks == nil {
+		s.state.UpgradeTasks = map[string]model.UpgradeTask{}
+	}
+	if s.state.UpgradeBatches == nil {
+		s.state.UpgradeBatches = map[string]model.UpgradeBatch{}
+	}
 }
 
 func writeAtomic(path string, state model.State) error {

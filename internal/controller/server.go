@@ -34,7 +34,7 @@ type Server struct {
 	logger            *slog.Logger
 	templates         *template.Template
 	now               func() time.Time
-	releaseMu         sync.Mutex
+	releaseMu         *sync.Mutex
 	releaseHTTPClient *http.Client
 	loginMu           sync.Mutex
 	loginFailures     map[string]loginFailure
@@ -70,7 +70,13 @@ func New(cfg Config, state *store.Store, logger *slog.Logger) (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse panel template: %w", err)
 	}
-	return &Server{cfg: cfg, store: state, logger: logger, templates: t, now: time.Now}, nil
+	s := &Server{cfg: cfg, store: state, logger: logger, templates: t, now: time.Now, releaseMu: &sync.Mutex{}}
+	for id, batch := range state.Snapshot().UpgradeBatches {
+		if batch.Stage == "preparing" {
+			go s.prepareUpgradeBatch(id)
+		}
+	}
+	return s, nil
 }
 
 func (s *Server) Handler() http.Handler {
@@ -116,6 +122,15 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /admin/enrollments", s.requireAdmin(s.csrf(s.createEnrollment)))
 	mux.HandleFunc("POST /admin/enrollments/{id}/revoke", s.requireAdmin(s.csrf(s.revokeEnrollment)))
 	mux.HandleFunc("GET /admin/upgrade/{role}/{id}", s.requireAdmin(s.upgradeOptions))
+	mux.HandleFunc("POST /admin/updaters/{role}/{id}/pair", s.requireAdmin(s.csrf(s.pairUpdater)))
+	mux.HandleFunc("POST /admin/upgrades", s.requireAdmin(s.csrf(s.createUpgrade)))
+	mux.HandleFunc("POST /admin/upgrades/{id}/cancel", s.requireAdmin(s.csrf(s.cancelUpgrade)))
+	mux.HandleFunc("GET /admin/upgrades", s.requireAdmin(s.listUpgrades))
+	mux.HandleFunc("POST /api/v1/updater/pair", s.updaterPair)
+	mux.HandleFunc("POST /api/v1/updater/heartbeat", s.updaterHeartbeat)
+	mux.HandleFunc("GET /api/v1/updater/task", s.updaterTask)
+	mux.HandleFunc("POST /api/v1/updater/manual", s.startManualUpgrade)
+	mux.HandleFunc("POST /api/v1/updater/task/{id}/report", s.updaterReport)
 	mux.HandleFunc("POST /admin/controller/upgrade-latest", s.requireAdmin(s.csrf(s.requestControllerUpgrade)))
 	mux.HandleFunc("GET /releases/{version}/{asset}", s.releaseAsset)
 	mux.HandleFunc("HEAD /releases/{version}/{asset}", s.releaseAsset)
@@ -258,6 +273,8 @@ func (s *Server) panel(w http.ResponseWriter, r *http.Request) {
 		NodeImpacts:        nodeImpacts(state),
 		RouteImpacts:       routeImpacts(state),
 		ControllerUpgrade:  s.controllerUpgradeStatus(),
+		UpgraderViews:      updaterViews(state, s.now()),
+		UpgradeTaskList:    sortedUpgradeTasks(state),
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := s.templates.ExecuteTemplate(w, "panel", data); err != nil {
@@ -382,6 +399,8 @@ type panelData struct {
 	NodeImpacts        map[string]deletionImpact
 	RouteImpacts       map[string]deletionImpact
 	ControllerUpgrade  controllerUpgradeView
+	UpgraderViews      map[string]updaterView
+	UpgradeTaskList    []model.UpgradeTask
 }
 
 func subscriptionCounts(state model.State) map[string]string {

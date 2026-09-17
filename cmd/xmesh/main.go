@@ -22,9 +22,11 @@ import (
 	"xmesh/internal/auth"
 	"xmesh/internal/controller"
 	"xmesh/internal/gateway"
+	"xmesh/internal/identity"
 	"xmesh/internal/model"
 	"xmesh/internal/runtimecfg"
 	"xmesh/internal/store"
+	"xmesh/internal/updater"
 )
 
 var version = "dev"
@@ -79,6 +81,10 @@ func runNode(logger *slog.Logger, role model.Role, args []string) error {
 		return fmt.Errorf("config role is %s, command requires %s", cfg.Role, role)
 	}
 	cfg.BinaryVersion = version
+	cfg.InstanceID, err = identity.Token(16)
+	if err != nil {
+		return err
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	switch role {
@@ -111,7 +117,7 @@ func runController(logger *slog.Logger, args []string) error {
 	}
 	httpServer := &http.Server{
 		Addr: cfg.Listen, Handler: server.Handler(), ReadHeaderTimeout: 10 * time.Second,
-		ReadTimeout: 30 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 2 * time.Minute,
+		ReadTimeout: 30 * time.Second, WriteTimeout: 10 * time.Minute, IdleTimeout: 2 * time.Minute,
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -159,6 +165,9 @@ func enrollNode(args []string) error {
 	replace := flags.Bool("replace", false, "rotate credentials in an existing node config")
 	role := flags.String("role", "", "gateway or agent")
 	output := flags.String("output", "/etc/xmesh/node.json", "node config output")
+	updaterOutput := flags.String("updater-output", "", "root-only host updater configuration output")
+	updaterMode := flags.String("updater-mode", "", "systemd or docker updater mode")
+	updaterInstallDir := flags.String("updater-install-dir", "", "Docker node installation directory")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -195,7 +204,23 @@ func enrollNode(args []string) error {
 	} else if !os.IsNotExist(err) {
 		return err
 	}
-	request := controller.EnrollmentRequest{Token: *token, Role: model.Role(*role)}
+	wantUpdater := *updaterOutput != ""
+	if wantUpdater {
+		if *updaterMode != "systemd" && *updaterMode != "docker" {
+			return fmt.Errorf("--updater-mode must be systemd or docker")
+		}
+		if *updaterMode == "docker" && !filepath.IsAbs(*updaterInstallDir) {
+			return fmt.Errorf("--updater-install-dir must be absolute for Docker")
+		}
+		if *replace {
+			if _, err := os.Stat(*updaterOutput); err == nil {
+				wantUpdater = false // Business credential rotation keeps the paired helper identity.
+			} else if !os.IsNotExist(err) {
+				return err
+			}
+		}
+	}
+	request := controller.EnrollmentRequest{Token: *token, Role: model.Role(*role), WantUpdater: wantUpdater}
 	if *replace {
 		request.NodeID = existing["node_id"].(string)
 	}
@@ -216,6 +241,14 @@ func enrollNode(args []string) error {
 	}
 	if string(result.Role) != *role {
 		return fmt.Errorf("enrollment role %s does not match requested role %s", result.Role, *role)
+	}
+	if wantUpdater {
+		if result.UpdaterCredential == "" {
+			return fmt.Errorf("controller did not issue updater credentials")
+		}
+		if err := updater.SaveConfig(*updaterOutput, updater.Config{ControllerURL: strings.TrimSuffix(*controllerURL, "/"), NodeID: result.NodeID, Role: *role, Credential: result.UpdaterCredential, Mode: *updaterMode, InstallDir: *updaterInstallDir}); err != nil {
+			return err
+		}
 	}
 	if *replace {
 		if existing["node_id"] != result.NodeID {

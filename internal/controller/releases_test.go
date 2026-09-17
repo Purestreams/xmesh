@@ -141,6 +141,15 @@ func TestReleaseManifestAcceptsPackagedAssets(t *testing.T) {
 	}
 }
 
+func TestUpdaterAssetRequiredOnlyForNewReleases(t *testing.T) {
+	if isReleaseAsset("v0.3.2", "install-updater.sh") {
+		t.Fatal("published v0.3.2 did not contain the updater installer")
+	}
+	if !isReleaseAsset("v0.3.3", "install-updater.sh") {
+		t.Fatal("new release omitted updater installer")
+	}
+}
+
 func TestEnrollmentOffersBothSourcesAndBothInstallModes(t *testing.T) {
 	server, _ := testServer(t, func(s *model.State) error {
 		s.Agents["a1"] = model.Agent{ID: "a1", Name: "Agent", Enabled: true}

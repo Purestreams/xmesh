@@ -104,6 +104,7 @@ type NodeStatus struct {
 	NodeID            string            `json:"node_id"`
 	Role              Role              `json:"role"`
 	BinaryVersion     string            `json:"binary_version,omitempty"`
+	InstanceID        string            `json:"instance_id,omitempty"`
 	Online            bool              `json:"online"`
 	Ready             bool              `json:"ready"`
 	DesiredVersion    uint64            `json:"desired_version"`
@@ -120,6 +121,52 @@ type NodeStatus struct {
 	UDPAssociations   int               `json:"udp_associations"`
 	LastError         string            `json:"last_error,omitempty"`
 	FailureCounters   map[string]uint64 `json:"failure_counters,omitempty"`
+}
+
+// Updater is the independently authenticated host process. Its secret is never
+// included in node configuration or dashboard responses.
+type Updater struct {
+	NodeID                string    `json:"node_id"`
+	Role                  Role      `json:"role"`
+	CredentialHash        string    `json:"credential_hash"`
+	PendingCredentialHash string    `json:"pending_credential_hash,omitempty"`
+	PairTokenHash         string    `json:"pair_token_hash,omitempty"`
+	PairExpiresAt         time.Time `json:"pair_expires_at,omitempty"`
+	Mode                  string    `json:"mode,omitempty"`
+	Arch                  string    `json:"arch,omitempty"`
+	Version               string    `json:"version,omitempty"`
+	Protocol              int       `json:"protocol,omitempty"`
+	LastSeen              time.Time `json:"last_seen,omitempty"`
+}
+
+type UpgradeTask struct {
+	ID            string    `json:"id"`
+	Manual        bool      `json:"manual,omitempty"`
+	BatchID       string    `json:"batch_id,omitempty"`
+	NodeID        string    `json:"node_id"`
+	Role          Role      `json:"role"`
+	Actor         string    `json:"actor"`
+	FromVersion   string    `json:"from_version"`
+	TargetVersion string    `json:"target_version"`
+	Asset         string    `json:"asset"`
+	BaselineLinks []string  `json:"baseline_links,omitempty"`
+	SHA256        string    `json:"sha256"`
+	Mode          string    `json:"mode"`
+	Arch          string    `json:"arch"`
+	Stage         string    `json:"stage"`
+	Attempt       int       `json:"attempt"`
+	Error         string    `json:"error,omitempty"`
+	CreatedAt     time.Time `json:"created_at"`
+	ExpiresAt     time.Time `json:"expires_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
+}
+
+type UpgradeBatch struct {
+	ID        string    `json:"id"`
+	TaskIDs   []string  `json:"task_ids"`
+	Stage     string    `json:"stage"`
+	Error     string    `json:"error,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 type LinkStatus struct {
@@ -156,19 +203,22 @@ type GrantStatus struct {
 }
 
 type State struct {
-	Revision    uint64                  `json:"revision"`
-	Users       map[string]User         `json:"users"`
-	Gateways    map[string]Gateway      `json:"gateways"`
-	Agents      map[string]Agent        `json:"agents"`
-	Attachments map[string]Attachment   `json:"attachments"`
-	Links       map[string]Link         `json:"links"`
-	Grants      map[string]Grant        `json:"grants"`
-	Enrollments map[string]Enrollment   `json:"enrollments"`
-	NodeStatus  map[string]NodeStatus   `json:"node_status"`
-	LinkStatus  map[string]LinkStatus   `json:"link_status"`
-	GrantStatus map[string]GrantStatus  `json:"grant_status"`
-	LinkHistory map[string][]LinkSample `json:"link_history,omitempty"`
-	Operations  []Operation             `json:"operations,omitempty"`
+	Revision       uint64                  `json:"revision"`
+	Users          map[string]User         `json:"users"`
+	Gateways       map[string]Gateway      `json:"gateways"`
+	Agents         map[string]Agent        `json:"agents"`
+	Attachments    map[string]Attachment   `json:"attachments"`
+	Links          map[string]Link         `json:"links"`
+	Grants         map[string]Grant        `json:"grants"`
+	Enrollments    map[string]Enrollment   `json:"enrollments"`
+	NodeStatus     map[string]NodeStatus   `json:"node_status"`
+	LinkStatus     map[string]LinkStatus   `json:"link_status"`
+	GrantStatus    map[string]GrantStatus  `json:"grant_status"`
+	LinkHistory    map[string][]LinkSample `json:"link_history,omitempty"`
+	Operations     []Operation             `json:"operations,omitempty"`
+	Updaters       map[string]Updater      `json:"updaters,omitempty"`
+	UpgradeTasks   map[string]UpgradeTask  `json:"upgrade_tasks,omitempty"`
+	UpgradeBatches map[string]UpgradeBatch `json:"upgrade_batches,omitempty"`
 }
 
 // LinkSample uses only the Gateway report so tunnel traffic is not counted twice.
@@ -191,15 +241,18 @@ type Operation struct {
 
 func NewState() State {
 	return State{
-		Users:       map[string]User{},
-		Gateways:    map[string]Gateway{},
-		Agents:      map[string]Agent{},
-		Attachments: map[string]Attachment{},
-		Links:       map[string]Link{},
-		Grants:      map[string]Grant{},
-		Enrollments: map[string]Enrollment{},
-		NodeStatus:  map[string]NodeStatus{},
-		LinkStatus:  map[string]LinkStatus{},
-		GrantStatus: map[string]GrantStatus{},
+		Users:          map[string]User{},
+		Gateways:       map[string]Gateway{},
+		Agents:         map[string]Agent{},
+		Attachments:    map[string]Attachment{},
+		Links:          map[string]Link{},
+		Grants:         map[string]Grant{},
+		Enrollments:    map[string]Enrollment{},
+		NodeStatus:     map[string]NodeStatus{},
+		LinkStatus:     map[string]LinkStatus{},
+		GrantStatus:    map[string]GrantStatus{},
+		Updaters:       map[string]Updater{},
+		UpgradeTasks:   map[string]UpgradeTask{},
+		UpgradeBatches: map[string]UpgradeBatch{},
 	}
 }

@@ -31,14 +31,16 @@ type AgentLinkConfig struct {
 }
 
 type EnrollmentRequest struct {
-	Token  string     `json:"token"`
-	Role   model.Role `json:"role,omitempty"`
-	NodeID string     `json:"node_id,omitempty"`
+	Token       string     `json:"token"`
+	Role        model.Role `json:"role,omitempty"`
+	NodeID      string     `json:"node_id,omitempty"`
+	WantUpdater bool       `json:"want_updater,omitempty"`
 }
 
 type EnrollmentResponse struct {
-	Role       model.Role `json:"role"`
-	NodeID     string     `json:"node_id"`
-	Credential string     `json:"credential"`
-	ConfigURL  string     `json:"config_url"`
+	Role              model.Role `json:"role"`
+	NodeID            string     `json:"node_id"`
+	Credential        string     `json:"credential"`
+	ConfigURL         string     `json:"config_url"`
+	UpdaterCredential string     `json:"updater_credential,omitempty"`
 }

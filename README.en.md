@@ -65,11 +65,11 @@ sudo apt update
 sudo apt install -y ca-certificates curl tar coreutils
 ```
 
-On the Controller host only, install these additional tools and obtain the source. This README describes the current code; the installation example pins release `v0.3.2`. To use another published version, set `VERSION` to its exact tag and use matching source and release assets. See [Releases](https://github.com/Purestreams/xmesh/releases) for available versions.
+On the Controller host only, install these additional tools and obtain the source. This README describes the current code; the installation example pins release `v0.3.3`. To use another published version, set `VERSION` to its exact tag and use matching source and release assets. See [Releases](https://github.com/Purestreams/xmesh/releases) for available versions.
 
 ```sh
 sudo apt install -y git nginx certbot
-VERSION=v0.3.2
+VERSION=v0.3.3
 git clone --depth 1 --branch "$VERSION" https://github.com/Purestreams/xmesh.git
 cd xmesh
 ```
@@ -207,9 +207,13 @@ The panel refreshes status every 15 seconds while preserving inputs. Link histor
 
 ### Upgrades, rotation and backups
 
+The v0.3.3 release contains `xmesh-updater` for panel-issued node upgrades. v0.3.2 does not contain this helper. When migrating older installations, upgrade the Controller first, then install the helper on older nodes.
+
 - **Upgrade the Controller before Gateways and Agents.** Controller installers preserve existing settings and update `release_version`. Passing `--public-url` or an administrator password again does not overwrite the existing configuration. Older configurations missing `release_dir` need that field added manually and a restart to enable caching.
 - A Docker Controller can check GitHub's latest stable release and upgrade from the panel when the host has systemd, `flock`, `sort` and the updater helper. The host helper verifies assets, backs up and performs the upgrade; the Controller container has no Docker socket mount. Older installations first need a host-side run of a Docker installer that provides the helper.
-- Upgrade a systemd Controller with the matching release's `install-controller.sh`. Run generated Gateway / Agent upgrade commands on their existing hosts. Installers check startup, and node upgrades also check the reported version, restoring the previous installation when available on failure. An offline peer and an unhealthy Link are assessed separately from local upgrade failure.
+- Upgrade a systemd Controller with the matching release's `install-controller.sh`. New Gateway / Agent installations configure an independent host `xmesh-updater` service. In **System maintenance → Node upgrades**, select a fixed version and nodes; the helper claims tasks, verifies assets, checks the new process and configuration, and restores the old version on failure. Batch tasks run serially and pause when a previously healthy Link degrades.
+- For an older node, generate a one-time helper pairing token in **Node upgrades** and run the panel's verified `install-updater.sh` command on that node host. This preserves the node identity. Manual upgrade commands on paired nodes use the same host helper executor; unpaired nodes retain the original installer path. Docker nodes require systemd on the host for the helper; the business container has no Docker socket mount.
+- Upgrade history is stored in Controller state. Keep unfinished host job records and rollback material in `/var/lib/xmesh-updater/jobs` (systemd) or `updater/jobs` under the Docker installation directory when backing up or cleaning up.
 - Rotate node credentials with a new enrollment token and the panel's **rotate** command, preserving node identity. The old credential has up to 15 minutes of grace and is revoked on the first status report using the new credential. Use **Reset link** separately for a leaked subscription URL.
 - Deleting a Gateway / Agent in the panel removes related management objects but does not remotely uninstall its service. Stop or uninstall the service on the corresponding host.
 
@@ -243,6 +247,7 @@ mise install
 mise exec -- go test ./...
 mise exec -- go vet ./...
 mise exec -- go build -o bin/xmesh ./cmd/xmesh
+mise exec -- go build -o bin/xmesh-updater ./cmd/xmesh-updater
 node --test tests/panel.test.cjs
 ```
 
@@ -252,7 +257,7 @@ Node.js is used for panel tests, not production. Real-browser regression tests r
 pwsh tests/reality/multicontainer.ps1
 ```
 
-It starts a Controller, two Gateways, one Agent, two clients and a destination service, and checks TCP/UDP echo through both REALITY routes. Full CI also checks installer ports, rollback and the Controller updater; see the [CI configuration](.github/workflows/ci.yml).
+It starts a Controller, two Gateways, one Agent, two clients and a destination service, and checks TCP/UDP echo through both REALITY routes. Full CI also switches real Docker Compose node containers through an upgrade and rollback, and checks installer ports, migration and the Controller updater; see the [CI configuration](.github/workflows/ci.yml).
 
 | Path / document | Contents |
 | --- | --- |

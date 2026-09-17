@@ -36,12 +36,17 @@ type releaseAssetStatus struct {
 }
 
 func releaseAssets(version string) []string {
-	return []string{
+	assets := []string{
 		"SHA256SUMS", "install.sh", "install-docker.sh", "install-controller.sh", "backup-controller.sh", "THIRD_PARTY_NOTICES.md",
 		"xmesh-" + version + "-linux-amd64.tar.gz",
 		"xmesh-" + version + "-linux-arm64.tar.gz",
 		"xmesh-" + version + "-windows-amd64.exe",
 	}
+	var major, minor, patch int
+	if n, _ := fmt.Sscanf(version, "v%d.%d.%d", &major, &minor, &patch); n == 3 && (major > 0 || minor > 3 || minor == 3 && patch > 2) {
+		assets = append(assets, "install-updater.sh")
+	}
+	return assets
 }
 
 func (s *Server) releaseDirectory() string {
@@ -130,17 +135,47 @@ func isReleaseAsset(version, name string) bool {
 
 func (s *Server) releaseAsset(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("asset")
-	if !s.releaseEnabled() || r.PathValue("version") != s.cfg.ReleaseVersion || !isReleaseAsset(s.cfg.ReleaseVersion, name) {
+	version := r.PathValue("version")
+	if !s.releaseVersionAllowed(version) {
 		http.NotFound(w, r)
 		return
 	}
-	if err := s.ensureReleaseAsset(r.Context(), name); err != nil {
+	provider := s.releaseServer(version)
+	if !provider.releaseEnabled() || !isReleaseAsset(version, name) {
+		http.NotFound(w, r)
+		return
+	}
+	if err := provider.ensureReleaseAsset(r.Context(), name); err != nil {
 		s.logger.Error("fetch release asset", "asset", name, "error", err)
 		http.Error(w, "release asset unavailable; retry or use GitHub directly", http.StatusBadGateway)
 		return
 	}
 	w.Header().Set("Cache-Control", "public, max-age=3600, immutable")
-	http.ServeFile(w, r, filepath.Join(s.releaseDirectory(), name))
+	http.ServeFile(w, r, filepath.Join(provider.releaseDirectory(), name))
+}
+
+func (s *Server) releaseServer(version string) *Server {
+	if version == s.cfg.ReleaseVersion {
+		return s
+	}
+	cfg := s.cfg
+	cfg.ReleaseVersion = version
+	return &Server{cfg: cfg, store: s.store, logger: s.logger, now: s.now, releaseHTTPClient: s.releaseHTTPClient, releaseMu: s.releaseMu}
+}
+
+func (s *Server) releaseVersionAllowed(version string) bool {
+	if version == s.cfg.ReleaseVersion {
+		return true
+	}
+	if !releaseVersionPattern.MatchString(version) {
+		return false
+	}
+	for _, task := range s.store.Snapshot().UpgradeTasks {
+		if task.TargetVersion == version && task.Stage != "cancelled" {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Server) ensureReleaseAsset(ctx context.Context, name string) error {

@@ -45,8 +45,9 @@ exit 1
 EOF
 printf 'xray\n' >"$test_dir/package/xray"
 cp scripts/controller-updater.sh "$test_dir/package/controller-updater.sh"
-chmod 755 "$test_dir/bin/curl" "$test_dir/bin/docker" "$test_dir/bin/systemctl" "$test_dir/bin/sleep" "$test_dir/package/xmesh" "$test_dir/package/xray" "$test_dir/package/controller-updater.sh"
-tar -C "$test_dir/package" -czf "$test_dir/assets/xmesh-v0.2.3-linux-amd64.tar.gz" xmesh xray controller-updater.sh
+printf 'node-updater\n' >"$test_dir/package/xmesh-updater"
+chmod 755 "$test_dir/bin/curl" "$test_dir/bin/docker" "$test_dir/bin/systemctl" "$test_dir/bin/sleep" "$test_dir/package/xmesh" "$test_dir/package/xray" "$test_dir/package/controller-updater.sh" "$test_dir/package/xmesh-updater"
+tar -C "$test_dir/package" -czf "$test_dir/assets/xmesh-v0.2.3-linux-amd64.tar.gz" xmesh xmesh-updater xray controller-updater.sh
 (cd "$test_dir/assets" && sha256sum xmesh-v0.2.3-linux-amd64.tar.gz >SHA256SUMS)
 printf '{"listen":"127.0.0.1:8088","release_version":"v0.2.2"}\n' >"$test_dir/install/config/controller.json"
 printf 'old-compose\n' >"$test_dir/install/compose.yaml"

@@ -81,16 +81,19 @@ type dashboardUser struct {
 	Publication string `json:"publication"`
 }
 type dashboardData struct {
-	At         time.Time                     `json:"at"`
-	Revision   uint64                        `json:"revision"`
-	Nodes      []dashboardNode               `json:"nodes"`
-	Routes     []dashboardRoute              `json:"routes"`
-	Links      []dashboardLink               `json:"links"`
-	Users      []dashboardUser               `json:"users"`
-	Grants     []dashboardGrant              `json:"grants"`
-	History    map[string][]model.LinkSample `json:"history"`
-	Operations []model.Operation             `json:"operations"`
-	Upgrade    controllerUpgradeView         `json:"upgrade"`
+	At             time.Time                     `json:"at"`
+	Revision       uint64                        `json:"revision"`
+	Nodes          []dashboardNode               `json:"nodes"`
+	Routes         []dashboardRoute              `json:"routes"`
+	Links          []dashboardLink               `json:"links"`
+	Users          []dashboardUser               `json:"users"`
+	Grants         []dashboardGrant              `json:"grants"`
+	History        map[string][]model.LinkSample `json:"history"`
+	Operations     []model.Operation             `json:"operations"`
+	Upgrade        controllerUpgradeView         `json:"upgrade"`
+	UpgradeTasks   []model.UpgradeTask           `json:"upgrade_tasks"`
+	Updaters       map[string]updaterView        `json:"updaters"`
+	UpgradeBatches map[string]model.UpgradeBatch `json:"upgrade_batches"`
 }
 
 // panelState is shared by HTML and JSON, including heartbeat expiry semantics.
@@ -113,7 +116,7 @@ func (s *Server) panelState() model.State {
 
 func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 	state := s.panelState()
-	data := dashboardData{At: s.now().UTC(), Revision: state.Revision, Nodes: []dashboardNode{}, Routes: []dashboardRoute{}, Links: []dashboardLink{}, Users: []dashboardUser{}, Grants: []dashboardGrant{}, History: map[string][]model.LinkSample{}, Operations: state.Operations, Upgrade: s.controllerUpgradeStatus()}
+	data := dashboardData{At: s.now().UTC(), Revision: state.Revision, Nodes: []dashboardNode{}, Routes: []dashboardRoute{}, Links: []dashboardLink{}, Users: []dashboardUser{}, Grants: []dashboardGrant{}, History: map[string][]model.LinkSample{}, Operations: state.Operations, Upgrade: s.controllerUpgradeStatus(), UpgradeTasks: sortedUpgradeTasks(state), Updaters: updaterViews(state, s.now()), UpgradeBatches: state.UpgradeBatches}
 	for _, node := range sortedGateways(state) {
 		data.Nodes = append(data.Nodes, dashboardNode{ID: node.ID, Name: node.Name, Role: "Gateway", Host: node.PublicHost, Region: node.Region, Target: node.RealityTarget, Enabled: node.Enabled, Enrolled: node.CredentialHash != "", Desired: node.DesiredVersion, Status: state.NodeStatus[node.ID], Next: nextDeploymentAction(state, node.ID, model.RoleGateway)})
 	}

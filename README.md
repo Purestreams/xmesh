@@ -65,11 +65,11 @@ sudo apt update
 sudo apt install -y ca-certificates curl tar coreutils
 ```
 
-仅在 Controller 主机安装以下工具并取得源码。本文说明当前代码行为，安装示例固定使用 `v0.3.2`；选择其他已发布版本时，将 `VERSION` 改为对应的精确 tag，源码与安装包使用同一版本。可用版本见 [Releases](https://github.com/Purestreams/xmesh/releases)。
+仅在 Controller 主机安装以下工具并取得源码。本文说明当前代码行为，安装示例固定使用 `v0.3.3`；选择其他已发布版本时，将 `VERSION` 改为对应的精确 tag，源码与安装包使用同一版本。可用版本见 [Releases](https://github.com/Purestreams/xmesh/releases)。
 
 ```sh
 sudo apt install -y git nginx certbot
-VERSION=v0.3.2
+VERSION=v0.3.3
 git clone --depth 1 --branch "$VERSION" https://github.com/Purestreams/xmesh.git
 cd xmesh
 ```
@@ -207,9 +207,13 @@ Controller 状态保存在 `controller-state.json`，不需要额外数据库。
 
 ### 升级、轮换与备份
 
+v0.3.3 Release 包含 `xmesh-updater`，可由面板下发节点升级。v0.3.2 没有该助手；从旧版本迁移时先升级 Controller，再为旧节点安装助手。
+
 - **先升级 Controller，再升级 Gateway / Agent。** Controller 安装器保留既有配置并更新 `release_version`；不要假设再次传入 `--public-url` 或管理密码会覆盖原配置。旧配置缺少 `release_dir` 时需手工补齐并重启，才能启用缓存。
 - Docker Controller 在宿主机具备 systemd、`flock`、`sort` 和升级助手时，可在面板检查 GitHub 最新正式版并升级。助手在宿主机校验、备份和执行升级，Controller 容器不挂载 Docker socket。旧安装需先在宿主机运行支持该助手的 Docker 安装器。
-- systemd Controller 通过对应版本的 `install-controller.sh` 升级；Gateway / Agent 使用面板生成的升级命令，在各自原主机执行。安装器检查启动状态，节点升级还检查上报版本；失败时恢复已有的前一版本。对端离线导致 Link 不可用与本机升级失败分开判断。
+- systemd Controller 通过对应版本的 `install-controller.sh` 升级。Gateway / Agent 新安装会在宿主机配置独立的 `xmesh-updater` 服务；在 **系统维护 → 节点升级** 选择固定版本和节点即可下发任务。助手主动领取，校验安装包，验收新进程及配置，失败时恢复旧版本。批量任务串行执行，线路退化时暂停。
+- 老节点先在 **节点升级** 中生成一次性助手配对令牌，在节点宿主机执行面板提供的 `install-updater.sh` 命令；此操作保留节点身份。已配对节点的手动升级命令也调用同一助手执行器；未迁移节点仍使用原安装器。Docker 节点的助手运行在宿主机，要求宿主机有 systemd；业务容器不挂载 Docker socket。
+- 助手升级记录保存在 Controller 状态文件，宿主机上的任务记录和回滚材料保存在 `/var/lib/xmesh-updater/jobs`（systemd）或安装目录的 `updater/jobs`（Docker）。备份和清理时保留未完成任务的记录。
 - 节点凭据轮换使用新注册令牌和面板的 **rotate** 命令，保留节点身份。旧凭据最多有 15 分钟宽限期，新凭据首次上报后立即撤销旧凭据。订阅泄露时单独使用 **Reset link**。
 - 删除面板中的 Gateway / Agent 会删除相关管理对象，但不会远程卸载主机服务；停用和卸载需在对应主机处理。
 
@@ -243,6 +247,7 @@ mise install
 mise exec -- go test ./...
 mise exec -- go vet ./...
 mise exec -- go build -o bin/xmesh ./cmd/xmesh
+mise exec -- go build -o bin/xmesh-updater ./cmd/xmesh-updater
 node --test tests/panel.test.cjs
 ```
 
@@ -252,7 +257,7 @@ Node.js 用于面板测试，不是生产运行依赖。真实浏览器回归需
 pwsh tests/reality/multicontainer.ps1
 ```
 
-该测试启动 Controller、两个 Gateway、一个 Agent、两个客户端及目标服务容器，检查两条 REALITY 路由的 TCP/UDP 回显。完整 CI 还包含安装器端口检查、回滚和 Controller 升级助手测试，见 [CI 配置](.github/workflows/ci.yml)。
+该测试启动 Controller、两个 Gateway、一个 Agent、两个客户端及目标服务容器，检查两条 REALITY 路由的 TCP/UDP 回显。完整 CI 还用真实 Docker Compose 容器验证节点升级与自动回滚，并检查安装器、迁移脚本和 Controller 升级助手，见 [CI 配置](.github/workflows/ci.yml)。
 
 | 目录 / 文档 | 内容 |
 | --- | --- |

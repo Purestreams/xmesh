@@ -1,9 +1,9 @@
-# Deployment automation (v0.3.2)
+# Deployment automation (v0.3.3)
 
-This guide targets the v0.3.2 Controller and node binaries. Upgrade an
-existing Controller first and set its `release_version` to `v0.3.2`. The v0.2.0
+This guide targets the v0.3.3 Controller and node binaries. Upgrade an
+existing Controller first and set its `release_version` to `v0.3.3`. The v0.2.0
 Controller does not offer the new panel controls. Node installers obtain
-verified v0.3.2 assets from GitHub or the Controller's on-demand cache.
+verified v0.3.3 assets from GitHub or the Controller's on-demand cache.
 The v0.2.1 Controller's on-demand cache rejects its release manifest and
 returns 502; upgrade the Controller before selecting a cached install command.
 
@@ -47,13 +47,40 @@ VMess/WS; REALITY is only the Gateway-to-Agent transport.
 
 ## Upgrade, rotate, and back up
 
-The panel generates fixed-version upgrade commands for existing nodes. The
-Docker installer preserves the previous image and Compose definition, checks
-container startup plus the node-reported binary version, and restores the
-previous image on failure. The systemd installer restarts and checks the
-reported version, restoring its previous binaries on failure. Link health is
-separate: an offline peer is not itself grounds for rolling back an otherwise
-healthy node upgrade.
+The v0.3.2 release predates the node updater. The panel task flow below
+requires v0.3.3 or later, containing `xmesh-updater` and `install-updater.sh`;
+upgrade the Controller and its configured release version before pairing older nodes.
+
+The panel can create fixed-version Gateway and Agent upgrade tasks after a host
+updater is paired. Each host helper polls the Controller over HTTPS with its own
+credential, downloads the verified archive, saves persistent rollback material,
+switches the service, and verifies a fresh process instance and applied
+configuration for 30 seconds. Docker nodes retain the previous immutable image;
+systemd nodes retain the previous binaries. A failed local check rolls back;
+loss of Controller status leaves the result pending confirmation. Batch tasks
+run one node at a time and pause on failure or degradation of a previously
+healthy Link. Cancel pending tasks before the helper claims them.
+
+New node installers configure the helper by default. Older nodes need one
+host-side migration: generate a pairing token in **Node upgrades** and run the
+panel's verified `install-updater.sh` command on that host. For Docker, use the
+actual installation directory when it differs from the default. The migration
+does not replace the node identity or business binary. The helper needs root,
+systemd, HTTPS access to Controller, and Docker Compose for Docker nodes.
+Its root-only configuration is `/etc/xmesh/updater.json` for systemd or
+`updater/config.json` in the Docker installation directory. Unfinished jobs live
+in `/var/lib/xmesh-updater/jobs` or `updater/jobs`, respectively.
+
+The panel also generates manual fixed-version upgrade commands. On paired nodes,
+these installers call the host helper's `local` command and use the same durable
+switch, health check and rollback path as panel-issued tasks. A manual run first
+reserves the node in Controller and refuses to overlap a queued or running task.
+The installer saves the reservation ID locally before sending it; if the
+Controller response is lost, the helper retries that ID and closes the task as
+failed before any service switch. On older unpaired nodes, the installers
+retain their original backup and rollback path. Link
+health is separate: an offline peer is not itself grounds for rolling back an
+otherwise healthy node upgrade.
 Upgrade the Controller first so `/api/v1/self/status` is available to the node
 installers, then upgrade Gateways and Agents.
 
@@ -63,14 +90,14 @@ same node identity atomically. The previous credential has a 15-minute grace
 period and is revoked as soon as the new node reports status. Unused tokens can
 be revoked from the panel. Subscription links can be reset separately.
 
-On a Docker Controller host with a v0.3.2 source checkout, run:
+On a Docker Controller host with a v0.3.3 source checkout, run:
 
 ```sh
 sudo sh scripts/backup-controller.sh /opt/xmesh-docker-controller /var/backups/xmesh-controller
 ```
 
-The helper is also a v0.3.2 release asset and is available from the
-Controller's on-demand `/releases/v0.3.2/backup-controller.sh` URL. If the
+The helper is also a v0.3.3 release asset and is available from the
+Controller's on-demand `/releases/v0.3.3/backup-controller.sh` URL. If the
 source checkout is absent, download the helper and `SHA256SUMS` from the same
 release source, verify the helper with `sha256sum -c`, then run it as root.
 
@@ -84,7 +111,7 @@ be downloaded again and are not part of the backup.
 ## One-click Controller upgrade
 
 The first upgrade from a Docker Controller older than v0.2.3 is manual. Use the
-verified v0.3.2 `install-docker.sh` from GitHub on the Controller host; the
+verified v0.3.3 `install-docker.sh` from GitHub on the Controller host; the
 v0.2.1 Controller cache is broken. On a systemd host the installer registers
 `xmesh-controller-updater.timer` and a root-owned helper outside the Controller
 container. It does **not** mount the Docker socket into the web process.
@@ -98,8 +125,8 @@ installer checks startup and restores the previous image and configuration on
 failure. The panel shows queued, running, succeeded, failed, or up-to-date;
 host-side details are in `journalctl -u xmesh-controller-updater.service`.
 
-This button upgrades the **Controller only**. Gateway and Agent upgrades still
-require running their generated commands on their respective hosts. The host
+This button upgrades the **Controller only**. Gateway and Agent upgrades use
+their own **Node upgrades** panel section after the host helper is paired. The host
 helper needs GitHub access, systemd, `flock`, `sort`, Docker Compose, and the
 same trust in GitHub release assets as the manual installer. Keep backups
 off-host. If systemd is unavailable, the panel leaves the button disabled.

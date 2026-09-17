@@ -49,6 +49,9 @@ if [ -z "$install_dir" ]; then install_dir="/opt/xmesh-docker-$role"; fi
 case "$install_dir" in /*) ;; *) echo '--install-dir must be an absolute path' >&2; exit 2;; esac
 case "$install_dir" in /|/etc|/opt|/var|/usr) echo '--install-dir must name a dedicated directory' >&2; exit 2;; esac
 if [ "$role" != controller ]; then
+  case "$install_dir" in *[!a-zA-Z0-9_./-]*) echo 'node updater requires an install directory without spaces or shell metacharacters' >&2; exit 2;; esac
+fi
+if [ "$role" != controller ]; then
   case "$controller" in https://*) ;; *) echo '--controller must use HTTPS' >&2; exit 2;; esac
   curl --fail --silent --show-error --max-time 15 "${controller%/}/healthz" >/dev/null || {
     echo "Controller HTTPS health check failed: ${controller%/}/healthz" >&2
@@ -72,7 +75,7 @@ trap 'rm -rf "$work"' EXIT HUP INT TERM
 curl --fail --location --retry 3 --proto '=https' --proto-redir '=https' --output "$work/$archive" "$base/$archive"
 curl --fail --location --retry 3 --proto '=https' --proto-redir '=https' --output "$work/SHA256SUMS" "$base/SHA256SUMS"
 (cd "$work" && grep "  $archive\$" SHA256SUMS | sha256sum -c -)
-tar -xzf "$work/$archive" -C "$work" xmesh xray controller-updater.sh
+tar -xzf "$work/$archive" -C "$work" xmesh xmesh-updater xray controller-updater.sh
 "$work/xmesh" version >/dev/null
 
 install -d -m 0750 "$install_dir" "$install_dir/config" "$install_dir/data" "$install_dir/image"
@@ -128,11 +131,60 @@ else
       printf '\n' >/dev/tty
     fi
     if [ "$rotate_credential" = true ]; then
-      printf '%s' "$token" | "$work/xmesh" enroll --controller "$controller" --role "$role" --token-stdin --replace --output "$install_dir/config/$config_name"
+      printf '%s' "$token" | "$work/xmesh" enroll --controller "$controller" --role "$role" --token-stdin --replace --output "$install_dir/config/$config_name" --updater-output "$install_dir/updater/config.json" --updater-mode docker --updater-install-dir "$install_dir"
     else
-      printf '%s' "$token" | "$work/xmesh" enroll --controller "$controller" --role "$role" --token-stdin --output "$install_dir/config/$config_name"
+      printf '%s' "$token" | "$work/xmesh" enroll --controller "$controller" --role "$role" --token-stdin --output "$install_dir/config/$config_name" --updater-output "$install_dir/updater/config.json" --updater-mode docker --updater-install-dir "$install_dir"
     fi
   fi
+fi
+
+install_node_updater_service() {
+  if [ ! -f "$install_dir/updater/config.json" ]; then
+    echo 'updater identity is missing; generate a pairing token in the Controller panel' >&2
+    return
+  fi
+  if [ ! -d /run/systemd/system ] || ! command -v systemctl >/dev/null 2>&1; then
+    echo 'node is running; remote upgrades require systemd on the Docker host' >&2
+    return
+  fi
+  node_id=$(sed -n 's/.*"node_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$install_dir/config/node.json" | head -n 1)
+  case "$node_id" in ''|*[!a-zA-Z0-9_-]*) echo 'invalid node ID for updater service' >&2; exit 1;; esac
+  install -d -m 0700 "$install_dir/updater"
+  install -m 0700 "$work/xmesh-updater" "$install_dir/updater/xmesh-updater.new"
+  mv -f "$install_dir/updater/xmesh-updater.new" "$install_dir/updater/xmesh-updater"
+  cat >"/etc/systemd/system/xmesh-updater-$node_id.service" <<EOF
+[Unit]
+Description=xmesh host upgrade assistant for $node_id
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=$install_dir/updater/xmesh-updater run --config $install_dir/updater/config.json
+Restart=always
+RestartSec=10s
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  systemctl daemon-reload
+  systemctl enable "xmesh-updater-$node_id.service"
+  systemctl restart "xmesh-updater-$node_id.service"
+}
+
+if [ "$role" != controller ] && [ -f "$install_dir/compose.yaml" ] && [ -x "$install_dir/image/xmesh" ] && [ -f "$install_dir/updater/config.json" ]; then
+  chown -R 10001:10001 "$install_dir/config" "$install_dir/data"
+  node_id=$(sed -n 's/.*"node_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$install_dir/config/node.json" | head -n 1)
+  case "$node_id" in ''|*[!a-zA-Z0-9_-]*) echo 'invalid node id' >&2; exit 1;; esac
+  archive_sha=$(grep "  $archive\$" "$work/SHA256SUMS" | cut -d ' ' -f 1)
+  systemctl stop "xmesh-updater-$node_id.service"
+  if ! "$work/xmesh-updater" local --config "$install_dir/updater/config.json" --version "$version" --archive "$work/$archive" --sha256 "$archive_sha"; then
+    systemctl restart "xmesh-updater-$node_id.service" 2>/dev/null || true
+    exit 1
+  fi
+  install_node_updater_service
+  echo "xmesh $role is running from $install_dir; logs: sudo docker compose -f $install_dir/compose.yaml logs -f"
+  exit 0
 fi
 
 previous="$work/previous"
@@ -234,6 +286,10 @@ if [ "$started" != true ]; then
     (cd "$install_dir" && docker compose up -d --build) || echo 'automatic rollback failed; inspect the previous installation' >&2
     echo 'previous image and Compose definition restored' >&2
   fi
+  if [ "$role" != controller ] && [ -f "$install_dir/updater/config.json" ] && command -v systemctl >/dev/null 2>&1; then
+    node_id=$(sed -n 's/.*"node_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$install_dir/config/node.json" | head -n 1)
+    case "$node_id" in ''|*[!a-zA-Z0-9_-]*) ;; *) systemctl restart "xmesh-updater-$node_id.service" 2>/dev/null || true;; esac
+  fi
   exit 1
 fi
 if [ "$role" = controller ]; then
@@ -278,4 +334,5 @@ EOF
     echo 'Controller is running; one-click upgrades require systemd, flock, and sort on this host' >&2
   fi
 fi
+if [ "$role" != controller ]; then install_node_updater_service; fi
 echo "xmesh $role is running from $install_dir; logs: sudo docker compose -f $install_dir/compose.yaml logs -f"

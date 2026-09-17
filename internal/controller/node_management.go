@@ -111,6 +111,9 @@ func (s *Server) deleteGateway(w http.ResponseWriter, r *http.Request) {
 		if r.FormValue("confirm_name") != gateway.Name {
 			return fmt.Errorf("confirmation name does not match")
 		}
+		if nodeHasActiveUpgrade(state, gateway.ID) {
+			return fmt.Errorf("gateway has an active upgrade; wait for completion or cancel the pending task")
+		}
 		removed := map[string]bool{gateway.ID: true}
 		delete(state.Gateways, gateway.ID)
 		removeNodeReferences(state, removed)
@@ -131,6 +134,9 @@ func (s *Server) deleteAgent(w http.ResponseWriter, r *http.Request) {
 		}
 		if r.FormValue("confirm_name") != agent.Name {
 			return fmt.Errorf("confirmation name does not match")
+		}
+		if nodeHasActiveUpgrade(state, agent.ID) {
+			return fmt.Errorf("agent has an active upgrade; wait for completion or cancel the pending task")
 		}
 		delete(state.Agents, agent.ID)
 		removeNodeReferences(state, map[string]bool{agent.ID: true})
@@ -160,6 +166,18 @@ func removeNodeReferences(state *model.State, removed map[string]bool) {
 			delete(state.NodeStatus, id)
 		}
 	}
+	for id := range removed {
+		delete(state.Updaters, id)
+	}
+}
+
+func nodeHasActiveUpgrade(state *model.State, nodeID string) bool {
+	for _, task := range state.UpgradeTasks {
+		if task.NodeID == nodeID && activeUpgrade(task.Stage) {
+			return true
+		}
+	}
+	return false
 }
 
 func removeAttachment(state *model.State, id string) {

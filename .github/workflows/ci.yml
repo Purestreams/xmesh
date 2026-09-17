@@ -53,15 +53,28 @@ jobs:
           cache: true
       - run: mise exec -- go test ./...
       - run: mise exec -- go vet ./...
+      - name: Real Docker Compose node upgrade and rollback
+        shell: bash
+        run: |
+          set -euo pipefail
+          CGO_ENABLED=0 mise exec -- go test -c -o "$RUNNER_TEMP/xmesh-updater.test" ./internal/updater
+          docker run --rm \
+            --mount "type=bind,source=/var/run/docker.sock,target=/var/run/docker.sock" \
+            --mount "type=bind,source=$RUNNER_TEMP/xmesh-updater.test,target=/tmp/xmesh-updater.test,readonly" \
+            -e XMESH_REAL_DOCKER_TEST=1 \
+            docker:29-cli /tmp/xmesh-updater.test -test.run '^TestRealDockerComposeUpgradeAndRollback$' -test.v
       - name: REALITY end-to-end in Docker
         run: |
           docker build -f tests/reality/Dockerfile -t xmesh-reality-test:ci tests/reality
           docker run --rm --mount "type=bind,source=$PWD,target=/src" xmesh-reality-test:ci
-      - run: sh -n scripts/install.sh scripts/install-controller.sh scripts/install-docker.sh scripts/backup-controller.sh scripts/controller-updater.sh scripts/package.sh tests/install_docker_rollback.sh tests/install_gateway_ports.sh tests/controller_updater.sh
+      - run: sh -n scripts/install.sh scripts/install-controller.sh scripts/install-docker.sh scripts/install-updater.sh scripts/backup-controller.sh scripts/controller-updater.sh scripts/package.sh tests/install_docker_rollback.sh tests/install_gateway_ports.sh tests/controller_updater.sh
       - run: docker run --rm --mount "type=bind,source=$PWD,target=/src" -w /src golang:1.27.1-bookworm sh tests/install_gateway_ports.sh
       - run: sudo sh tests/install_docker_rollback.sh
       - run: sudo sh tests/controller_updater.sh
       - run: docker run --rm --mount "type=bind,source=$PWD,target=/src" -w /src golang:1.27.1-bookworm sh tests/controller_updater_install.sh
+      - run: docker run --rm --mount "type=bind,source=$PWD,target=/src" -w /src golang:1.27.1-bookworm sh tests/install_updater.sh
+      - run: docker run --rm --mount "type=bind,source=$PWD,target=/src" -w /src golang:1.27.1-bookworm sh tests/install_uninstall.sh
+      - run: docker run --rm --mount "type=bind,source=$PWD,target=/src" -w /src golang:1.27.1-bookworm sh tests/install_systemd_rollback.sh
 
   build:
     needs: [test, panel]

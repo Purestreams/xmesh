@@ -129,6 +129,42 @@ func TestEnrollmentTokenIsSingleUse(t *testing.T) {
 	}
 }
 
+func TestEnrollmentDuringUpgradePreservesCredentialsAndToken(t *testing.T) {
+	now := time.Now().UTC()
+	server, state := testServer(t, func(s *model.State) error {
+		s.Agents["a"] = model.Agent{ID: "a", Enabled: true, CredentialHash: auth.SecretHash("old-node")}
+		s.Updaters = map[string]model.Updater{"a": {NodeID: "a", Role: model.RoleAgent, CredentialHash: auth.SecretHash("old-helper")}}
+		s.UpgradeTasks = map[string]model.UpgradeTask{"task": {ID: "task", NodeID: "a", Stage: "switching"}}
+		s.Enrollments["e"] = model.Enrollment{ID: "e", NodeID: "a", Role: model.RoleAgent, TokenHash: auth.SecretHash("rotate"), ExpiresAt: now.Add(time.Hour)}
+		return nil
+	})
+	server.now = time.Now
+	request := func() *httptest.ResponseRecorder {
+		r := httptest.NewRequest(http.MethodPost, "/api/v1/enroll", strings.NewReader(`{"token":"rotate","role":"agent","node_id":"a","want_updater":true}`))
+		w := httptest.NewRecorder()
+		server.Handler().ServeHTTP(w, r)
+		return w
+	}
+	if w := request(); w.Code != http.StatusConflict {
+		t.Fatalf("rotation during upgrade: %d %s", w.Code, w.Body.String())
+	}
+	snapshot := state.Snapshot()
+	if snapshot.Agents["a"].CredentialHash != auth.SecretHash("old-node") || snapshot.Updaters["a"].CredentialHash != auth.SecretHash("old-helper") || !snapshot.Enrollments["e"].UsedAt.IsZero() {
+		t.Fatal("rejected rotation changed credentials or consumed the token")
+	}
+	if err := state.Update(func(s *model.State) error {
+		task := s.UpgradeTasks["task"]
+		task.Stage = "succeeded"
+		s.UpgradeTasks["task"] = task
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if w := request(); w.Code != http.StatusCreated {
+		t.Fatalf("rotation after upgrade: %d %s", w.Code, w.Body.String())
+	}
+}
+
 func TestPanelRendersPopulatedRelationshipTables(t *testing.T) {
 	server, _ := testServer(t, func(s *model.State) error {
 		s.Users["u"] = model.User{ID: "u", Name: "User", Enabled: true}
