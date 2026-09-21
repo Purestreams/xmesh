@@ -8,11 +8,13 @@ XMesh 将客户端入口与实际出口分开：Gateway 提供可访问的入口
 
 适用于出口机器位于 NAT 后、无法开放入站端口，或需要用多个 Gateway 共享同一个 Agent 出口的场景。Gateway 仍须能被客户端和 Agent 访问；Agent 无需公网 IP 或入站端口映射。
 
-```text
-业务流量：客户端 ── VMess / WebSocket ──► Gateway ── 隧道 ──► Agent ──► 目标网络
-隧道建连：                                Gateway ◄── REALITY ── Agent 主动连接
-管理通信：                 Controller ◄── HTTPS 配置拉取 / 状态上报 ── Gateway、Agent
-```
+## 架构一览
+
+![XMesh 架构：Controller 管理 Gateway 和 Agent，客户端流量经 Gateway 与 Agent 到达目标网络](docs/assets/xmesh-architecture-zh.png)
+
+- **数据面：** 客户端通过 VMess/WebSocket 连接 Gateway，业务流量经 REALITY + smux v2 隧道转发到 Agent，再由 Agent 访问目标网络。
+- **公网要求：** 只有 Gateway 需要公网 IP；Agent 主动连接 Gateway，不需要公网 IP 或入站端口映射。
+- **管理面：** Gateway 和 Agent 通过 HTTPS 从 Controller 拉取配置并上报状态；Controller 不转发用户流量。
 
 ## 当前能力
 

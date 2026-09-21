@@ -8,11 +8,13 @@ XMesh separates the client entry point from the actual exit. A reachable Gateway
 
 Use it when an exit machine sits behind NAT, cannot accept inbound connections, or needs to serve several Gateways. The Gateway must remain reachable by both clients and the Agent. The Agent needs neither a public IP nor inbound port forwarding.
 
-```text
-Traffic:       Client ── VMess / WebSocket ──► Gateway ── tunnel ──► Agent ──► destination
-Tunnel setup:                                Gateway ◄── REALITY ── Agent initiates
-Management:                  Controller ◄── HTTPS config polling / status ── Gateway, Agent
-```
+## Architecture at a glance
+
+![XMesh architecture: the Controller manages the Gateway and Agent while client traffic reaches the destination through them](docs/assets/xmesh-architecture.png)
+
+- **Data plane:** Clients connect to the Gateway over VMess/WebSocket. Traffic crosses the REALITY + smux v2 tunnel to the Agent, which accesses the destination.
+- **Public IP requirement:** Only the Gateway requires a public IP. The Agent initiates its connection to the Gateway and needs neither a public IP nor inbound port forwarding.
+- **Control plane:** The Gateway and Agent poll configuration from the Controller and report status over HTTPS. The Controller never forwards user traffic.
 
 ## Capabilities
 
