@@ -18,12 +18,26 @@ entered batch target overrides defaults only for Gateways without an existing
 target. Older Gateways retain an unset location until it is explicitly selected;
 their location is never guessed from names or IP addresses.
 
-Use **部署向导** to create a new route or reuse existing nodes. New-route setup
-creates the Gateway, Agent, attachment and Link atomically. Entering a public
-host fills the default REALITY URL unless the URL was manually edited. Advanced
-ports, CIDRs and transport settings remain editable. For existing nodes, choose
-an Agent and Gateways; missing associations and Links are created by the existing
-transactional assignment handler. An unassigned matrix cell preselects this pair.
+Use **部署向导** to create a complete route, add a Gateway, add an Agent, or reuse
+existing nodes. The separate Gateway and Agent entries create only that node;
+the wizard then guides installation, binding, readiness checks, and user access.
+An unbound node is shown as created but without a usable route. Complete-route
+setup creates the Gateway, Agent, attachment and Link atomically. Entering a
+public host fills the default REALITY URL unless the URL was manually edited.
+Advanced ports, CIDRs and transport settings remain editable. For existing nodes,
+choose an Agent and Gateways; missing associations and Links are created by the
+existing transactional assignment handler. An unassigned matrix cell preselects
+this pair. Installation commands are generated from each created node.
+
+For an external exit, use **外部出口** on the network page.
+Paste a single `vmess://` or `vless://` link, or a subscription URL. A subscription with several
+supported nodes requires an explicit selection. Bind the exit to a Gateway, then
+grant the resulting route in the same **用户与订阅** chooser used for Agent routes.
+The Gateway applies a VMess or VLESS outbound directly;
+there is no Agent installation or Link for this route. Subscription refresh runs
+every 30 minutes and can be requested manually. A failed fetch retains the last
+valid endpoint; a successful refresh that loses the selected node disables it.
+The dashboard reports applied configuration separately from upstream reachability.
 
 Installation commands are generated per node and shown in a dialog. Run them on
 the corresponding host. The panel does not remotely execute host commands. The
@@ -32,8 +46,9 @@ readiness and a usable route. Route readiness requires both nodes to be enabled,
 online and ready, their desired configuration to be applied, Gateway Xray to be
 ready, and both endpoints to report the same enabled Link ready.
 
-In **用户与订阅**, choose a user and routes. Search, state filters and Gateway
-grouping affect the candidates shown. **全选筛选结果** selects only visible,
+In **用户与订阅**, choose a user and routes, including external routes.
+Search, state filters and Gateway grouping affect the candidates shown.
+**全选筛选结果** selects only visible,
 enabled candidates, keeping any previously selected hidden candidates. The
 counter includes all selected candidates. **清除选择** clears all selections in
 that form; it never revokes existing assignments or grants. The preview shows

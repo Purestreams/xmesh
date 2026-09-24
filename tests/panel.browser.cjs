@@ -157,6 +157,40 @@ const fs = require("node:fs");
     assert.match(await page.locator('#node-upgrades form[action="/admin/upgrades"] fieldset').textContent(), /Agent Home Network · 在线 · v0\.3\.4/);
     await page.locator("#operation-list tbody tr").first().waitFor();
     assert.ok((await page.locator("#operation-list tbody tr").count()) >= 4);
+    // Create each node type through the deployment wizard, then connect an external exit.
+    await page.goto(base + "/#wizard-gateway");
+    await page.locator('#wizard-gateway input[name="name"]').fill("Browser QA Gateway");
+    await page.locator('#wizard-gateway input[name="public_host"]').fill("qa.example.com");
+    await page.locator('#wizard-gateway select[name="region"]').selectOption("overseas");
+    await page.locator('#wizard-gateway form[action="/admin/gateways"] button').click();
+    await page.locator("#wizard-gateway .form-success").waitFor();
+    await page.goto(base + "/#wizard-agent");
+    await page.locator('#wizard-agent input[name="name"]').fill("Browser QA Agent");
+    await page.locator('#wizard-agent form[action="/admin/agents"] button').click();
+    await page.locator("#wizard-agent .form-success").waitFor();
+    await page.goto(base + "/#quick-install");
+    await page.getByRole("button", { name: "安装 Gateway：Browser QA Gateway" }).waitFor();
+    await page.getByRole("button", { name: "安装 Agent：Browser QA Agent" }).waitFor();
+    await page.goto(base + "/#upstreams");
+    const sampleVMess = "vmess://" + Buffer.from(JSON.stringify({
+      v: "2", ps: "Browser QA Exit", add: "exit.example.com", port: "443",
+      id: "00000000-0000-4000-8000-000000000022", aid: "0", scy: "auto",
+      net: "ws", type: "none", host: "exit.example.com", path: "/proxy", tls: "tls",
+    })).toString("base64");
+    await page.locator('#upstreams form[action="/admin/upstreams"] input[name="name"]').fill("Browser QA Exit");
+    await page.locator('#upstreams form[action="/admin/upstreams"] input[name="source"]').fill(sampleVMess);
+    await page.locator('#upstreams form[action="/admin/upstreams"] button').click();
+    await page.locator("#upstreams .form-success").waitFor();
+    await page.locator("#upstreams details.create-details").last().locator("summary").click();
+    await page.locator('#upstreams form[action="/admin/upstream-attachments"] select[name="gateway_id"]').selectOption({ label: "Browser QA Gateway" });
+    await page.locator('#upstreams form[action="/admin/upstream-attachments"] select[name="upstream_id"]').selectOption({ label: "Browser QA Exit" });
+    await page.locator('#upstreams form[action="/admin/upstream-attachments"] button').click();
+    await page.locator("#upstreams .form-success").waitFor();
+    await page.goto(base + "/#network");
+    await page.locator("#route-overview .route-card").filter({ hasText: "Browser QA Gateway / Browser QA Exit" }).waitFor();
+    await page.screenshot({ path: out + "/network-with-external-exit.png", fullPage: true });
+    await page.goto(base + "/#subscribe");
+    assert.equal(await page.locator('#subscribe input[name="attachment_id"]').count(), 3);
     await page.setViewportSize({ width: 390, height: 844 });
     await page.goto(base + "/");
     await page.waitForFunction(() =>
@@ -173,7 +207,7 @@ const fs = require("node:fs");
     );
     assert.deepEqual(errors, []);
     console.log(
-      "Panel browser checks passed: navigation, topology, matrix, selection, refresh, grants, validation, audit, mobile.",
+      "Panel browser checks passed: navigation, topology, matrix, selection, refresh, grants, validation, audit, node wizard, external exit, mobile.",
     );
   } finally {
     await browser.close();

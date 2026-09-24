@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"xmesh/internal/model"
 )
@@ -60,13 +61,33 @@ func TestReleaseAssetsAreFetchedOnceAndVerified(t *testing.T) {
 	if got := fetches.Load(); got != 2 { // manifest and install.sh, each once
 		t.Fatalf("upstream fetched %d times, want 2", got)
 	}
+	if !server.fastReleaseCacheHit("install.sh") {
+		t.Fatal("verified asset was not cached")
+	}
+	assetPath := filepath.Join(server.releaseDirectory(), "install.sh")
+	if err := os.WriteFile(assetPath, []byte(strings.Repeat("x", len(assets["install.sh"]))), 0600); err != nil {
+		t.Fatal(err)
+	}
+	modified := time.Now().Add(time.Hour)
+	if err := os.Chtimes(assetPath, modified, modified); err != nil {
+		t.Fatal(err)
+	}
+	if server.fastReleaseCacheHit("install.sh") {
+		t.Fatal("changed file reused verification cache")
+	}
+	if response := requestAsset("install.sh"); response.Code != 200 || response.Body.String() != assets["install.sh"] {
+		t.Fatalf("same-size tampered cache was not repaired: status=%d body=%q", response.Code, response.Body.String())
+	}
+	if got := fetches.Load(); got != 3 {
+		t.Fatalf("same-size tampered cache was not refetched: %d upstream requests", got)
+	}
 	if err := os.WriteFile(filepath.Join(server.releaseDirectory(), "install.sh"), []byte("tampered"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	if response := requestAsset("install.sh"); response.Code != 200 || response.Body.String() != assets["install.sh"] {
 		t.Fatalf("tampered cache was not repaired: status=%d body=%q", response.Code, response.Body.String())
 	}
-	if got := fetches.Load(); got != 3 {
+	if got := fetches.Load(); got != 4 {
 		t.Fatalf("tampered cache was not refetched: %d upstream requests", got)
 	}
 	if response := requestAsset("xmesh-" + version + "-linux-arm64.tar.gz"); response.Code != 502 {

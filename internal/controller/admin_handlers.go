@@ -295,7 +295,9 @@ func (s *Server) toggleAttachment(w http.ResponseWriter, r *http.Request) {
 		attachment.Enabled = !attachment.Enabled
 		state.Attachments[attachment.ID] = attachment
 		bumpGateway(state, attachment.GatewayID)
-		bumpAgent(state, attachment.AgentID)
+		if attachment.AgentID != "" {
+			bumpAgent(state, attachment.AgentID)
+		}
 		if !attachment.Enabled {
 			for id, grant := range state.Grants {
 				if grant.AttachmentID == attachment.ID {
@@ -446,6 +448,9 @@ func (s *Server) createLink(w http.ResponseWriter, r *http.Request) {
 		attachment, ok := state.Attachments[attachmentID]
 		if !ok {
 			return fmt.Errorf("attachment not found")
+		}
+		if attachment.UpstreamID != "" {
+			return fmt.Errorf("external VMess routes do not use Links")
 		}
 		link := model.Link{ID: id, AttachmentID: attachmentID, Name: name, URL: linkURL, HTTPHost: strings.TrimSpace(r.FormValue("http_host")), TLSServerName: strings.TrimSpace(r.FormValue("tls_server_name")), TLSVerify: r.FormValue("tls_verify") == "on", Priority: priority, Weight: weight, Connections: connections, MaxStreams: maxStreams, Enabled: true, TunnelTokenHash: auth.SecretHash(tunnelToken), CreatedAt: s.now().UTC()}
 		if strings.HasPrefix(linkURL, "reality://") {

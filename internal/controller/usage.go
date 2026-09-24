@@ -39,6 +39,30 @@ var usageWindows = []struct {
 // its first report as traffic since startup; repeated reports contribute only
 // their monotonic delta.
 func sampleGrantUsage(state *model.State, instanceID, grantID string, links []model.GrantLinkUsage, now time.Time) error {
+	grant := state.Grants[grantID]
+	attachment := state.Attachments[grant.AttachmentID]
+	names := map[string]string{}
+	for id, link := range state.Links {
+		if link.AttachmentID == grant.AttachmentID {
+			names[id] = link.Name
+		}
+	}
+	for id, link := range state.RetiredLinks {
+		if link.AttachmentID == grant.AttachmentID && now.Before(link.ExpiresAt) {
+			names[id] = link.Name
+		}
+	}
+	if attachment.UpstreamID != "" {
+		names[attachment.ID] = state.Upstreams[attachment.UpstreamID].Name
+	}
+	return sampleGrantUsageFor(state, instanceID, grantID, grant.UserID, names, links, now)
+}
+
+func sampleRetiredGrantUsage(state *model.State, instanceID, grantID string, retired model.RetiredGrant, links []model.GrantLinkUsage, now time.Time) error {
+	return sampleGrantUsageFor(state, instanceID, grantID, retired.UserID, retired.LinkNames, links, now)
+}
+
+func sampleGrantUsageFor(state *model.State, instanceID, grantID, userID string, names map[string]string, links []model.GrantLinkUsage, now time.Time) error {
 	if state.UsageCounters == nil {
 		state.UsageCounters = map[string]model.UsageCounter{}
 	}
@@ -48,14 +72,13 @@ func sampleGrantUsage(state *model.State, instanceID, grantID string, links []mo
 	if state.UsageLabels == nil {
 		state.UsageLabels = map[string]string{}
 	}
-	grant := state.Grants[grantID]
 	for _, link := range links {
-		configured, ok := state.Links[link.LinkID]
-		if !ok || configured.AttachmentID != grant.AttachmentID {
+		name, ok := names[link.LinkID]
+		if !ok {
 			return errGrantLinkMismatch
 		}
 		counterKey := grantID + "/" + link.LinkID
-		usageKey := grant.UserID + "/" + link.LinkID
+		usageKey := userID + "/" + link.LinkID
 		previous, known := state.UsageCounters[counterKey]
 		state.UsageCounters[counterKey] = model.UsageCounter{InstanceID: instanceID, UploadBytes: link.UploadBytes, DownloadBytes: link.DownloadBytes}
 		var up, down uint64
@@ -70,7 +93,9 @@ func sampleGrantUsage(state *model.State, instanceID, grantID string, links []mo
 		if up == 0 && down == 0 {
 			continue
 		}
-		state.UsageLabels[usageKey] = configured.Name
+		if name != "" {
+			state.UsageLabels[usageKey] = name
+		}
 		bucketAt := now.Truncate(historyInterval)
 		buckets := state.UsageHistory[usageKey]
 		if len(buckets) == 0 || !buckets[len(buckets)-1].At.Equal(bucketAt) {
@@ -80,7 +105,6 @@ func sampleGrantUsage(state *model.State, instanceID, grantID string, links []mo
 		buckets[len(buckets)-1].DownloadBytes += down
 		state.UsageHistory[usageKey] = buckets
 	}
-	pruneUsageHistory(state, now)
 	return nil
 }
 
@@ -116,6 +140,9 @@ func usageViews(state model.State, now time.Time) []usageUserView {
 					linkIDs[link.ID] = true
 				}
 			}
+			if attachment := state.Attachments[grant.AttachmentID]; attachment.UpstreamID != "" {
+				linkIDs[attachment.ID] = true
+			}
 		}
 		for key := range state.UsageHistory {
 			if strings.HasPrefix(key, user.UserID+"/") {
@@ -128,6 +155,9 @@ func usageViews(state model.State, now time.Time) []usageUserView {
 			name := state.UsageLabels[key]
 			if link, ok := state.Links[linkID]; ok {
 				name = link.Name
+			}
+			if attachment, ok := state.Attachments[linkID]; ok && attachment.UpstreamID != "" {
+				name = state.Upstreams[attachment.UpstreamID].Name
 			}
 			if name == "" {
 				name = linkID

@@ -98,6 +98,7 @@ func TestLinkHistorySamplingRetentionAndRestart(t *testing.T) {
 	}
 	state.LinkHistory["deleted"] = []model.LinkSample{{At: now}}
 	sampleLinkHistory(&state, model.LinkStatus{LinkID: "l"}, last.Add(2*historyInterval))
+	pruneLinkHistory(&state, last.Add(2*historyInterval))
 	if _, ok := state.LinkHistory["deleted"]; ok {
 		t.Fatal("deleted Link history not pruned")
 	}

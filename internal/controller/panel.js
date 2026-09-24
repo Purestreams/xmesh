@@ -107,17 +107,32 @@ if (typeof document !== "undefined")
       pending: "待就绪",
       offline: "离线",
       disabled: "停用",
+      configured: "已配置，待实际流量验证",
     };
     let data = null,
       refreshBusy = false,
       submitting = false,
-      mapView = "topology";
+      mapView = "topology",
+      lastSuccessfulRefresh = null;
     const nodeName = (id) => data?.nodes.find((n) => n.id === id)?.name || id;
+    const exitID = (route) => route.upstream_id || route.agent_id;
     const routeName = (route) =>
-      `${nodeName(route.gateway_id)} / ${nodeName(route.agent_id)}`;
+      `${nodeName(route.gateway_id)} / ${nodeName(exitID(route))}`;
     function notice(text, error = false) {
       $("#notice").textContent = text;
       $("#notice").classList.toggle("error", error);
+    }
+    function clearFormError(form) {
+      $(".form-error", form)?.remove();
+    }
+    function showFormError(form, message) {
+      clearFormError(form);
+      const error = el("div", message, "form-error");
+      error.setAttribute("role", "alert");
+      error.tabIndex = -1;
+      form.prepend(error);
+      error.focus();
+      error.scrollIntoView({ block: "center", behavior: "smooth" });
     }
     function navigate() {
       const target = location.hash.slice(1) || "overview";
@@ -155,7 +170,12 @@ if (typeof document !== "undefined")
       if (!node) return;
       const body = el("div"),
         dl = el("dl", null, "detail-grid");
-      const values = {
+      const values = node.role === "External exit" ? {
+        角色: node.role,
+        地址: node.host || "尚未选择节点",
+        状态: !node.enabled ? "停用" : node.status.online ? "已选择（未探测）" : "待选择",
+        最近错误: node.next || "无",
+      } : {
         角色: node.role,
         地址: node.host || "主动连接 Gateway",
         状态: !node.enabled ? "停用" : node.status.online ? "在线" : "离线",
@@ -177,7 +197,7 @@ if (typeof document !== "undefined")
       );
       body.append(dl);
       const link = el("a", "打开节点管理");
-      link.href = node.role === "Gateway" ? "#gateways" : "#agents";
+      link.href = node.role === "Gateway" ? "#gateways" : node.role === "Agent" ? "#agents" : "#upstreams";
       link.addEventListener("click", () => $("#detail-dialog").close());
       body.append(link);
       showDetail(node.name, body);
@@ -187,6 +207,8 @@ if (typeof document !== "undefined")
       if (!route) return;
       const body = el("div");
       body.append(badge(route.state));
+      if (route.upstream_id)
+        body.append(el("p", "外部出口的连通性需通过实际流量确认。"));
       data.links
         .filter((l) => l.route_id === id)
         .forEach((link) => {
@@ -203,15 +225,18 @@ if (typeof document !== "undefined")
           body.append(p);
         });
       const a = el("a", "查看链路配置");
-      a.href = "#links";
+      a.href = route.upstream_id ? "#upstreams" : "#links";
+      a.textContent = route.upstream_id ? "查看外部出口" : "查看链路配置";
       a.addEventListener("click", () => $("#detail-dialog").close());
       body.append(a);
       showDetail(`节点组合：${routeName(route)}`, body);
     }
     function renderMetrics() {
+      const runtimeNodes = data.nodes.filter((n) => n.role !== "External exit");
       const ready = data.routes.filter((r) => r.state === "ready").length,
-        online = data.nodes.filter((n) => n.enabled && n.status.online).length;
-      const pending = data.nodes.filter(
+        configured = data.routes.filter((r) => r.state === "configured").length,
+        online = runtimeNodes.filter((n) => n.enabled && n.status.online).length;
+      const pending = runtimeNodes.filter(
         (n) =>
           n.enabled &&
           (!n.enrolled ||
@@ -220,14 +245,14 @@ if (typeof document !== "undefined")
       ).length;
       const items = [
         [
-          "可用线路",
+          "已确认可用线路",
           `${ready} / ${data.routes.length}`,
-          "两端配置与链路均已就绪",
+          configured ? `另有 ${configured} 条外部线路已配置，待实际流量验证` : "两端配置与链路均已就绪",
           "good",
         ],
         [
           "在线节点",
-          `${online} / ${data.nodes.length}`,
+          `${online} / ${runtimeNodes.length}`,
           "Gateway 与 Agent 实时心跳",
           "",
         ],
@@ -262,6 +287,49 @@ if (typeof document !== "undefined")
         }),
       );
     }
+    function renderRouteOverview() {
+      const root = $("#route-overview");
+      if (!root || !data) return;
+      if (!data.routes.length) {
+        root.replaceChildren(el("p", "尚无线路。先从部署向导创建或绑定节点。", "empty"));
+        return;
+      }
+      const query = $("#route-search").value.trim().toLowerCase(),
+        state = $("#route-state").value,
+        visible = data.routes.filter((route) =>
+          (!query || routeName(route).toLowerCase().includes(query)) &&
+          (state === "all" || route.state === state));
+      if (!visible.length) {
+        root.replaceChildren(el("p", "没有匹配的线路。", "empty"));
+        return;
+      }
+      const list = el("div", null, "route-cards");
+      visible.forEach((route) => {
+        const card = el("article", null, "route-card"),
+          heading = el("div", null, "route-card-heading"),
+          title = el("strong", routeName(route)),
+          kind = route.upstream_id ? "外部出口" : "Agent 出口",
+          grantCount = data.grants.filter((grant) => grant.route_id === route.id && grant.enabled && grant.published).length,
+          actions = el("div", null, "route-card-actions"),
+          detail = el("button", "查看状态");
+        detail.type = "button";
+        detail.className = "secondary";
+        detail.addEventListener("click", () => showRoute(route.id));
+        heading.append(title, badge(route.state));
+        card.append(heading, el("small", `${kind} · ${grantCount} 个已发布授权`));
+        if (route.state === "configured")
+          card.append(el("p", "Gateway 配置已应用；外部上游尚未探测，请用实际流量验证。", "muted"));
+        actions.append(detail);
+        const config = el("a", "管理配置");
+        config.href = route.upstream_id ? "#upstreams" : "#links";
+        const grant = el("a", "授权用户");
+        grant.href = "#subscribe";
+        actions.append(config, grant);
+        card.append(actions);
+        list.append(card);
+      });
+      root.replaceChildren(list);
+    }
     function filteredMap() {
       const query = $("#map-search").value.toLowerCase(),
         state = $("#map-state").value;
@@ -270,11 +338,11 @@ if (typeof document !== "undefined")
       const ids = new Set(data.nodes.filter(matches).map((n) => n.id));
       const routes = data.routes.filter(
         (r) =>
-          (!query || ids.has(r.gateway_id) || ids.has(r.agent_id)) &&
+          (!query || ids.has(r.gateway_id) || ids.has(exitID(r))) &&
           (state === "all" || r.state === state),
       );
       const connected = new Set(
-        routes.flatMap((r) => [r.gateway_id, r.agent_id]),
+        routes.flatMap((r) => [r.gateway_id, exitID(r)]),
       );
       return {
         routes,
@@ -287,7 +355,8 @@ if (typeof document !== "undefined")
       if (!data) return;
       const { nodes, routes } = filteredMap(),
         gateways = nodes.filter((n) => n.role === "Gateway"),
-        agents = nodes.filter((n) => n.role === "Agent");
+        agents = nodes.filter((n) => n.role === "Agent"),
+        exits = nodes.filter((n) => n.role !== "Gateway");
       $("#topology").hidden = mapView !== "topology";
       $("#matrix").hidden = mapView !== "matrix";
       if (!nodes.length) {
@@ -299,13 +368,13 @@ if (typeof document !== "undefined")
       }
       const height = Math.max(
           210,
-          Math.max(gateways.length, agents.length) * 100 + 70,
+          Math.max(gateways.length, exits.length) * 100 + 70,
         ),
         svg = svgEl("svg", {
           viewBox: `0 0 900 ${height}`,
           class: "network",
           role: "img",
-          "aria-label": "Gateway 与 Agent 网络拓扑",
+          "aria-label": "Gateway 与出口网络拓扑",
         });
       svg.append(
         svgEl(
@@ -313,18 +382,18 @@ if (typeof document !== "undefined")
           { x: 80, y: 30, class: "subtext" },
           "GATEWAYS / 公网入口",
         ),
-        svgEl("text", { x: 620, y: 30, class: "subtext" }, "AGENTS / 网络出口"),
+        svgEl("text", { x: 620, y: 30, class: "subtext" }, "AGENT / 外部出口"),
       );
       const positions = new Map();
       gateways.forEach((n, i) =>
         positions.set(n.id, { x: 65, y: 55 + i * 100 }),
       );
-      agents.forEach((n, i) =>
+      exits.forEach((n, i) =>
         positions.set(n.id, { x: 610, y: 55 + i * 100 }),
       );
       routes.forEach((route) => {
         const a = positions.get(route.gateway_id),
-          b = positions.get(route.agent_id);
+          b = positions.get(exitID(route));
         if (!a || !b) return;
         const rtts = data.links
           .filter((link) => link.route_id === route.id && link.enabled && link.status.online && link.status.ready && link.status.rtt_millis > 0)
@@ -350,7 +419,7 @@ if (typeof document !== "undefined")
             cx: p.x + 17,
             cy: p.y + 24,
             r: 4,
-            fill: !n.enabled
+            fill: n.role === "External exit" ? "#d4a242" : !n.enabled
               ? "#b6c1cd"
               : n.status.online
                 ? "#27a68c"
@@ -394,7 +463,7 @@ if (typeof document !== "undefined")
           detail.addEventListener("click", () => showRoute(route.id));
           [
             routeName(route),
-            link?.name || "无启用 Link",
+            link?.name || (route.upstream_id ? nodeName(route.upstream_id) : "无启用 Link"),
             stages[route.state],
             link?.status.online && link.status.ready && link.status.rtt_millis > 0
               ? `${link.status.rtt_millis.toFixed(1)} ms`
@@ -455,7 +524,7 @@ if (typeof document !== "undefined")
       $("#matrix").replaceChildren(table);
     }
     function renderProgress() {
-      const cards = data.nodes.map((n) => {
+      const cards = data.nodes.filter((n) => n.role !== "External exit").map((n) => {
         const c = el("div", null, "progress-card"),
           steps = el("ol", null, "steps");
         c.append(el("strong", `${n.role} · ${n.name}`));
@@ -468,9 +537,10 @@ if (typeof document !== "undefined")
             applied &&
             n.status.ready &&
             (n.role !== "Gateway" || n.status.xray_ready),
+          hasRoute = data.routes.some((r) => r.gateway_id === n.id || r.agent_id === n.id),
           linked = data.routes.some(
             (r) =>
-              (r.gateway_id === n.id || r.agent_id === n.id) &&
+              (r.gateway_id === n.id || exitID(r) === n.id) &&
               r.state === "ready",
           );
         [
@@ -485,10 +555,21 @@ if (typeof document !== "undefined")
             el("li", `${done ? "✓ " : ""}${label}`, done ? "done" : ""),
           ),
         );
-        c.append(
-          steps,
-          el("p", n.enabled ? n.next : "节点已停用。启用后继续部署。"),
-        );
+        c.append(steps, el("p", !n.enabled
+          ? "节点已停用。启用后继续部署。"
+          : !hasRoute && !n.enrolled
+            ? "节点已创建，尚无可用线路。先安装节点，再连接已有节点。"
+            : n.next));
+        if (n.enabled && !hasRoute) {
+          if (!n.enrolled) {
+            const install = el("a", "生成安装命令 →");
+            install.href = "#quick-install";
+            c.append(install);
+          }
+          const next = el("a", "连接已有节点 →");
+          next.href = "#assign";
+          c.append(next);
+        }
         return c;
       });
       $("#deployment-progress").replaceChildren(
@@ -496,7 +577,7 @@ if (typeof document !== "undefined")
           ? cards
           : [el("p", "先创建线路或节点，再按照下方步骤完成安装。", "empty")]),
       );
-      const todos = data.nodes
+      const todos = data.nodes.filter((n) => n.role !== "External exit")
         .filter(
           (n) =>
             n.enabled &&
@@ -513,12 +594,12 @@ if (typeof document !== "undefined")
           target: !n.enrolled ? "quick-install" : "readiness",
         }));
       data.routes
-        .filter((r) => r.state !== "ready" && r.state !== "disabled")
+        .filter((r) => !["ready", "configured", "disabled"].includes(r.state))
         .forEach((r) =>
           todos.push({
             title: routeName(r),
-            text: `线路${stages[r.state]}：检查两端配置、Link 与 REALITY 连接。`,
-            target: "links",
+            text: r.upstream_id ? `线路${stages[r.state]}：检查 Gateway 配置与上游节点。` : `线路${stages[r.state]}：检查两端配置、Link 与 REALITY 连接。`,
+            target: r.upstream_id ? "upstreams" : "links",
           }),
         );
       data.users
@@ -834,9 +915,11 @@ if (typeof document !== "undefined")
             ),
             el(
               "small",
-              `隧道 ${node.status.tunnel_connections} · TCP ${node.status.tcp_connections} · UDP ${node.status.udp_associations}`,
+              `${node.status.online ? "当前" : "上次上报"}：隧道 ${node.status.tunnel_connections} · TCP ${node.status.tcp_connections} · UDP ${node.status.udp_associations}`,
             ),
           );
+          if (!node.status.online && node.status.last_seen && !node.status.last_seen.startsWith("0001"))
+            runtime.append(el("small", `最后上报 ${new Date(node.status.last_seen).toLocaleString()}`));
           if (node.status.last_error)
             runtime.append(el("small", node.status.last_error, "error"));
         });
@@ -869,7 +952,7 @@ if (typeof document !== "undefined")
           ),
           el(
             "small",
-            `${st.connections || 0} connections · ${st.active_streams || 0} streams · RTT ${st.rtt_millis || "—"} ms`,
+            `${st.online ? "当前" : "上次上报"}：${st.connections || 0} 条连接 · ${st.active_streams || 0} 个流 · RTT ${st.online ? st.rtt_millis || "—" : "—"} ms`,
           ),
           el(
             "small",
@@ -881,6 +964,8 @@ if (typeof document !== "undefined")
           ),
           el("small", st.last_error || "", "error"),
         );
+        if (!st.online && st.last_seen && !st.last_seen.startsWith("0001"))
+          row.cells[3].append(el("small", `最后上报 ${new Date(st.last_seen).toLocaleString()}`));
       });
       $$("#grant-table tbody tr").forEach((row) => {
         const action = $('form[action$="/toggle"]', row)?.getAttribute(
@@ -913,7 +998,7 @@ if (typeof document !== "undefined")
       const readiness = $("#readiness tbody");
       if (readiness)
         readiness.replaceChildren(
-          ...data.nodes.map((n) => {
+          ...data.nodes.filter((n) => n.role !== "External exit").map((n) => {
             const row = el("tr");
             [
               n.role + " " + n.name,
@@ -930,16 +1015,9 @@ if (typeof document !== "undefined")
             return row;
           }),
         );
-      $$("#subscribe p").forEach((p) => {
-        const input = $("input[readonly]", p);
-        if (!input) return;
-        const user = data.users.find(
-          (u) =>
-            input.getAttribute("aria-label") ===
-            `Subscription URL for ${u.name}`,
-        );
-        if (user && p.firstChild?.nodeType === Node.TEXT_NODE)
-          p.firstChild.textContent = `${user.name} (${user.publication}): `;
+      $$("#subscribe .subscription-row").forEach((row) => {
+        const user = data.users.find((u) => u.id === row.dataset.userId);
+        if (user) $(".publication", row).textContent = `${user.name}（${user.publication}）`;
       });
     }
     function renderNodeUpgrades() {
@@ -1001,6 +1079,16 @@ if (typeof document !== "undefined")
         row.append(cell);
         tasksBody.append(row);
       }
+    }
+    function labelResponsiveTables(root = document) {
+      $$("table", root).forEach((table) => {
+        const labels = [...(table.tHead?.rows[0]?.cells || [])].map((cell) => cell.textContent.trim());
+        for (const body of table.tBodies)
+          for (const row of body.rows)
+            [...row.cells].forEach((cell, index) => {
+              if (cell.colSpan === 1) cell.dataset.label = labels[index] || "";
+            });
+      });
     }
     function updateChooser(form) {
       if (!data) return;
@@ -1087,6 +1175,13 @@ if (typeof document !== "undefined")
       }
     }
     function enhance(root = document) {
+      $$("time[datetime]", root).forEach((time) => {
+        const value = new Date(time.dateTime);
+        if (!Number.isNaN(value.getTime())) {
+          time.textContent = value.toLocaleString();
+          time.title = "浏览器本地时间";
+        }
+      });
       $$("section[data-page] > form.stack", root).forEach((form) => {
         const section = form.closest("section");
         if (form.dataset.enhanced) return;
@@ -1181,7 +1276,7 @@ if (typeof document !== "undefined")
           "max_streams",
         ];
         if (
-          ["create-route", "gateways", "agents", "links"].includes(section.id)
+          ["create-route", "wizard-gateway", "gateways", "agents", "links"].includes(section.id)
         ) {
           const advanced = el("details", null, "advanced"),
             inner = el("div");
@@ -1296,12 +1391,14 @@ if (typeof document !== "undefined")
         data = await response.json();
         renderMetrics();
         renderMap();
+        renderRouteOverview();
         renderProgress();
         renderHistory();
         renderUsage();
         renderOperations();
         updateLiveTables();
         renderNodeUpgrades();
+        labelResponsiveTables();
         $$(".chooser").forEach((f) => {
           const group = $(".selection-group", f),
             old = group.value;
@@ -1317,11 +1414,17 @@ if (typeof document !== "undefined")
           }
           updateChooser(f);
         });
+        lastSuccessfulRefresh = new Date(data.at);
         $("#refresh-note").textContent =
-          `已更新 ${new Date(data.at).toLocaleTimeString()} · 每 15 秒自动刷新`;
+          `已更新 ${lastSuccessfulRefresh.toLocaleTimeString()} · 每 15 秒自动刷新`;
+        $("#refresh-note").classList.remove("error");
+        $("#stale-banner").hidden = true;
       } catch (error) {
         $("#refresh-note").textContent =
-          `刷新失败：${error.message} · 保留最后结果`;
+          `刷新失败 · 上次成功 ${lastSuccessfulRefresh ? lastSuccessfulRefresh.toLocaleTimeString() : "无"}`;
+        $("#refresh-note").classList.add("error");
+        $("#stale-banner").textContent = `状态数据可能已过期：${error.message}。上次成功刷新：${lastSuccessfulRefresh ? lastSuccessfulRefresh.toLocaleString() : "无"}。`;
+        $("#stale-banner").hidden = false;
       } finally {
         refreshBusy = false;
       }
@@ -1329,7 +1432,9 @@ if (typeof document !== "undefined")
     async function replaceSections(html, submittedForm) {
       const doc = new DOMParser().parseFromString(html, "text/html");
       if (!$("#page-title", doc)) throw new Error("会话已过期，请重新登录。");
+      const originID = submittedForm.closest("section")?.id;
       delete submittedForm.dataset.dirty;
+      clearFormError(submittedForm);
       $$("section[data-page]")
         .filter(
           (s) =>
@@ -1341,6 +1446,10 @@ if (typeof document !== "undefined")
               "users",
               "gateways",
               "agents",
+              "wizard-gateway",
+              "wizard-agent",
+              "routes",
+              "upstreams",
               "assignments",
               "links",
               "grants",
@@ -1366,15 +1475,22 @@ if (typeof document !== "undefined")
             ),
           );
           enhance(section);
+          labelResponsiveTables(section);
           $$(".table-search", section).forEach((s, i) => {
             s.value = searches[i] || "";
             s.dispatchEvent(new Event("input"));
           });
         });
-      notice(
-        $("#notice", doc)?.textContent.trim() ||
-          "操作成功。正在跟踪配置与运行状态。",
-      );
+      const message = $("#notice", doc)?.textContent.trim() ||
+        "操作成功。正在跟踪配置与运行状态。";
+      notice(message);
+      const section = originID && document.getElementById(originID);
+      if (section) {
+        $(".form-success", section)?.remove();
+        const feedback = el("p", message, "form-success");
+        feedback.setAttribute("role", "status");
+        $("h2", section)?.after(feedback);
+      }
       navigate();
     }
     document.addEventListener("input", (event) => {
@@ -1399,6 +1515,8 @@ if (typeof document !== "undefined")
       event.preventDefault();
       if (submitting) return;
       submitting = true;
+      clearFormError(form);
+      $(".form-success", form.closest("section"))?.remove();
       const buttons = $$("button", form);
       buttons.forEach((b) => (b.disabled = true));
       try {
@@ -1425,10 +1543,9 @@ if (typeof document !== "undefined")
           notice("已生成安装选项。关闭窗口前保存所需令牌。");
         } else await replaceSections(text, form);
       } catch (error) {
-        notice(
-          `操作未完成：${error.message}。输入已保留；网络中断时请先检查操作记录，避免重复提交。`,
-          true,
-        );
+        const message = `操作未完成：${error.message}。输入已保留；网络中断时请先检查操作记录，避免重复提交。`;
+        notice(message, true);
+        showFormError(form, message);
       } finally {
         submitting = false;
         buttons.forEach((b) => (b.disabled = false));
@@ -1462,6 +1579,8 @@ if (typeof document !== "undefined")
     );
     $("#map-search").addEventListener("input", renderMap);
     $("#map-state").addEventListener("change", renderMap);
+    $("#route-search").addEventListener("input", renderRouteOverview);
+    $("#route-state").addEventListener("change", renderRouteOverview);
     $$("[data-view]").forEach((b) =>
       b.addEventListener("click", () => {
         mapView = b.dataset.view;

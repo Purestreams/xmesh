@@ -35,6 +35,7 @@ type Server struct {
 	templates         *template.Template
 	now               func() time.Time
 	releaseMu         *sync.Mutex
+	releaseCache      *sync.Map
 	releaseHTTPClient *http.Client
 	loginMu           sync.Mutex
 	loginFailures     map[string]loginFailure
@@ -66,11 +67,11 @@ func New(cfg Config, state *store.Store, logger *slog.Logger) (*Server, error) {
 			return "applied"
 		},
 		"join": func(values []string) string { return strings.Join(values, ", ") },
-	}).Parse(panelTemplate)
+	}).Parse(strings.Replace(panelTemplate, "</div></main>", upstreamPanelSection+"</div></main>", 1))
 	if err != nil {
 		return nil, fmt.Errorf("parse panel template: %w", err)
 	}
-	s := &Server{cfg: cfg, store: state, logger: logger, templates: t, now: time.Now, releaseMu: &sync.Mutex{}}
+	s := &Server{cfg: cfg, store: state, logger: logger, templates: t, now: time.Now, releaseMu: &sync.Mutex{}, releaseCache: &sync.Map{}}
 	for id, batch := range state.Snapshot().UpgradeBatches {
 		if batch.Stage == "preparing" {
 			go s.prepareUpgradeBatch(id)
@@ -104,6 +105,13 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /admin/agents/{id}/toggle", s.requireAdmin(s.csrf(s.toggleAgent)))
 	mux.HandleFunc("POST /admin/agents/{id}/edit", s.requireAdmin(s.csrf(s.editAgent)))
 	mux.HandleFunc("POST /admin/agents/{id}/delete", s.requireAdmin(s.csrf(s.deleteAgent)))
+	mux.HandleFunc("POST /admin/upstreams", s.requireAdmin(s.csrf(s.createUpstream)))
+	mux.HandleFunc("POST /admin/upstreams/{id}/select", s.requireAdmin(s.csrf(s.selectUpstream)))
+	mux.HandleFunc("POST /admin/upstreams/{id}/edit", s.requireAdmin(s.csrf(s.editUpstream)))
+	mux.HandleFunc("POST /admin/upstreams/{id}/refresh", s.requireAdmin(s.csrf(s.refreshUpstreamHTTP)))
+	mux.HandleFunc("POST /admin/upstreams/{id}/toggle", s.requireAdmin(s.csrf(s.toggleUpstream)))
+	mux.HandleFunc("POST /admin/upstreams/{id}/delete", s.requireAdmin(s.csrf(s.deleteUpstream)))
+	mux.HandleFunc("POST /admin/upstream-attachments", s.requireAdmin(s.csrf(s.attachUpstream)))
 	mux.HandleFunc("POST /admin/agents/{id}/assign-gateways", s.requireAdmin(s.csrf(s.assignGateways)))
 	mux.HandleFunc("POST /admin/assign-gateways", s.requireAdmin(s.csrf(s.assignGateways)))
 	mux.HandleFunc("POST /admin/attachments", s.requireAdmin(s.csrf(s.createAttachment)))
@@ -259,12 +267,14 @@ func (s *Server) csrf(next http.HandlerFunc) http.HandlerFunc {
 
 func (s *Server) panel(w http.ResponseWriter, r *http.Request) {
 	state := s.panelState()
+	agentAttachments, externalAttachments := splitPanelAttachments(state)
 	cookie, _ := r.Cookie(sessionCookie)
 	data := panelData{
-		State: state, CSRF: auth.Derive(s.cfg.sessionKey(), "csrf", cookie.Value), Notice: r.URL.Query().Get("notice"),
+		State: state, CSRF: auth.Derive(s.cfg.sessionKey(), "csrf", cookie.Value), Notice: r.URL.Query().Get("notice"), InsecurePublicURL: strings.HasPrefix(strings.ToLower(s.cfg.PublicURL), "http://"),
 		PublicURL: strings.TrimSuffix(s.cfg.PublicURL, "/"),
 		UserList:  sortedUsers(state), GatewayList: sortedGateways(state), AgentList: sortedAgents(state),
-		AttachmentList: sortedAttachments(state), LinkList: sortedLinks(state), GrantList: sortedGrants(state),
+		UpstreamList:   sortedUpstreams(state),
+		AttachmentList: agentAttachments, ExternalAttachmentList: externalAttachments, LinkList: sortedLinks(state), GrantList: sortedGrants(state),
 		LinkSummary: summarizeLinks(state), LinkReports: sortedLinkReports(state), GrantSummary: summarizeGrants(state),
 		Release:            s.releaseStatus(),
 		Deployments:        deploymentStatuses(state),
@@ -284,15 +294,21 @@ func (s *Server) panel(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) subscription(w http.ResponseWriter, r *http.Request) {
 	token := r.PathValue("token")
-	state := s.store.Snapshot()
 	userID := ""
-	for _, user := range state.Users {
-		if subtle.ConstantTimeCompare([]byte(user.SubscriptionToken), []byte(token)) == 1 {
-			userID = user.ID
-			break
+	s.store.View(func(state *model.State) {
+		for _, user := range state.Users {
+			if subtle.ConstantTimeCompare([]byte(user.SubscriptionToken), []byte(token)) == 1 {
+				userID = user.ID
+				return
+			}
 		}
-	}
+	})
 	if userID == "" {
+		http.NotFound(w, r)
+		return
+	}
+	state := s.store.Snapshot()
+	if state.Users[userID].SubscriptionToken != token {
 		http.NotFound(w, r)
 		return
 	}
@@ -309,7 +325,11 @@ func (s *Server) subscription(w http.ResponseWriter, r *http.Request) {
 func (s *Server) renderLogin(w http.ResponseWriter, message string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
-	_, _ = fmt.Fprintf(w, `<!doctype html><html><head><meta charset="utf-8"><title>xmesh login</title><style>%s</style></head><body><main class="login"><h1>xmesh</h1><p class="error">%s</p><form method="post" action="/login"><label>Username<input name="username" autocomplete="username" required></label><label>Password<input type="password" name="password" autocomplete="current-password" required></label><button>Sign in</button></form></main></body></html>`, panelCSS, template.HTMLEscapeString(message))
+	warning := ""
+	if strings.HasPrefix(strings.ToLower(s.cfg.PublicURL), "http://") {
+		warning = `<p class="warning" role="alert">警告：Controller 的 public_url 使用 HTTP，登录信息在公网传输时可能泄露。请启用 HTTPS。</p>`
+	}
+	_, _ = fmt.Fprintf(w, `<!doctype html><html><head><meta charset="utf-8"><title>xmesh login</title><style>%s</style></head><body><main class="login"><h1>xmesh</h1>%s<p class="error">%s</p><form method="post" action="/login"><label>Username<input name="username" autocomplete="username" required></label><label>Password<input type="password" name="password" autocomplete="current-password" required></label><button>Sign in</button></form></main></body></html>`, panelCSS, warning, template.HTMLEscapeString(message))
 }
 
 func (s *Server) securityHeaders(next http.Handler) http.Handler {
@@ -380,27 +400,30 @@ func newID(prefix string) (string, error) {
 
 type panelData struct {
 	model.State
-	CSRF               string
-	Notice             string
-	PublicURL          string
-	UserList           []model.User
-	GatewayList        []model.Gateway
-	AgentList          []model.Agent
-	AttachmentList     []model.Attachment
-	LinkList           []model.Link
-	GrantList          []model.Grant
-	LinkSummary        map[string]model.LinkStatus
-	LinkReports        []model.LinkStatus
-	GrantSummary       map[string]model.GrantStatus
-	Release            releaseStatus
-	Deployments        []deploymentStatus
-	Enrollments        []enrollmentStatus
-	SubscriptionCounts map[string]string
-	NodeImpacts        map[string]deletionImpact
-	RouteImpacts       map[string]deletionImpact
-	ControllerUpgrade  controllerUpgradeView
-	UpgraderViews      map[string]updaterView
-	UpgradeTaskList    []model.UpgradeTask
+	CSRF                   string
+	Notice                 string
+	InsecurePublicURL      bool
+	PublicURL              string
+	UserList               []model.User
+	GatewayList            []model.Gateway
+	AgentList              []model.Agent
+	UpstreamList           []model.VMessUpstream
+	AttachmentList         []model.Attachment
+	ExternalAttachmentList []model.Attachment
+	LinkList               []model.Link
+	GrantList              []model.Grant
+	LinkSummary            map[string]model.LinkStatus
+	LinkReports            []model.LinkStatus
+	GrantSummary           map[string]model.GrantStatus
+	Release                releaseStatus
+	Deployments            []deploymentStatus
+	Enrollments            []enrollmentStatus
+	SubscriptionCounts     map[string]string
+	NodeImpacts            map[string]deletionImpact
+	RouteImpacts           map[string]deletionImpact
+	ControllerUpgrade      controllerUpgradeView
+	UpgraderViews          map[string]updaterView
+	UpgradeTaskList        []model.UpgradeTask
 }
 
 func subscriptionCounts(state model.State) map[string]string {
@@ -411,12 +434,12 @@ func subscriptionCounts(state model.State) map[string]string {
 			if grant.UserID == user.ID && grant.Enabled {
 				total++
 				attachment, ok := state.Attachments[grant.AttachmentID]
-				if ok && grant.Published && attachment.Enabled && state.Gateways[attachment.GatewayID].Enabled && state.Agents[attachment.AgentID].Enabled && attachmentHasEnabledLink(&state, attachment.ID) {
+				if ok && grant.Published && routeAvailable(&state, attachment) {
 					available++
 				}
 			}
 		}
-		result[user.ID] = fmt.Sprintf("%d/%d published", available, total)
+		result[user.ID] = fmt.Sprintf("已发布 %d / 已授权 %d", available, total)
 	}
 	return result
 }
@@ -465,27 +488,39 @@ func deploymentStatuses(state model.State) []deploymentStatus {
 func nextDeploymentAction(state model.State, id string, role model.Role) string {
 	status := state.NodeStatus[id]
 	if role == model.RoleGateway && state.Gateways[id].CredentialHash == "" || role == model.RoleAgent && state.Agents[id].CredentialHash == "" {
-		return "Generate the install command and enroll this node"
+		return "生成安装命令并在节点主机完成注册"
 	}
 	if !status.Online {
-		return "Check container/service logs and Controller HTTPS reachability"
+		return "检查节点服务日志及 Controller HTTPS 连通性"
+	}
+	if role == model.RoleGateway && !status.ExternalUpstreams {
+		for _, attachment := range state.Attachments {
+			if attachment.GatewayID == id && attachment.UpstreamID != "" && attachment.Enabled {
+				return "升级 Gateway 后才能使用外部出口线路"
+			}
+		}
 	}
 	if status.ApplyError != "" {
-		return "Fix configuration error: " + status.ApplyError
+		return "修复配置错误：" + status.ApplyError
 	}
 	if role == model.RoleGateway && !status.XrayReady {
-		return "Check Xray error, listener ports and REALITY target"
+		return "检查 Xray 错误、监听端口及 REALITY target"
 	}
 	if role == model.RoleGateway && status.AppliedVersion < state.Gateways[id].DesiredVersion || role == model.RoleAgent && status.AppliedVersion < state.Agents[id].DesiredVersion {
-		return "Wait for the node to apply the current configuration"
+		return "等待节点应用当前配置"
 	}
 	assigned := false
 	ready := false
+	externalConfigured := false
 	for _, attachment := range state.Attachments {
 		if !attachment.Enabled || role == model.RoleGateway && attachment.GatewayID != id || role == model.RoleAgent && attachment.AgentID != id {
 			continue
 		}
 		assigned = true
+		if attachment.UpstreamID != "" && upstreamAvailable(&state, attachment) {
+			externalConfigured = true
+			continue
+		}
 		for _, link := range state.Links {
 			if link.AttachmentID == attachment.ID && link.Enabled {
 				if status, ok := state.LinkStatus[id+"/"+link.ID]; ok && status.Ready && status.Online {
@@ -495,12 +530,15 @@ func nextDeploymentAction(state model.State, id string, role model.Role) string 
 		}
 	}
 	if !assigned {
-		return "Assign a Gateway/Agent route"
+		return "节点已创建，尚无可用线路；连接 Gateway 与 Agent"
 	}
 	if !ready {
-		return "Check Link URL, port 8443, REALITY target and peer status"
+		if externalConfigured {
+			return "Gateway 配置已应用；请用实际流量验证外部上游"
+		}
+		return "检查 Link URL、8443 端口、REALITY target 和对端状态"
 	}
-	return "Ready; grant users access to the route"
+	return "线路就绪；前往用户与订阅授权"
 }
 
 func yesNo(ok bool) string {

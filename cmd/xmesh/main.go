@@ -11,6 +11,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -107,6 +108,9 @@ func runController(logger *slog.Logger, args []string) error {
 	if err != nil {
 		return err
 	}
+	if publicURL, err := url.Parse(cfg.PublicURL); err == nil && strings.EqualFold(publicURL.Scheme, "http") {
+		logger.Warn("Controller public_url uses HTTP; admin sessions, enrollment and subscription links may be exposed in transit")
+	}
 	state, err := store.Open(cfg.StatePath)
 	if err != nil {
 		return err
@@ -121,6 +125,7 @@ func runController(logger *slog.Logger, args []string) error {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	go server.RefreshUpstreamSubscriptions(ctx)
 	go func() {
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)

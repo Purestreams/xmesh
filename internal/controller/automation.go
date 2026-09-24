@@ -147,18 +147,8 @@ func (s *Server) openSubscription(w http.ResponseWriter, r *http.Request) {
 			seen[attachmentID] = true
 			grantReenabled := false
 			attachment, ok := state.Attachments[attachmentID]
-			if !ok || !attachment.Enabled || !state.Gateways[attachment.GatewayID].Enabled || !state.Agents[attachment.AgentID].Enabled {
+			if !ok || !routeAvailable(state, attachment) {
 				return fmt.Errorf("route %s unavailable", attachmentID)
-			}
-			hasLink := false
-			for _, link := range state.Links {
-				if link.AttachmentID == attachmentID && link.Enabled {
-					hasLink = true
-					break
-				}
-			}
-			if !hasLink {
-				return fmt.Errorf("route %s has no enabled Link", attachmentID)
 			}
 			hasExistingGrant := false
 			for id, grant := range state.Grants {

@@ -52,11 +52,51 @@ type Agent struct {
 }
 
 type Attachment struct {
-	ID        string    `json:"id"`
-	GatewayID string    `json:"gateway_id"`
-	AgentID   string    `json:"agent_id"`
-	Enabled   bool      `json:"enabled"`
-	CreatedAt time.Time `json:"created_at"`
+	ID         string    `json:"id"`
+	GatewayID  string    `json:"gateway_id"`
+	AgentID    string    `json:"agent_id"`
+	UpstreamID string    `json:"upstream_id,omitempty"`
+	Enabled    bool      `json:"enabled"`
+	CreatedAt  time.Time `json:"created_at"`
+}
+
+// VMessEndpoint is the persisted external outbound configuration. The name is
+// retained for state compatibility; Protocol selects VMess or VLESS Reality.
+type VMessEndpoint struct {
+	Name        string `json:"name"`
+	Protocol    string `json:"protocol,omitempty"`
+	Address     string `json:"address"`
+	Port        int    `json:"port"`
+	UUID        string `json:"uuid"`
+	Cipher      string `json:"cipher,omitempty"`
+	Network     string `json:"network"`
+	Path        string `json:"path,omitempty"`
+	Host        string `json:"host,omitempty"`
+	TLS         bool   `json:"tls"`
+	ServerName  string `json:"server_name,omitempty"`
+	Flow        string `json:"flow,omitempty"`
+	PublicKey   string `json:"public_key,omitempty"`
+	ShortID     string `json:"short_id,omitempty"`
+	Fingerprint string `json:"fingerprint,omitempty"`
+	SpiderX     string `json:"spider_x,omitempty"`
+}
+
+type UpstreamCandidate struct {
+	Key  string `json:"key"`
+	Name string `json:"name"`
+}
+
+type VMessUpstream struct {
+	ID              string              `json:"id"`
+	Name            string              `json:"name"`
+	Enabled         bool                `json:"enabled"`
+	SubscriptionURL string              `json:"subscription_url,omitempty"`
+	SelectedKey     string              `json:"selected_key,omitempty"`
+	Endpoint        VMessEndpoint       `json:"endpoint"`
+	Candidates      []UpstreamCandidate `json:"candidates,omitempty"`
+	LastRefresh     time.Time           `json:"last_refresh,omitempty"`
+	LastError       string              `json:"last_error,omitempty"`
+	CreatedAt       time.Time           `json:"created_at"`
 }
 
 type Link struct {
@@ -90,6 +130,27 @@ type Grant struct {
 	CreatedAt     time.Time `json:"created_at"`
 }
 
+// RetiredGrant retains only the identity needed to account for the last
+// report from a Gateway after an authorization has been deleted.
+type RetiredGrant struct {
+	UserID        string            `json:"user_id"`
+	AttachmentID  string            `json:"attachment_id"`
+	GatewayID     string            `json:"gateway_id"`
+	LinkNames     map[string]string `json:"link_names"`
+	RetireVersion uint64            `json:"retire_version"`
+	ExpiresAt     time.Time         `json:"expires_at"`
+}
+
+type RetiredLink struct {
+	AttachmentID   string    `json:"attachment_id"`
+	GatewayID      string    `json:"gateway_id"`
+	AgentID        string    `json:"agent_id,omitempty"`
+	Name           string    `json:"name"`
+	GatewayVersion uint64    `json:"gateway_version"`
+	AgentVersion   uint64    `json:"agent_version,omitempty"`
+	ExpiresAt      time.Time `json:"expires_at"`
+}
+
 type Enrollment struct {
 	ID        string    `json:"id"`
 	NodeID    string    `json:"node_id"`
@@ -112,6 +173,7 @@ type NodeStatus struct {
 	ApplyError        string            `json:"apply_error,omitempty"`
 	XrayReady         bool              `json:"xray_ready,omitempty"`
 	XrayError         string            `json:"xray_error,omitempty"`
+	ExternalUpstreams bool              `json:"external_upstreams,omitempty"`
 	LastSuccess       time.Time         `json:"last_success,omitempty"`
 	LastSeen          time.Time         `json:"last_seen"`
 	UploadBytes       uint64            `json:"upload_bytes"`
@@ -227,9 +289,12 @@ type State struct {
 	Users          map[string]User          `json:"users"`
 	Gateways       map[string]Gateway       `json:"gateways"`
 	Agents         map[string]Agent         `json:"agents"`
+	Upstreams      map[string]VMessUpstream `json:"upstreams"`
 	Attachments    map[string]Attachment    `json:"attachments"`
 	Links          map[string]Link          `json:"links"`
 	Grants         map[string]Grant         `json:"grants"`
+	RetiredGrants  map[string]RetiredGrant  `json:"retired_grants,omitempty"`
+	RetiredLinks   map[string]RetiredLink   `json:"retired_links,omitempty"`
 	Enrollments    map[string]Enrollment    `json:"enrollments"`
 	NodeStatus     map[string]NodeStatus    `json:"node_status"`
 	LinkStatus     map[string]LinkStatus    `json:"link_status"`
@@ -268,9 +333,12 @@ func NewState() State {
 		Users:          map[string]User{},
 		Gateways:       map[string]Gateway{},
 		Agents:         map[string]Agent{},
+		Upstreams:      map[string]VMessUpstream{},
 		Attachments:    map[string]Attachment{},
 		Links:          map[string]Link{},
 		Grants:         map[string]Grant{},
+		RetiredGrants:  map[string]RetiredGrant{},
+		RetiredLinks:   map[string]RetiredLink{},
 		Enrollments:    map[string]Enrollment{},
 		NodeStatus:     map[string]NodeStatus{},
 		LinkStatus:     map[string]LinkStatus{},

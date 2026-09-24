@@ -185,6 +185,19 @@ func removeAttachment(state *model.State, id string) {
 	if !ok {
 		return
 	}
+	for grantID, grant := range state.Grants {
+		if grant.AttachmentID == id {
+			removeGrant(state, grantID)
+		}
+	}
+	if attachment.UpstreamID != "" {
+		retireLink(state, id, attachment, state.Upstreams[attachment.UpstreamID].Name)
+	}
+	for linkID, link := range state.Links {
+		if link.AttachmentID == id {
+			removeLink(state, linkID)
+		}
+	}
 	if gateway, ok := state.Gateways[attachment.GatewayID]; ok {
 		gateway.DesiredVersion++
 		state.Gateways[gateway.ID] = gateway
@@ -193,25 +206,27 @@ func removeAttachment(state *model.State, id string) {
 		agent.DesiredVersion++
 		state.Agents[agent.ID] = agent
 	}
-	for linkID, link := range state.Links {
-		if link.AttachmentID == id {
-			removeLink(state, linkID)
-		}
-	}
-	for grantID, grant := range state.Grants {
-		if grant.AttachmentID == id {
-			removeGrant(state, grantID)
+	if attachment.UpstreamID != "" {
+		for statusID, status := range state.LinkStatus {
+			if status.LinkID == id {
+				delete(state.LinkStatus, statusID)
+			}
 		}
 	}
 	delete(state.Attachments, id)
 }
 
 func removeLink(state *model.State, id string) {
+	if link, ok := state.Links[id]; ok {
+		retireLink(state, id, state.Attachments[link.AttachmentID], link.Name)
+	}
 	delete(state.Links, id)
 	delete(state.LinkHistory, id)
-	for key := range state.UsageCounters {
-		if strings.HasSuffix(key, "/"+id) {
-			delete(state.UsageCounters, key)
+	if _, retired := state.RetiredLinks[id]; !retired {
+		for key := range state.UsageCounters {
+			if strings.HasSuffix(key, "/"+id) {
+				delete(state.UsageCounters, key)
+			}
 		}
 	}
 	for statusID, status := range state.LinkStatus {
@@ -222,10 +237,15 @@ func removeLink(state *model.State, id string) {
 }
 
 func removeGrant(state *model.State, id string) {
+	if grant, ok := state.Grants[id]; ok {
+		retireGrant(state, grant)
+	}
 	delete(state.Grants, id)
-	for key := range state.UsageCounters {
-		if strings.HasPrefix(key, id+"/") {
-			delete(state.UsageCounters, key)
+	if _, retired := state.RetiredGrants[id]; !retired {
+		for key := range state.UsageCounters {
+			if strings.HasPrefix(key, id+"/") {
+				delete(state.UsageCounters, key)
+			}
 		}
 	}
 	for statusID, status := range state.GrantStatus {

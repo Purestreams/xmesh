@@ -50,9 +50,31 @@ func TestPanelRendersManagementAndDeleteImpact(t *testing.T) {
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("panel: %d %s", recorder.Code, recorder.Body.String())
 	}
-	for _, want := range []string{"Delete impact: 1 assignments, 1 Links, 1 grants", "Delete assignment", "Delete Link", "Delete grant", "Refresh status"} {
+	for _, want := range []string{"删除影响：1 个节点组合、1 条 Link、1 项授权", "删除节点组合", "删除 Link", "删除授权", "刷新状态", "单独添加 Gateway", "单独添加 Agent", "线路总览"} {
 		if !strings.Contains(recorder.Body.String(), want) {
 			t.Fatalf("panel missing %q", want)
+		}
+	}
+}
+
+func TestControllerWarnsOnlyForHTTPPublicURL(t *testing.T) {
+	server, _ := testServer(t, nil)
+	request := httptest.NewRequest(http.MethodGet, "/", nil)
+	request.AddCookie(&http.Cookie{Name: sessionCookie, Value: auth.SignSession(server.cfg.sessionKey(), "admin", server.now().Add(time.Hour))})
+	for _, test := range []struct {
+		publicURL string
+		warning   bool
+	}{{"http://panel.example", true}, {"https://panel.example", false}} {
+		server.cfg.PublicURL = test.publicURL
+		response := httptest.NewRecorder()
+		server.Handler().ServeHTTP(response, request)
+		if response.Code != http.StatusOK || strings.Contains(response.Body.String(), "id=\"transport-warning\"") != test.warning {
+			t.Fatalf("public URL %q warning=%t, response=%d", test.publicURL, test.warning, response.Code)
+		}
+		login := httptest.NewRecorder()
+		server.Handler().ServeHTTP(login, httptest.NewRequest(http.MethodGet, "/login", nil))
+		if login.Code != http.StatusOK || strings.Contains(login.Body.String(), "class=\"warning\"") != test.warning {
+			t.Fatalf("public URL %q login warning=%t, response=%d", test.publicURL, test.warning, login.Code)
 		}
 	}
 }

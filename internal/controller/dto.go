@@ -3,10 +3,17 @@ package controller
 import "xmesh/internal/model"
 
 type GatewayConfig struct {
-	Revision uint64              `json:"revision"`
-	Gateway  model.Gateway       `json:"gateway"`
-	Grants   []model.Grant       `json:"grants"`
-	Links    []GatewayLinkConfig `json:"links"`
+	Revision  uint64                  `json:"revision"`
+	Gateway   model.Gateway           `json:"gateway"`
+	Grants    []model.Grant           `json:"grants"`
+	Links     []GatewayLinkConfig     `json:"links"`
+	Upstreams []GatewayUpstreamConfig `json:"upstreams,omitempty"`
+}
+
+type GatewayUpstreamConfig struct {
+	AttachmentID string              `json:"attachment_id"`
+	UpstreamID   string              `json:"upstream_id"`
+	Endpoint     model.VMessEndpoint `json:"endpoint"`
 }
 
 type GatewayLinkConfig struct {

@@ -13,6 +13,7 @@ XMesh 将客户端入口与实际出口分开：Gateway 提供可访问的入口
 ![XMesh 架构：Controller 管理 Gateway 和 Agent，客户端流量经 Gateway 与 Agent 到达目标网络](docs/assets/xmesh-architecture-zh.png)
 
 - **数据面：** 客户端通过 VMess/WebSocket 连接 Gateway，业务流量经 REALITY + smux v2 隧道转发到 Agent，再由 Agent 访问目标网络。
+- **外部出口：** Gateway 也可按用户授权，将客户端流量重新封装为 VMess 或 VLESS 发送到选定的外部节点；这条线路不需要 Agent 或 Link。
 - **公网要求：** 只有 Gateway 需要公网 IP；Agent 主动连接 Gateway，不需要公网 IP 或入站端口映射。
 - **管理面：** Gateway 和 Agent 通过 HTTPS 从 Controller 拉取配置并上报状态；Controller 不转发用户流量。
 
@@ -26,6 +27,7 @@ XMesh 将客户端入口与实际出口分开：Gateway 提供可访问的入口
 | REALITY 隧道 | 自动生成 Gateway 密钥和 Link 身份；Agent 内嵌 Xray-core，Gateway 管理随包提供的 Xray 进程 |
 | 多链路调度 | 支持优先级、权重、连接数和流容量；新会话选择健康链路，已有会话固定在原隧道上 |
 | 用户授权与订阅 | 按用户和线路授权，Gateway 应用配置后发布 VMess/WS 订阅；支持停用授权和重置订阅链接 |
+| 外部出口 | 粘贴单个 `vmess://` 或 `vless://` 链接，或添加订阅 URL 并选择其中一个节点；支持 VMess/TCP、VMess/WS + TLS、VLESS/TCP + REALITY + Vision |
 | 部署与维护 | 一次性注册令牌、systemd / Docker Compose 安装命令、Release 缓存、节点升级及凭据轮换 |
 | 状态与历史 | 拓扑、Gateway × Agent 矩阵、部署进度、15 秒局部刷新、24 小时链路历史和最近 100 次管理请求结果 |
 
@@ -100,6 +102,8 @@ unset XMESH_ADMIN_PASSWORD
 ### 3. 为 Controller 启用 HTTPS
 
 Controller 自身只提供 HTTP。先建立 ACME 验证站点，在证书申请成功后再启用 HTTPS 配置：
+
+Controller 的 `public_url` 如填写 `http://`，启动日志和管理面板会提示 warning，但不会阻止运行。这个检查只针对对外地址；Nginx 到本机 `127.0.0.1:8088` 的 HTTP 转发不会触发提示。
 
 ```sh
 DOMAIN=panel.example.com
@@ -192,6 +196,8 @@ curl -fsS https://panel.example.com/healthz
 Gateway 报告对应配置已应用且 Xray 就绪后，授权才会发布。复制面板中的订阅 URL，导入支持 VMess/WS 订阅的客户端。订阅是 Base64 编码的 `vmess://` 列表；客户端连接 `edge.example.com:8080/proxy`，Agent 隧道使用 `8443`。
 
 **订阅发布不等于线路健康检查通过。** 验收还需确认两端在线、配置已应用、Gateway Xray 就绪，且同一个已启用 Link 在 Gateway 和 Agent 两端均报告 ready，最后实际测试目标访问。
+
+外部出口在“节点与线路 → 外部出口”添加，支持 `vmess://`（TCP 或 WS，可带 TLS）和 `vless://`（TCP + REALITY + Vision）链接。无法准确表示的 VMess 选项会在导入时被拒绝。订阅 URL 包含多个节点时，先明确选择一个，再绑定 Gateway 并为用户开通该线路。Controller 每 30 分钟刷新订阅，也可手动刷新；拉取失败时保留上次有效配置，已选节点在成功刷新后消失时会关闭该出口，不能自动切换到其他节点。旧版 Gateway 须升级到支持外部出口的版本，授权才能发布。Gateway 显示“已配置（上游未探测）”表示配置已应用，仍需实际测试上游连通性。订阅 URL 和上游 UUID 不出现在给用户的订阅中。公网订阅 URL 才能自动抓取；内网订阅仅可通过 Controller 配置的 `allow_private_upstream_sources` 显式放行。
 
 ## 日常维护
 

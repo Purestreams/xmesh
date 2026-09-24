@@ -16,6 +16,18 @@ func sampleLinkHistory(state *model.State, status model.LinkStatus, now time.Tim
 	if state.LinkHistory == nil {
 		state.LinkHistory = map[string][]model.LinkSample{}
 	}
+	samples := state.LinkHistory[status.LinkID]
+	if len(samples) > 0 && now.Sub(samples[len(samples)-1].At) < historyInterval {
+		return
+	}
+	samples = append(samples, model.LinkSample{At: now, Generation: status.Generation, InstanceID: state.NodeStatus[status.ReporterNodeID].InstanceID, UploadBytes: status.UploadBytes, DownloadBytes: status.DownloadBytes, RTTMillis: status.RTTMillis, Ready: status.Online && status.Ready})
+	if len(samples) > historyLimit {
+		samples = samples[len(samples)-historyLimit:]
+	}
+	state.LinkHistory[status.LinkID] = samples
+}
+
+func pruneLinkHistory(state *model.State, now time.Time) {
 	for id, samples := range state.LinkHistory {
 		if _, exists := state.Links[id]; !exists {
 			delete(state.LinkHistory, id)
@@ -27,15 +39,6 @@ func sampleLinkHistory(state *model.State, status model.LinkStatus, now time.Tim
 		}
 		state.LinkHistory[id] = samples[first:]
 	}
-	samples := state.LinkHistory[status.LinkID]
-	if len(samples) > 0 && now.Sub(samples[len(samples)-1].At) < historyInterval {
-		return
-	}
-	samples = append(samples, model.LinkSample{At: now, Generation: status.Generation, InstanceID: state.NodeStatus[status.ReporterNodeID].InstanceID, UploadBytes: status.UploadBytes, DownloadBytes: status.DownloadBytes, RTTMillis: status.RTTMillis, Ready: status.Online && status.Ready})
-	if len(samples) > historyLimit {
-		samples = samples[len(samples)-historyLimit:]
-	}
-	state.LinkHistory[status.LinkID] = samples
 }
 
 type dashboardNode struct {
@@ -55,6 +58,7 @@ type dashboardRoute struct {
 	ID         string `json:"id"`
 	GatewayID  string `json:"gateway_id"`
 	AgentID    string `json:"agent_id"`
+	UpstreamID string `json:"upstream_id,omitempty"`
 	Enabled    bool   `json:"enabled"`
 	Selectable bool   `json:"selectable"`
 	State      string `json:"state"`
@@ -124,7 +128,28 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 	for _, node := range sortedAgents(state) {
 		data.Nodes = append(data.Nodes, dashboardNode{ID: node.ID, Name: node.Name, Role: "Agent", Enabled: node.Enabled, Enrolled: node.CredentialHash != "", Desired: node.DesiredVersion, Status: state.NodeStatus[node.ID], Next: nextDeploymentAction(state, node.ID, model.RoleAgent)})
 	}
+	for _, upstream := range sortedUpstreams(state) {
+		data.Nodes = append(data.Nodes, dashboardNode{ID: upstream.ID, Name: upstream.Name, Role: "External exit", Host: upstream.Endpoint.Address, Enabled: upstream.Enabled, Status: model.NodeStatus{Online: upstream.Endpoint.UUID != ""}, Next: upstream.LastError})
+	}
 	for _, route := range sortedAttachments(state) {
+		if route.UpstreamID != "" {
+			upstream := state.Upstreams[route.UpstreamID]
+			gateway := state.Gateways[route.GatewayID]
+			status := state.NodeStatus[route.GatewayID]
+			stage := "pending"
+			switch {
+			case !route.Enabled || !gateway.Enabled || !upstream.Enabled:
+				stage = "disabled"
+			case !status.Online:
+				stage = "offline"
+			case !status.ExternalUpstreams:
+				stage = "pending"
+			case upstream.Endpoint.UUID != "" && status.AppliedVersion >= gateway.DesiredVersion && status.Ready && status.XrayReady && status.XrayError == "":
+				stage = "configured"
+			}
+			data.Routes = append(data.Routes, dashboardRoute{ID: route.ID, GatewayID: route.GatewayID, UpstreamID: route.UpstreamID, Enabled: route.Enabled && upstream.Enabled && gateway.Enabled, Selectable: routeAvailable(&state, route), State: stage})
+			continue
+		}
 		enabled := route.Enabled && state.Gateways[route.GatewayID].Enabled && state.Agents[route.AgentID].Enabled
 		selectable := enabled && attachmentHasEnabledLink(&state, route.ID)
 		stage := "pending"

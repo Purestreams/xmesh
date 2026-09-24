@@ -14,10 +14,20 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"xmesh/internal/model"
 )
 
 const maxReleaseAsset = 256 << 20
 const maxReleaseManifest = 64 << 10
+const releaseVerificationTTL = 5 * time.Minute
+
+type verifiedReleaseAsset struct {
+	assetSize, manifestSize         int64
+	assetModified, manifestModified time.Time
+	assetFile, manifestFile         os.FileInfo
+	checkedAt                       time.Time
+}
 
 var releaseVersionPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]*$`)
 
@@ -109,7 +119,20 @@ func (s *Server) validCachedAsset(name string) error {
 	if err != nil {
 		return err
 	}
-	file, err := os.Open(filepath.Join(s.releaseDirectory(), name))
+	assetPath := filepath.Join(s.releaseDirectory(), name)
+	manifestPath := filepath.Join(s.releaseDirectory(), "SHA256SUMS")
+	assetInfo, err := os.Stat(assetPath)
+	if err != nil {
+		return err
+	}
+	manifestInfo, err := os.Stat(manifestPath)
+	if err != nil {
+		return err
+	}
+	if s.releaseCacheHit(assetPath, assetInfo, manifestInfo) {
+		return nil
+	}
+	file, err := os.Open(assetPath)
 	if err != nil {
 		return err
 	}
@@ -121,7 +144,37 @@ func (s *Server) validCachedAsset(name string) error {
 	if hex.EncodeToString(hash.Sum(nil)) != expected {
 		return errors.New("cached asset checksum mismatch")
 	}
+	assetAfter, assetErr := os.Stat(assetPath)
+	manifestAfter, manifestErr := os.Stat(manifestPath)
+	if assetErr != nil || manifestErr != nil || assetAfter.Size() != assetInfo.Size() || !assetAfter.ModTime().Equal(assetInfo.ModTime()) || !os.SameFile(assetAfter, assetInfo) || manifestAfter.Size() != manifestInfo.Size() || !manifestAfter.ModTime().Equal(manifestInfo.ModTime()) || !os.SameFile(manifestAfter, manifestInfo) {
+		return errors.New("release asset changed during verification")
+	}
+	if s.releaseCache != nil {
+		s.releaseCache.Store(assetPath, verifiedReleaseAsset{assetSize: assetInfo.Size(), assetModified: assetInfo.ModTime(), assetFile: assetInfo, manifestSize: manifestInfo.Size(), manifestModified: manifestInfo.ModTime(), manifestFile: manifestInfo, checkedAt: time.Now()})
+	}
 	return nil
+}
+
+func (s *Server) releaseCacheHit(path string, asset, manifest os.FileInfo) bool {
+	if s.releaseCache == nil {
+		return false
+	}
+	cached, ok := s.releaseCache.Load(path)
+	if !ok {
+		return false
+	}
+	entry := cached.(verifiedReleaseAsset)
+	return time.Since(entry.checkedAt) < releaseVerificationTTL && entry.assetSize == asset.Size() && entry.assetModified.Equal(asset.ModTime()) && os.SameFile(entry.assetFile, asset) && entry.manifestSize == manifest.Size() && entry.manifestModified.Equal(manifest.ModTime()) && os.SameFile(entry.manifestFile, manifest)
+}
+
+func (s *Server) fastReleaseCacheHit(name string) bool {
+	if name == "SHA256SUMS" || s.releaseCache == nil || !s.releaseEnabled() || !isReleaseAsset(s.cfg.ReleaseVersion, name) {
+		return false
+	}
+	path := filepath.Join(s.releaseDirectory(), name)
+	asset, assetErr := os.Stat(path)
+	manifest, manifestErr := os.Stat(filepath.Join(s.releaseDirectory(), "SHA256SUMS"))
+	return assetErr == nil && manifestErr == nil && s.releaseCacheHit(path, asset, manifest)
 }
 
 func isReleaseAsset(version, name string) bool {
@@ -160,7 +213,7 @@ func (s *Server) releaseServer(version string) *Server {
 	}
 	cfg := s.cfg
 	cfg.ReleaseVersion = version
-	return &Server{cfg: cfg, store: s.store, logger: s.logger, now: s.now, releaseHTTPClient: s.releaseHTTPClient, releaseMu: s.releaseMu}
+	return &Server{cfg: cfg, store: s.store, logger: s.logger, now: s.now, releaseHTTPClient: s.releaseHTTPClient, releaseMu: s.releaseMu, releaseCache: s.releaseCache}
 }
 
 func (s *Server) releaseVersionAllowed(version string) bool {
@@ -170,36 +223,48 @@ func (s *Server) releaseVersionAllowed(version string) bool {
 	if !releaseVersionPattern.MatchString(version) {
 		return false
 	}
-	for _, task := range s.store.Snapshot().UpgradeTasks {
-		if task.TargetVersion == version && task.Stage != "cancelled" {
-			return true
+	allowed := false
+	s.store.View(func(state *model.State) {
+		for _, task := range state.UpgradeTasks {
+			if task.TargetVersion == version && task.Stage != "cancelled" {
+				allowed = true
+				return
+			}
 		}
-	}
-	return false
+	})
+	return allowed
 }
 
 func (s *Server) ensureReleaseAsset(ctx context.Context, name string) error {
-	if s.validCachedAsset(name) == nil {
+	if s.fastReleaseCacheHit(name) {
 		return nil
 	}
 	s.releaseMu.Lock()
 	defer s.releaseMu.Unlock()
+	if s.validCachedAsset(name) == nil {
+		return nil
+	}
+	manifestUpdated := false
 	if name != "SHA256SUMS" && s.validCachedAsset("SHA256SUMS") != nil {
 		if err := s.fetchReleaseAsset(ctx, "SHA256SUMS", "", maxReleaseManifest); err != nil {
 			return err
 		}
-	}
-	if s.validCachedAsset(name) == nil {
-		return nil
+		manifestUpdated = true
 	}
 	if name == "SHA256SUMS" {
 		return s.fetchReleaseAsset(ctx, name, "", maxReleaseManifest)
+	}
+	if manifestUpdated && s.validCachedAsset(name) == nil {
+		return nil
 	}
 	expected, err := s.releaseExpectedHash(name)
 	if err != nil {
 		return err
 	}
-	return s.fetchReleaseAsset(ctx, name, expected, maxReleaseAsset)
+	if err := s.fetchReleaseAsset(ctx, name, expected, maxReleaseAsset); err != nil {
+		return err
+	}
+	return s.validCachedAsset(name)
 }
 
 func (s *Server) fetchReleaseAsset(ctx context.Context, name, expected string, limit int64) error {

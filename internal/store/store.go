@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"sync"
 
+	"xmesh/internal/atomicfile"
 	"xmesh/internal/model"
 )
 
@@ -37,24 +37,22 @@ func Open(path string) (*Store, error) {
 func (s *Store) Snapshot() model.State {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	b, _ := json.Marshal(s.state)
-	var copy model.State
-	_ = json.Unmarshal(b, &copy)
-	return copy
+	return s.state.Clone()
+}
+
+// View holds the read lock for the callback. The callback must not mutate or
+// retain references to state, or call another Store method.
+func (s *Store) View(fn func(*model.State)) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	fn(&s.state)
 }
 
 func (s *Store) Update(fn func(*model.State) error) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	b, err := json.Marshal(s.state)
-	if err != nil {
-		return fmt.Errorf("copy state: %w", err)
-	}
-	var next model.State
-	if err := json.Unmarshal(b, &next); err != nil {
-		return fmt.Errorf("copy state: %w", err)
-	}
+	next := s.state.Clone()
 	if err := fn(&next); err != nil {
 		return err
 	}
@@ -76,6 +74,9 @@ func (s *Store) ensureMaps() {
 	if s.state.Agents == nil {
 		s.state.Agents = map[string]model.Agent{}
 	}
+	if s.state.Upstreams == nil {
+		s.state.Upstreams = map[string]model.VMessUpstream{}
+	}
 	if s.state.Attachments == nil {
 		s.state.Attachments = map[string]model.Attachment{}
 	}
@@ -84,6 +85,12 @@ func (s *Store) ensureMaps() {
 	}
 	if s.state.Grants == nil {
 		s.state.Grants = map[string]model.Grant{}
+	}
+	if s.state.RetiredGrants == nil {
+		s.state.RetiredGrants = map[string]model.RetiredGrant{}
+	}
+	if s.state.RetiredLinks == nil {
+		s.state.RetiredLinks = map[string]model.RetiredLink{}
 	}
 	if s.state.Enrollments == nil {
 		s.state.Enrollments = map[string]model.Enrollment{}
@@ -112,7 +119,7 @@ func writeAtomic(path string, state model.State) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return fmt.Errorf("create state directory: %w", err)
 	}
-	b, err := json.MarshalIndent(state, "", "  ")
+	b, err := json.Marshal(state)
 	if err != nil {
 		return fmt.Errorf("encode state: %w", err)
 	}
@@ -137,15 +144,7 @@ func writeAtomic(path string, state model.State) error {
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("close state temp file: %w", err)
 	}
-	if err := os.Rename(tmpName, path); err == nil {
-		return nil
-	} else if runtime.GOOS != "windows" {
-		return fmt.Errorf("replace state file: %w", err)
-	}
-	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("remove previous state file: %w", err)
-	}
-	if err := os.Rename(tmpName, path); err != nil {
+	if err := atomicfile.Replace(tmpName, path); err != nil {
 		return fmt.Errorf("replace state file: %w", err)
 	}
 	return nil

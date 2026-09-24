@@ -32,6 +32,9 @@ type Runtime struct {
 	pool                *scheduler.Pool
 	mu                  sync.RWMutex
 	config              controller.GatewayConfig
+	xrayStatsConfig     controller.GatewayConfig
+	pendingStats        map[uint64]pendingStatsConfig
+	statsMu             sync.Mutex
 	started             time.Time
 	tcpConnections      atomic.Int64
 	udpAssociations     atomic.Int64
@@ -53,8 +56,15 @@ type grantCounters struct {
 	udp      atomic.Int64
 }
 
+type pendingStatsConfig struct {
+	config    controller.GatewayConfig
+	expiresAt time.Time
+}
+
+const pendingStatsLifetime = 7 * 24 * time.Hour
+
 func New(local runtimecfg.Config, logger *slog.Logger) *Runtime {
-	return &Runtime{local: local, client: nodeclient.New(local.ControllerURL, local.Credential), logger: logger, pool: scheduler.New(), started: time.Now(), xrayApply: make(chan struct{}, 1), grantStats: map[string]*grantCounters{}, grantLinks: map[string]map[string]*grantCounters{}}
+	return &Runtime{local: local, client: nodeclient.New(local.ControllerURL, local.Credential), logger: logger, pool: scheduler.New(), started: time.Now(), xrayApply: make(chan struct{}, 1), grantStats: map[string]*grantCounters{}, grantLinks: map[string]map[string]*grantCounters{}, pendingStats: map[uint64]pendingStatsConfig{}}
 }
 
 func (r *Runtime) Run(ctx context.Context) error {
@@ -105,6 +115,18 @@ func (r *Runtime) refresh(ctx context.Context) error {
 	}
 	r.mu.Lock()
 	changed := r.config.Revision != config.Revision || r.config.Gateway.ID == ""
+	r.mu.Unlock()
+	if changed {
+		if err := r.validateXrayCandidate(ctx, config); err != nil {
+			return err
+		}
+	}
+	if changed && r.xrayReady.Load() {
+		if err := r.report(ctx); err != nil {
+			r.logger.Warn("report traffic before Xray update", "error", err)
+		}
+	}
+	r.mu.Lock()
 	r.config = config
 	r.mu.Unlock()
 	if changed {
@@ -118,12 +140,59 @@ func (r *Runtime) refresh(ctx context.Context) error {
 }
 
 func (r *Runtime) report(ctx context.Context) error {
+	r.collectXrayStats(ctx)
 	r.mu.RLock()
 	config := r.config
+	activeXrayConfig := r.xrayStatsConfig
+	pending := make(map[uint64]controller.GatewayConfig, len(r.pendingStats))
+	pendingExpiry := make(map[uint64]time.Time, len(r.pendingStats))
+	expired := make([]uint64, 0)
+	for revision, item := range r.pendingStats {
+		if time.Now().After(item.expiresAt) {
+			expired = append(expired, revision)
+			continue
+		}
+		pending[revision] = item.config
+		pendingExpiry[revision] = item.expiresAt
+	}
 	r.mu.RUnlock()
+	if len(expired) > 0 {
+		r.mu.Lock()
+		for _, revision := range expired {
+			if item, ok := r.pendingStats[revision]; ok && time.Now().After(item.expiresAt) {
+				delete(r.pendingStats, revision)
+			}
+		}
+		r.mu.Unlock()
+	}
 	links := map[string]model.LinkStatus{}
 	for _, item := range config.Links {
 		links[item.ID] = model.LinkStatus{LinkID: item.ID}
+	}
+	for _, item := range activeXrayConfig.Links {
+		if _, exists := links[item.ID]; !exists {
+			links[item.ID] = model.LinkStatus{LinkID: item.ID}
+		}
+	}
+	for _, upstream := range config.Upstreams {
+		links[upstream.AttachmentID] = model.LinkStatus{LinkID: upstream.AttachmentID, Online: r.xrayReady.Load(), Ready: r.xrayReady.Load()}
+	}
+	for _, upstream := range activeXrayConfig.Upstreams {
+		if _, exists := links[upstream.AttachmentID]; !exists {
+			links[upstream.AttachmentID] = model.LinkStatus{LinkID: upstream.AttachmentID, Online: r.xrayReady.Load(), Ready: r.xrayReady.Load()}
+		}
+	}
+	for _, old := range pending {
+		for _, item := range old.Links {
+			if _, exists := links[item.ID]; !exists {
+				links[item.ID] = model.LinkStatus{LinkID: item.ID}
+			}
+		}
+		for _, upstream := range old.Upstreams {
+			if _, exists := links[upstream.AttachmentID]; !exists {
+				links[upstream.AttachmentID] = model.LinkStatus{LinkID: upstream.AttachmentID}
+			}
+		}
 	}
 	for _, session := range r.pool.Snapshot() {
 		status, configured := links[session.LinkID]
@@ -164,6 +233,14 @@ func (r *Runtime) report(ctx context.Context) error {
 	for _, grant := range config.Grants {
 		activeGrants[grant.ID] = true
 	}
+	for _, grant := range activeXrayConfig.Grants {
+		activeGrants[grant.ID] = true
+	}
+	for _, old := range pending {
+		for _, grant := range old.Grants {
+			activeGrants[grant.ID] = true
+		}
+	}
 	filteredGrants := grantList[:0]
 	for _, grant := range grantList {
 		if !activeGrants[grant.GrantID] {
@@ -191,8 +268,18 @@ func (r *Runtime) report(ctx context.Context) error {
 	for _, status := range links {
 		linkList = append(linkList, status)
 	}
-	nodeStatus := model.NodeStatus{NodeID: r.local.NodeID, Role: model.RoleGateway, BinaryVersion: r.local.BinaryVersion, InstanceID: r.local.InstanceID, Online: true, Ready: ready, DesiredVersion: config.Revision, AppliedVersion: r.xrayAppliedRevision.Load(), XrayReady: r.xrayReady.Load(), XrayError: xrayError, LastSeen: time.Now().UTC(), TunnelConnections: tunnelCount, TCPConnections: int(r.tcpConnections.Load()), UDPAssociations: int(r.udpAssociations.Load()), UploadBytes: upload, DownloadBytes: download, LastError: lastError, FailureCounters: map[string]uint64{"udp_queue_drops": r.udpQueueDrops.Load()}}
-	return r.client.Report(ctx, nodeStatus, linkList, grantList)
+	nodeStatus := model.NodeStatus{NodeID: r.local.NodeID, Role: model.RoleGateway, BinaryVersion: r.local.BinaryVersion, InstanceID: r.local.InstanceID, Online: true, Ready: ready, DesiredVersion: config.Revision, AppliedVersion: r.xrayAppliedRevision.Load(), XrayReady: r.xrayReady.Load(), XrayError: xrayError, ExternalUpstreams: true, LastSeen: time.Now().UTC(), TunnelConnections: tunnelCount, TCPConnections: int(r.tcpConnections.Load()), UDPAssociations: int(r.udpAssociations.Load()), UploadBytes: upload, DownloadBytes: download, LastError: lastError, FailureCounters: map[string]uint64{"udp_queue_drops": r.udpQueueDrops.Load()}}
+	if err := r.client.Report(ctx, nodeStatus, linkList, grantList); err != nil {
+		return err
+	}
+	r.mu.Lock()
+	for revision := range pending {
+		if item, ok := r.pendingStats[revision]; ok && item.expiresAt.Equal(pendingExpiry[revision]) {
+			delete(r.pendingStats, revision)
+		}
+	}
+	r.mu.Unlock()
+	return nil
 }
 
 func (r *Runtime) grantCounters(id string) *grantCounters {

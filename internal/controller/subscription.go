@@ -11,6 +11,9 @@ import (
 )
 
 func routeDisplayName(state model.State, route model.Attachment) string {
+	if route.UpstreamID != "" {
+		return state.Gateways[route.GatewayID].Name + " / " + state.Upstreams[route.UpstreamID].Name
+	}
 	return state.Gateways[route.GatewayID].Name + " / " + state.Agents[route.AgentID].Name
 }
 
@@ -59,12 +62,11 @@ func BuildSubscription(state model.State, userID string) (string, error) {
 			continue
 		}
 		attachment, ok := state.Attachments[grant.AttachmentID]
-		if !ok || !attachment.Enabled || !attachmentHasEnabledLink(&state, attachment.ID) {
+		if !ok || !routeAvailable(&state, attachment) {
 			continue
 		}
 		gateway, gatewayOK := state.Gateways[attachment.GatewayID]
-		agent, agentOK := state.Agents[attachment.AgentID]
-		if !gatewayOK || !agentOK || !gateway.Enabled || !agent.Enabled {
+		if !gatewayOK || !gateway.Enabled {
 			continue
 		}
 		share := vmessShare{

@@ -33,7 +33,7 @@ func testServer(t *testing.T, populate func(*model.State) error) (*Server, *stor
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg := Config{PublicURL: "https://panel.example", AdminUsername: "admin", AdminPasswordHash: passwordHash, SessionSecret: base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{7}, 32)), NodeOfflineAfterSeconds: 45}
+	cfg := Config{PublicURL: "https://panel.example", AdminUsername: "admin", AdminPasswordHash: passwordHash, SessionSecret: base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{7}, 32)), NodeOfflineAfterSeconds: 45, AllowPrivateUpstreamSources: true}
 	server, err := New(cfg, state, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatal(err)

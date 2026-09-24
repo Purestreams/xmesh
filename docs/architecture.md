@@ -7,11 +7,16 @@ VMess client -- cleartext WS :8080 --> Xray
                                       v
 Controller HTTP <--- config/status --- Gateway <--- WSS + smux v2 --- Agent ---> target
    (no business traffic)               TCP/UDP                         system DNS/routes
+
+VMess client -- cleartext WS :8080 --> Gateway Xray -- VMess/TCP or WS, or VLESS/REALITY --> external exit ---> target
 ```
 
-The stable authorization model is `Node = Gateway × Agent` and `Grant = User × Node`. Each Grant
+The stable authorization model is `Node = Gateway × (Agent or external exit)` and `Grant = User × Node`. Each Grant
 has a stable VMess UUID and separate loopback SOCKS credential. A Link is an internal path for one
 Gateway–Agent attachment; adding direct/CDN Links never creates extra subscription nodes.
+An external attachment selects one manually imported node or one node from a subscription.
+The Controller resolves subscriptions and sends only the selected endpoint to the Gateway. Xray
+routes that Grant directly to a VMess or VLESS outbound; an external attachment has no Agent or tunnel Link.
 
 For a new TCP connection or UDP association, the Gateway chooses the lowest-numbered healthy
 priority group and minimizes `(active streams + 1) / weight` within that group. The resulting

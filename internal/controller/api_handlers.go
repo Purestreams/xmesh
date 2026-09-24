@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"crypto/subtle"
 	"errors"
 	"fmt"
 	"net/http"
@@ -27,7 +28,8 @@ func (s *Server) selfStatus(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	status := s.store.Snapshot().NodeStatus[nodeID]
+	var status model.NodeStatus
+	s.store.View(func(state *model.State) { status = state.NodeStatus[nodeID] })
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, status)
 }
@@ -142,22 +144,30 @@ func (s *Server) nodeConfig(w http.ResponseWriter, r *http.Request) {
 			if attachment.GatewayID != nodeID || !attachment.Enabled {
 				continue
 			}
-			for _, link := range state.Links {
-				if link.AttachmentID != attachment.ID || !link.Enabled {
-					continue
+			if attachment.UpstreamID != "" {
+				if upstreamAvailable(&state, attachment) {
+					upstream := state.Upstreams[attachment.UpstreamID]
+					response.Upstreams = append(response.Upstreams, GatewayUpstreamConfig{AttachmentID: attachment.ID, UpstreamID: upstream.ID, Endpoint: upstream.Endpoint})
 				}
-				link.TunnelTokenHash = ""
-				response.Links = append(response.Links, GatewayLinkConfig{Link: link, AgentID: attachment.AgentID, TunnelToken: auth.Derive(s.cfg.sessionKey(), "tunnel", link.ID)})
+			} else {
+				for _, link := range state.Links {
+					if link.AttachmentID != attachment.ID || !link.Enabled {
+						continue
+					}
+					link.TunnelTokenHash = ""
+					response.Links = append(response.Links, GatewayLinkConfig{Link: link, AgentID: attachment.AgentID, TunnelToken: auth.Derive(s.cfg.sessionKey(), "tunnel", link.ID)})
+				}
 			}
 			for _, grant := range state.Grants {
 				user := state.Users[grant.UserID]
-				if grant.AttachmentID == attachment.ID && grant.Enabled && user.Enabled {
+				if grant.AttachmentID == attachment.ID && grant.Enabled && user.Enabled && routeAvailable(&state, attachment) {
 					response.Grants = append(response.Grants, grant)
 				}
 			}
 		}
 		sort.Slice(response.Links, func(i, j int) bool { return response.Links[i].ID < response.Links[j].ID })
 		sort.Slice(response.Grants, func(i, j int) bool { return response.Grants[i].ID < response.Grants[j].ID })
+		sort.Slice(response.Upstreams, func(i, j int) bool { return response.Upstreams[i].AttachmentID < response.Upstreams[j].AttachmentID })
 		writeJSON(w, 200, response)
 	case model.RoleAgent:
 		agent := state.Agents[nodeID]
@@ -212,6 +222,15 @@ func (s *Server) nodeStatus(w http.ResponseWriter, r *http.Request) {
 		now := s.now().UTC()
 		report.Status.NodeID, report.Status.Role, report.Status.LastSeen = nodeID, role, now
 		state.NodeStatus[nodeID] = report.Status
+		if role == model.RoleGateway && !report.Status.ExternalUpstreams {
+			for id, grant := range state.Grants {
+				attachment := state.Attachments[grant.AttachmentID]
+				if attachment.GatewayID == nodeID && attachment.UpstreamID != "" {
+					grant.Published = false
+					state.Grants[id] = grant
+				}
+			}
+		}
 		credential := strings.TrimSpace(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "))
 		if role == model.RoleGateway {
 			gateway := state.Gateways[nodeID]
@@ -231,6 +250,9 @@ func (s *Server) nodeStatus(w http.ResponseWriter, r *http.Request) {
 		allowedLinks := map[string]bool{}
 		for _, attachment := range state.Attachments {
 			if (role == model.RoleGateway && attachment.GatewayID == nodeID) || (role == model.RoleAgent && attachment.AgentID == nodeID) {
+				if role == model.RoleGateway && attachment.UpstreamID != "" {
+					allowedLinks[attachment.ID] = true
+				}
 				for _, link := range state.Links {
 					if link.AttachmentID == attachment.ID {
 						allowedLinks[link.ID] = true
@@ -238,21 +260,39 @@ func (s *Server) nodeStatus(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
+		for id, link := range state.RetiredLinks {
+			if now.Before(link.ExpiresAt) && (role == model.RoleGateway && link.GatewayID == nodeID || role == model.RoleAgent && link.AgentID == nodeID) {
+				allowedLinks[id] = true
+			}
+		}
 		for _, status := range report.Links {
 			if !allowedLinks[status.LinkID] {
 				return fmt.Errorf("link %s does not belong to node", status.LinkID)
 			}
+			if _, live := state.Links[status.LinkID]; !live {
+				attachment, live := state.Attachments[status.LinkID]
+				if !live || attachment.UpstreamID == "" {
+					continue
+				}
+			}
 			status.LastSeen = now
 			status.ReporterNodeID = nodeID
 			state.LinkStatus[nodeID+"/"+status.LinkID] = status
-			if role == model.RoleGateway {
+			if role == model.RoleGateway && state.Links[status.LinkID].ID != "" {
 				sampleLinkHistory(state, status, now)
 			}
 		}
 		for _, status := range report.Grants {
 			grant, ok := state.Grants[status.GrantID]
 			if !ok {
-				return fmt.Errorf("grant %s does not exist", status.GrantID)
+				retired, known := state.RetiredGrants[status.GrantID]
+				if role != model.RoleGateway || !known || retired.GatewayID != nodeID || !now.Before(retired.ExpiresAt) {
+					return fmt.Errorf("grant %s does not exist", status.GrantID)
+				}
+				if err := sampleRetiredGrantUsage(state, report.Status.InstanceID, status.GrantID, retired, status.Links, now); err != nil {
+					return err
+				}
+				continue
 			}
 			attachment := state.Attachments[grant.AttachmentID]
 			if role != model.RoleGateway || attachment.GatewayID != nodeID {
@@ -264,19 +304,22 @@ func (s *Server) nodeStatus(w http.ResponseWriter, r *http.Request) {
 			}
 			state.GrantStatus[nodeID+"/"+status.GrantID] = status
 		}
+		pruneUsageHistory(state, now)
+		pruneLinkHistory(state, now)
 		if role == model.RoleGateway && report.Status.Ready && report.Status.XrayReady && report.Status.ApplyError == "" && report.Status.XrayError == "" {
 			gateway := state.Gateways[nodeID]
 			if report.Status.AppliedVersion >= gateway.DesiredVersion {
 				for id, grant := range state.Grants {
 					attachment := state.Attachments[grant.AttachmentID]
 					user := state.Users[grant.UserID]
-					if attachment.GatewayID == nodeID && attachment.Enabled && grant.Enabled && user.Enabled && attachmentHasEnabledLink(state, attachment.ID) {
+					if attachment.GatewayID == nodeID && grant.Enabled && user.Enabled && routeAvailable(state, attachment) {
 						grant.Published = true
 						state.Grants[id] = grant
 					}
 				}
 			}
 		}
+		pruneRetiredUsage(state, now)
 		return nil
 	})
 	if err != nil {
@@ -292,21 +335,31 @@ func (s *Server) authenticateNode(r *http.Request) (model.Role, string, bool) {
 		return "", "", false
 	}
 	credential := strings.TrimSpace(strings.TrimPrefix(header, "Bearer "))
-	if credential == "" {
+	if credential == "" || len(credential) > 256 {
 		return "", "", false
 	}
-	state := s.store.Snapshot()
-	for id, gateway := range state.Gateways {
-		if gateway.Enabled && (gateway.CredentialHash != "" && auth.EqualSecretHash(gateway.CredentialHash, credential) || s.now().Before(gateway.PreviousCredentialExpiresAt) && gateway.PreviousCredentialHash != "" && auth.EqualSecretHash(gateway.PreviousCredentialHash, credential)) {
-			return model.RoleGateway, id, true
-		}
+	var role model.Role
+	var nodeID string
+	now := s.now()
+	candidateHash := auth.SecretHash(credential)
+	matches := func(stored string) bool {
+		return stored != "" && subtle.ConstantTimeCompare([]byte(stored), []byte(candidateHash)) == 1
 	}
-	for id, agent := range state.Agents {
-		if agent.Enabled && (agent.CredentialHash != "" && auth.EqualSecretHash(agent.CredentialHash, credential) || s.now().Before(agent.PreviousCredentialExpiresAt) && agent.PreviousCredentialHash != "" && auth.EqualSecretHash(agent.PreviousCredentialHash, credential)) {
-			return model.RoleAgent, id, true
+	s.store.View(func(state *model.State) {
+		for id, gateway := range state.Gateways {
+			if gateway.Enabled && (matches(gateway.CredentialHash) || now.Before(gateway.PreviousCredentialExpiresAt) && matches(gateway.PreviousCredentialHash)) {
+				role, nodeID = model.RoleGateway, id
+				return
+			}
 		}
-	}
-	return "", "", false
+		for id, agent := range state.Agents {
+			if agent.Enabled && (matches(agent.CredentialHash) || now.Before(agent.PreviousCredentialExpiresAt) && matches(agent.PreviousCredentialHash)) {
+				role, nodeID = model.RoleAgent, id
+				return
+			}
+		}
+	})
+	return role, nodeID, nodeID != ""
 }
 
 var _ = time.Second

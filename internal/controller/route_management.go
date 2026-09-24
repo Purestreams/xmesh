@@ -29,6 +29,9 @@ func (s *Server) editLink(w http.ResponseWriter, r *http.Request) {
 			return fmt.Errorf("changing between REALITY and legacy WS requires a new Link")
 		}
 		attachment := state.Attachments[link.AttachmentID]
+		if attachment.UpstreamID != "" {
+			return fmt.Errorf("external VMess routes do not use Links")
+		}
 		if newReality {
 			u, err := url.Parse(linkURL)
 			if err != nil || u.Hostname() == "" || u.Port() == "" || u.Path == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
