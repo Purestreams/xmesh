@@ -28,20 +28,22 @@ import (
 )
 
 type Runtime struct {
-	local             runtimecfg.Config
-	client            *nodeclient.Client
-	logger            *slog.Logger
-	mu                sync.RWMutex
-	config            controller.AgentConfig
-	configFingerprint string
-	workers           map[string]context.CancelFunc
-	statuses          map[string]*linkRuntimeStatus
-	realityMu         sync.Mutex
-	realities         map[string]*realityCore
-	streamSlots       chan struct{}
-	tcpConnections    atomic.Int64
-	udpAssociations   atomic.Int64
-	lastError         atomic.Value
+	local              runtimecfg.Config
+	client             *nodeclient.Client
+	logger             *slog.Logger
+	mu                 sync.RWMutex
+	config             controller.AgentConfig
+	configFingerprint  string
+	authorizationUntil time.Time
+	authorizationEpoch uint64
+	workers            map[string]context.CancelFunc
+	statuses           map[string]*linkRuntimeStatus
+	realityMu          sync.Mutex
+	realities          map[string]*realityCore
+	streamSlots        chan struct{}
+	tcpConnections     atomic.Int64
+	udpAssociations    atomic.Int64
+	lastError          atomic.Value
 }
 
 type linkRuntimeStatus struct {
@@ -54,7 +56,7 @@ func New(local runtimecfg.Config, logger *slog.Logger) *Runtime {
 	if limit <= 0 {
 		limit = 1024
 	}
-	return &Runtime{local: local, client: nodeclient.New(local.ControllerURL, local.Credential), logger: logger, workers: map[string]context.CancelFunc{}, statuses: map[string]*linkRuntimeStatus{}, realities: map[string]*realityCore{}, streamSlots: make(chan struct{}, limit)}
+	return &Runtime{local: local, client: nodeclient.New(local.ControllerURL, local.Credential), logger: logger, workers: map[string]context.CancelFunc{}, statuses: map[string]*linkRuntimeStatus{}, realities: map[string]*realityCore{}, streamSlots: make(chan struct{}, limit), authorizationUntil: time.Now().Add(nodeclient.ConfigLease)}
 }
 
 func (r *Runtime) Run(ctx context.Context) error {
@@ -62,6 +64,7 @@ func (r *Runtime) Run(ctx context.Context) error {
 		return fmt.Errorf("initial controller config: %w", err)
 	}
 	r.reconcile(ctx)
+	go r.watchAuthorization(ctx)
 	poll := time.NewTicker(r.local.PollInterval.Value(15 * time.Second))
 	defer poll.Stop()
 	status := time.NewTicker(r.local.StatusInterval.Value(10 * time.Second))
@@ -86,29 +89,54 @@ func (r *Runtime) Run(ctx context.Context) error {
 }
 
 func (r *Runtime) refresh(ctx context.Context) error {
+	r.mu.RLock()
+	epoch := r.authorizationEpoch
+	r.mu.RUnlock()
 	config, err := nodeclient.FetchAgent(ctx, r.client)
 	if err != nil {
+		if nodeclient.AuthorizationRejected(err) {
+			r.invalidateAuthorization()
+		}
 		return err
 	}
-	return r.ApplyConfig(config)
+	return r.applyConfig(config, epoch)
 }
 
 // ApplyConfig validates and atomically installs a Controller snapshot.
 func (r *Runtime) ApplyConfig(config controller.AgentConfig) error {
+	r.mu.RLock()
+	epoch := r.authorizationEpoch
+	r.mu.RUnlock()
+	return r.applyConfig(config, epoch)
+}
+
+func (r *Runtime) applyConfig(config controller.AgentConfig, epoch uint64) error {
 	if config.Agent.ID != r.local.NodeID {
 		return errors.New("controller returned another agent identity")
 	}
-	if _, err := compilePolicy(config.Agent); err != nil {
-		return err
+	if config.Agent.Enabled {
+		if _, err := compilePolicy(config.Agent); err != nil {
+			return err
+		}
+	} else {
+		config.Links, config.GrantIDs = nil, nil
 	}
 	// Config arrays are sets built from Controller maps. Their wire order may
 	// change between polls without any actual configuration change.
 	config.Links = append([]controller.AgentLinkConfig(nil), config.Links...)
+	for i := range config.Links {
+		config.Links[i].GrantIDs = append([]string(nil), config.Links[i].GrantIDs...)
+		sort.Strings(config.Links[i].GrantIDs)
+	}
 	sort.Slice(config.Links, func(i, j int) bool { return config.Links[i].ID < config.Links[j].ID })
 	config.GrantIDs = append([]string(nil), config.GrantIDs...)
 	sort.Strings(config.GrantIDs)
 	b, _ := json.Marshal(config)
 	r.mu.Lock()
+	if epoch != r.authorizationEpoch {
+		r.mu.Unlock()
+		return errors.New("authorization changed while applying configuration")
+	}
 	changed := r.configFingerprint != "" && r.configFingerprint != string(b)
 	if changed {
 		for _, cancel := range r.workers {
@@ -118,10 +146,46 @@ func (r *Runtime) ApplyConfig(config controller.AgentConfig) error {
 		r.closeRealities()
 	}
 	r.config = config
+	r.authorizationUntil = time.Now().Add(nodeclient.ConfigLease)
 	r.configFingerprint = string(b)
 	r.mu.Unlock()
 	r.setError("")
 	return nil
+}
+
+func (r *Runtime) invalidateAuthorization() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.invalidateAuthorizationLocked()
+}
+
+func (r *Runtime) invalidateAuthorizationLocked() {
+	r.authorizationEpoch++
+	r.config.Agent.Enabled = false
+	r.config.Links, r.config.GrantIDs = nil, nil
+	r.configFingerprint = ""
+	for _, cancel := range r.workers {
+		cancel()
+	}
+	r.workers = map[string]context.CancelFunc{}
+	r.closeRealities()
+}
+
+func (r *Runtime) watchAuthorization(ctx context.Context) {
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			r.mu.Lock()
+			if r.config.Agent.Enabled && !time.Now().Before(r.authorizationUntil) {
+				r.invalidateAuthorizationLocked()
+			}
+			r.mu.Unlock()
+		}
+	}
 }
 
 // RunLink runs one tunnel connection until the connection or context ends.
@@ -217,7 +281,7 @@ func (r *Runtime) runSession(ctx context.Context, key string, link controller.Ag
 	go func() {
 		select {
 		case <-ctx.Done():
-			_ = ws.Close(websocket.StatusGoingAway, "")
+			_ = ws.CloseNow()
 		case <-done:
 		}
 	}()
@@ -306,7 +370,7 @@ func (r *Runtime) handleStream(ctx context.Context, linkID string, stream *smux.
 		_ = protocol.WriteMessage(stream, protocol.Message{Type: protocol.TypePong, Version: protocol.Version, Success: true})
 		return
 	}
-	if !r.grantAllowed(request.GrantID) {
+	if !r.grantAllowed(linkID, request.GrantID) {
 		_ = protocol.WriteMessage(stream, protocol.Message{Type: protocol.TypeResponse, Version: protocol.Version, ErrorCode: "unauthorized", Error: "grant is not authorized"})
 		return
 	}
@@ -332,6 +396,12 @@ func (r *Runtime) handleTCP(ctx context.Context, linkID string, stream *smux.Str
 		_ = protocol.WriteMessage(stream, protocol.Message{Type: protocol.TypeResponse, Version: protocol.Version, ErrorCode: classifyTargetError(err), Error: err.Error()})
 		return
 	}
+	defer target.Close()
+	stopCancellation := context.AfterFunc(ctx, func() {
+		_ = target.Close()
+		_ = stream.Close()
+	})
+	defer stopCancellation()
 	r.tcpConnections.Add(1)
 	defer r.tcpConnections.Add(-1)
 	if err := protocol.WriteMessage(stream, protocol.Message{Type: protocol.TypeResponse, Version: protocol.Version, Success: true}); err != nil {
@@ -363,6 +433,9 @@ func (r *Runtime) handleUDP(ctx context.Context, linkID string, stream *smux.Str
 			datagram, err := protocol.ReadDatagram(stream)
 			if err != nil {
 				r.logger.Debug("agent UDP tunnel reader ended", "link", linkID, "error", err)
+				return
+			}
+			if !r.grantAllowed(linkID, request.GrantID) {
 				return
 			}
 			target, err := policy.udpAddress(ctx, datagram.Host, datagram.Port)
@@ -401,15 +474,23 @@ func (r *Runtime) handleUDP(ctx context.Context, linkID string, stream *smux.Str
 	}
 }
 
-func (r *Runtime) grantAllowed(id string) bool {
+func (r *Runtime) grantAllowed(linkID, id string) bool {
 	if id == "" {
 		return false
 	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	for _, allowed := range r.config.GrantIDs {
-		if allowed == id {
-			return true
+	if !r.config.Agent.Enabled || !time.Now().Before(r.authorizationUntil) {
+		return false
+	}
+	for _, link := range r.config.Links {
+		if link.ID != linkID || !link.Enabled {
+			continue
+		}
+		for _, allowed := range link.GrantIDs {
+			if allowed == id {
+				return true
+			}
 		}
 	}
 	return false
@@ -455,7 +536,11 @@ func (r *Runtime) report(ctx context.Context) error {
 	}
 	last, _ := r.lastError.Load().(string)
 	node := model.NodeStatus{NodeID: r.local.NodeID, Role: model.RoleAgent, BinaryVersion: r.local.BinaryVersion, InstanceID: r.local.InstanceID, Online: true, Ready: ready, DesiredVersion: config.Revision, AppliedVersion: config.Revision, LastSeen: time.Now().UTC(), TunnelConnections: tunnels, TCPConnections: int(r.tcpConnections.Load()), UDPAssociations: int(r.udpAssociations.Load()), LastError: last}
-	return r.client.Report(ctx, node, links, nil)
+	err := r.client.Report(ctx, node, links, nil)
+	if nodeclient.AuthorizationRejected(err) {
+		r.invalidateAuthorization()
+	}
+	return err
 }
 func (r *Runtime) setError(value string) { r.lastError.Store(value) }
 func errString(err error) string {

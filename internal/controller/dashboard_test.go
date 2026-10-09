@@ -17,7 +17,7 @@ import (
 func dashboardRequest(t *testing.T, server *Server) dashboardData {
 	t.Helper()
 	r := httptest.NewRequest(http.MethodGet, "/admin/dashboard", nil)
-	r.AddCookie(&http.Cookie{Name: sessionCookie, Value: auth.SignSession(server.cfg.sessionKey(), "admin", server.now().Add(time.Hour))})
+	r.AddCookie(&http.Cookie{Name: sessionCookie, Value: auth.SignSession(server.cfg.adminSessionKey(), "admin", server.now().Add(time.Hour))})
 	w := httptest.NewRecorder()
 	server.Handler().ServeHTTP(w, r)
 	if w.Code != 200 || w.Header().Get("Cache-Control") != "no-store" {
@@ -115,7 +115,7 @@ func TestOperationsPersistBoundedAndExcludeFormSecrets(t *testing.T) {
 		}
 		_ = i
 	}
-	cookie := auth.SignSession(server.cfg.sessionKey(), "admin", server.now().Add(time.Hour))
+	cookie := auth.SignSession(server.cfg.adminSessionKey(), "admin", server.now().Add(time.Hour))
 	values := url.Values{"csrf": {auth.Derive(server.cfg.sessionKey(), "csrf", cookie)}, "name": {"Audit user"}, "password": {"do-not-record-this"}}
 	r := httptest.NewRequest("POST", "/admin/users", strings.NewReader(values.Encode()))
 	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")

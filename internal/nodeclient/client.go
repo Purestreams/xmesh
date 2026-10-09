@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -13,6 +14,21 @@ import (
 	"xmesh/internal/controller"
 	"xmesh/internal/model"
 )
+
+// A disconnected node cannot retain a stale authorization indefinitely.
+const ConfigLease = 5 * time.Minute
+
+type ResponseError struct {
+	StatusCode int
+	message    string
+}
+
+func (e *ResponseError) Error() string { return e.message }
+
+func AuthorizationRejected(err error) bool {
+	var response *ResponseError
+	return errors.As(err, &response) && (response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden)
+}
 
 type Client struct {
 	ControllerURL string
@@ -89,5 +105,5 @@ func (c *Client) postJSON(ctx context.Context, path string, value, target any) e
 
 func responseError(resp *http.Response) error {
 	b, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-	return fmt.Errorf("controller returned %s: %s", resp.Status, strings.TrimSpace(string(b)))
+	return &ResponseError{StatusCode: resp.StatusCode, message: fmt.Sprintf("controller returned %s: %s", resp.Status, strings.TrimSpace(string(b)))}
 }

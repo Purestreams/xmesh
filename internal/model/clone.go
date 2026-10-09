@@ -9,6 +9,9 @@ import (
 // Keep nested maps and slices here in sync with State and its value types.
 func (s State) Clone() State {
 	next := s
+	next.RevokedAdminSessions = maps.Clone(s.RevokedAdminSessions)
+	next.Monitor.Nodes = maps.Clone(s.Monitor.Nodes)
+	next.Monitor.Links = maps.Clone(s.Monitor.Links)
 	next.Users = maps.Clone(s.Users)
 	next.Gateways = maps.Clone(s.Gateways)
 	next.Agents = maps.Clone(s.Agents)

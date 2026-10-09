@@ -1,10 +1,57 @@
-# Control center (v0.3.3)
+# Control center (v0.3.7)
 
 The Controller embeds its HTML, CSS and JavaScript; no frontend service, CDN or
 production Node.js runtime is required. Existing management POST endpoints and
 CSRF checks remain in use. JavaScript enables five navigation sections, drawers
 for details, collapsed creation and advanced forms, search, topology and matrix
 views. Basic forms remain usable with JavaScript disabled.
+
+## Anonymous network monitor
+
+Under **系统维护 → 公开监控**, open `/admin/monitor` to enable the public,
+read-only page at `/monitor`. It is disabled by default, including for existing
+state files. Select each node and Link to publish and enter a separate public
+alias. Aliases are never inferred from operational names. Publishing a Link
+requires both endpoint nodes to be selected; new objects remain hidden.
+Public aliases accept up to 48 letters, numbers, spaces, hyphens, underscores,
+or parentheses, and reject address/URL punctuation. Choose aliases without
+sensitive identifiers: the aliases and selected connection relationships are
+visible to anyone who opens the page.
+
+The dedicated `GET /api/public/monitor` response includes only public aliases,
+roles, response-local node references, coarse states, RTT measurements and
+sanitized RTT history. It does not use the admin dashboard DTO or serialize
+model configuration/status objects. Addresses, internal identities, raw errors,
+credentials, users, usage and upgrade details are excluded. The separate static
+monitor assets contain no operational data. Management routes still require an
+admin session, and saving publication settings requires CSRF validation.
+
+The matrix expands into individual Link measurements and a 24-hour chart.
+RTT is the smoothed Gateway-to-Agent tunnel round trip, probed every 10 seconds,
+not latency from the visitor's device or a complete proxy end-to-end test.
+Both nodes must be online, ready and have applied their configuration, Gateway
+Xray must be ready, and both endpoints must report the Link ready. Expired node,
+Link or successful-probe timestamps suppress current RTT. Missing/invalid RTT is
+shown as a dash, not zero. External exits are labeled **未探测** and have no
+fabricated RTT or reachability assertion. History is sampled about every five
+minutes; unavailable samples and long gaps are not joined in the chart.
+
+The browser refreshes every 15 seconds. Failures mark displayed live data stale;
+a closed monitor clears it on the next refresh. Server responses use `no-store`.
+The server caches only the public projection for up to 10 seconds and rebuilds
+on any persisted state revision, so alias changes, hiding, deletion and closing
+take effect immediately on the next request. A bounded global token bucket
+allows 100 API reads per second with a burst of 200. Settings persist in the
+Controller state file and do not change node configuration versions or grants.
+
+Validation: `go test ./internal/controller ./internal/model ./internal/store`.
+For browser checks, run `TestMonitorBrowserFixture` with
+`XMESH_MONITOR_TEST_ADDR=127.0.0.1:18089`, then run
+`node tests/monitor.browser.cjs` with Playwright available on `NODE_PATH`.
+The fixture uses temporary state only; screenshots go to
+`tmp/monitor-screenshots/`. It checks anonymous responses for seeded private
+values, matrix/history interactions, mobile layout, refresh failures, admin
+settings and access revocation.
 
 ## Deploy and grant access
 
@@ -55,6 +102,12 @@ that form; it never revokes existing assignments or grants. The preview shows
 new, re-enabled and already-active items. Submission is additive, and publication
 continues to wait for Gateway configuration acknowledgement. Use the separate
 grant controls to disable or delete access.
+
+Resetting a user's subscription also rotates that user's VMess and SOCKS access
+credentials for every assigned route, including disabled grants. The old URL is
+invalid immediately; gateways revoke the old proxy credentials when they apply
+the new configuration. Publication waits for Gateway acknowledgement, then clients
+must import the new subscription. Other users' credentials are unchanged.
 
 ## Refresh and history
 

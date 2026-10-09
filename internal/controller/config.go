@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"xmesh/internal/auth"
 )
 
 type Config struct {
@@ -67,4 +69,10 @@ func LoadConfig(path string) (Config, error) {
 func (c Config) sessionKey() []byte {
 	b, _ := base64.RawURLEncoding.DecodeString(c.SessionSecret)
 	return b
+}
+
+// Changing the administrator password invalidates existing administrator
+// sessions without rotating node tunnel credentials.
+func (c Config) adminSessionKey() []byte {
+	return []byte(auth.Derive(c.sessionKey(), "admin-session", c.AdminPasswordHash))
 }

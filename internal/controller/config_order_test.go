@@ -14,7 +14,7 @@ func TestAgentConfigOrderStableAcrossPolls(t *testing.T) {
 	server, _ := testServer(t, func(s *model.State) error {
 		s.Agents["a"] = model.Agent{ID: "a", Enabled: true, CredentialHash: auth.SecretHash("credential")}
 		for _, id := range []string{"b", "a"} {
-			s.Gateways[id] = model.Gateway{ID: id}
+			s.Gateways[id] = model.Gateway{ID: id, Enabled: true}
 			s.Attachments[id] = model.Attachment{ID: id, AgentID: "a", GatewayID: id, Enabled: true}
 			s.Links[id] = model.Link{ID: id, AttachmentID: id, Enabled: true}
 			s.Users[id] = model.User{ID: id, Enabled: true}

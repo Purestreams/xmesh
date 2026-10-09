@@ -57,12 +57,19 @@ Link readiness and grant publication remain visible in their detailed tables.
 
 The generic installer:
 
-- accepts Debian and Ubuntu on amd64 or arm64;
+- accepts Debian, Ubuntu and CentOS 7/8 on amd64 or arm64;
 - verifies the release archive against `SHA256SUMS`;
 - refuses to overwrite an existing node identity or change its role;
 - installs a hardened systemd service under the dedicated `xmesh` user;
 - preserves identity and state during upgrades and ordinary uninstall;
 - only removes identity/state when `--purge` is explicit.
+
+CentOS 7 uses systemd 219-compatible filesystem directives, including a read-only root
+with writable API filesystems and node state. CentOS 8, Debian and Ubuntu retain
+`ProtectSystem=strict`. Install `ca-certificates`, `curl`, `tar`, `coreutils`, `iproute`
+and `shadow-utils` using yum (CentOS 7) or dnf (CentOS 8) before running the installer.
+For a Gateway with firewalld, allow its configured VMess TCP port and REALITY TCP port
+(8443 by default) in the active network zone. The installer does not change firewall rules.
 
 Gateway release archives include the Xray build validated for that xmesh release. The Gateway
 generates one VMess/WebSocket/no-TLS inbound on the configured port (8080 by default), validates
@@ -122,6 +129,19 @@ whose writes recently stalled; established streams are never migrated.
 
 ## Runtime boundaries
 
+- Upgrade Controller before Gateway and Agent for per-Link grant authorization.
+  Updated Agents require the grant list attached to each Link and reject requests
+  from Controllers that do not provide it. Existing administrator sessions must
+  log in again after this update.
+- A node immediately closes traffic when Controller rejects its credentials or
+  returns a disabled configuration. If Controller cannot be reached, its last
+  successful configuration expires after five minutes and existing traffic closes.
+  Successful configuration polling renews this lease.
+- SOCKS UDP associations validate the announced source IP and port. On Linux and
+  Windows, UDP packets must also belong to the authenticated TCP client's process.
+  Gateway and its Xray child must share the network and process namespaces so
+  socket ownership can be checked. Unspecified UDP ports fail closed when ownership
+  cannot be determined.
 - The client manages its own DNS, routing, IPv6 choice, and Gateway selection.
 - The Agent uses the host's system resolver and routing table. It does not modify either.
 - Agent target access is checked against its allow/deny CIDRs after DNS resolution. Deny rules win.

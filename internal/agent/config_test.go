@@ -14,7 +14,7 @@ func TestApplyConfigIgnoresCollectionOrderButRestartsForRealChange(t *testing.T)
 	r := New(runtimecfg.Config{NodeID: "agent"}, slog.Default())
 	config := controller.AgentConfig{
 		Revision: 1,
-		Agent:    model.Agent{ID: "agent", AllowedCIDRs: []string{"0.0.0.0/0"}},
+		Agent:    model.Agent{ID: "agent", Enabled: true, AllowedCIDRs: []string{"0.0.0.0/0"}},
 		Links: []controller.AgentLinkConfig{
 			{Link: model.Link{ID: "link-b", Connections: 2}},
 			{Link: model.Link{ID: "link-a", Connections: 2}},

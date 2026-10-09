@@ -38,7 +38,7 @@ func TestRealityTunnelTCPAndUDP(t *testing.T) {
 	tunnelAddress, socksAddress, realityAddress := freeTCPAddress(t), freeTCPAddress(t), freeTCPAddress(t)
 	link := model.Link{ID: "link-reality", AttachmentID: "node-reality", URL: "reality://" + realityAddress + "/tunnel", RealityUUID: "00000000-0000-4000-8000-000000000003", RealityShortID: "0123456789abcdef", Priority: 10, Weight: 1, Connections: 1, MaxStreams: 16, Enabled: true}
 	grant := model.Grant{ID: "grant-reality", AttachmentID: "node-reality", VMessUUID: "00000000-0000-4000-8000-000000000004", SOCKSUsername: "grant-reality", SOCKSPassword: "secret-password", Enabled: true}
-	gatewayConfig := controller.GatewayConfig{Gateway: model.Gateway{ID: "gateway-reality", VMessPort: testPort(t, freeTCPAddress(t)), VMessPath: "/proxy", RealityTarget: target.Listener.Addr().String(), RealityName: "example.com", RealityPrivateKey: base64.RawURLEncoding.EncodeToString(key.Bytes())}, Links: []controller.GatewayLinkConfig{{Link: link, AgentID: "agent-reality", TunnelToken: "tunnel-secret"}}, Grants: []model.Grant{grant}}
+	gatewayConfig := controller.GatewayConfig{Gateway: model.Gateway{ID: "gateway-reality", Enabled: true, VMessPort: testPort(t, freeTCPAddress(t)), VMessPath: "/proxy", RealityTarget: target.Listener.Addr().String(), RealityName: "example.com", RealityPrivateKey: base64.RawURLEncoding.EncodeToString(key.Bytes())}, Links: []controller.GatewayLinkConfig{{Link: link, AgentID: "agent-reality", TunnelToken: "tunnel-secret"}}, Grants: []model.Grant{grant}}
 	gatewayRuntime := New(runtimecfg.Config{NodeID: "gateway-reality", Gateway: runtimecfg.Gateway{SOCKSListen: socksAddress, TunnelListen: tunnelAddress, TunnelPath: "/tunnel", RealityListen: realityAddress, MaxUDPAssociations: 8}}, slog.Default())
 	gatewayRuntime.config = gatewayConfig
 	ctx, cancel := context.WithCancel(context.Background())
@@ -53,7 +53,7 @@ func TestRealityTunnelTCPAndUDP(t *testing.T) {
 	defer stopTestProcess(serverProcess)
 	waitTCP(t, realityAddress, 5*time.Second)
 	agentRuntime := agentpkg.New(runtimecfg.Config{NodeID: "agent-reality"}, slog.Default())
-	if err := agentRuntime.ApplyConfig(controller.AgentConfig{Agent: model.Agent{ID: "agent-reality", AllowedCIDRs: []string{"127.0.0.0/8"}}, GrantIDs: []string{grant.ID}}); err != nil {
+	if err := agentRuntime.ApplyConfig(controller.AgentConfig{Agent: model.Agent{ID: "agent-reality", Enabled: true, AllowedCIDRs: []string{"127.0.0.0/8"}}, Links: []controller.AgentLinkConfig{{Link: link, GrantIDs: []string{grant.ID}}}, GrantIDs: []string{grant.ID}}); err != nil {
 		t.Fatal(err)
 	}
 	agentLink := controller.AgentLinkConfig{Link: link, GatewayID: "gateway-reality", TunnelToken: "tunnel-secret", RealityPublicKey: base64.RawURLEncoding.EncodeToString(key.PublicKey().Bytes()), RealityName: "example.com"}

@@ -20,3 +20,12 @@ func TestSessionRoundTripAndExpiry(t *testing.T) {
 		t.Fatal("session with wrong signature accepted")
 	}
 }
+
+func TestSessionsIssuedInTheSameSecondAreDistinct(t *testing.T) {
+	secret := []byte("test-secret")
+	expires := time.Now().Add(time.Hour)
+	first, second := SignSession(secret, "admin", expires), SignSession(secret, "admin", expires)
+	if first == "" || first == second {
+		t.Fatal("sessions share a revocation identity")
+	}
+}

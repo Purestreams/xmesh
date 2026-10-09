@@ -39,6 +39,7 @@ type Server struct {
 	releaseHTTPClient *http.Client
 	loginMu           sync.Mutex
 	loginFailures     map[string]loginFailure
+	monitor           monitorRuntime
 }
 
 type loginFailure struct {
@@ -67,7 +68,7 @@ func New(cfg Config, state *store.Store, logger *slog.Logger) (*Server, error) {
 			return "applied"
 		},
 		"join": func(values []string) string { return strings.Join(values, ", ") },
-	}).Parse(strings.Replace(panelTemplate, "</div></main>", upstreamPanelSection+"</div></main>", 1))
+	}).Parse(strings.Replace(panelTemplate, "</div></main>", upstreamPanelSection+monitorPanelSection+"</div></main>", 1))
 	if err != nil {
 		return nil, fmt.Errorf("parse panel template: %w", err)
 	}
@@ -83,6 +84,12 @@ func New(cfg Config, state *store.Store, logger *slog.Logger) (*Server, error) {
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.health)
+	mux.HandleFunc("GET /monitor", s.monitorPage)
+	mux.HandleFunc("GET /api/public/monitor", s.monitorData)
+	mux.HandleFunc("GET /assets/monitor.js", monitorScript)
+	mux.HandleFunc("GET /assets/monitor.css", monitorStyles)
+	mux.HandleFunc("GET /admin/monitor", s.requireAdmin(s.monitorSettingsPage))
+	mux.HandleFunc("POST /admin/monitor", s.requireAdmin(s.monitorForm(s.csrf(s.saveMonitorSettings))))
 	mux.HandleFunc("GET /assets/panel.js", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store")
@@ -90,7 +97,7 @@ func (s *Server) Handler() http.Handler {
 	})
 	mux.HandleFunc("GET /login", s.loginPage)
 	mux.HandleFunc("POST /login", s.login)
-	mux.HandleFunc("POST /logout", s.requireAdmin(s.logout))
+	mux.HandleFunc("POST /logout", s.requireAdmin(s.csrf(s.logout)))
 	mux.HandleFunc("GET /", s.requireAdmin(s.panel))
 	mux.HandleFunc("GET /admin/dashboard", s.requireAdmin(s.dashboard))
 	mux.HandleFunc("POST /admin/users", s.requireAdmin(s.csrf(s.createUser)))
@@ -187,8 +194,13 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	}
 	s.clearLoginFailures(clientIP)
 	expires := s.now().Add(12 * time.Hour)
+	session := auth.SignSession(s.cfg.adminSessionKey(), username, expires)
+	if session == "" {
+		http.Error(w, "session generation failed", http.StatusInternalServerError)
+		return
+	}
 	http.SetCookie(w, &http.Cookie{
-		Name: sessionCookie, Value: auth.SignSession(s.cfg.sessionKey(), username, expires),
+		Name: sessionCookie, Value: session,
 		Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode,
 		Secure: strings.HasPrefix(s.cfg.PublicURL, "https://"), Expires: expires,
 	})
@@ -231,12 +243,34 @@ func (s *Server) clearLoginFailures(clientIP string) {
 }
 
 func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
+	cookie, err := r.Cookie(sessionCookie)
+	if err != nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	err = s.store.Update(func(state *model.State) error {
+		if state.RevokedAdminSessions == nil {
+			state.RevokedAdminSessions = map[string]time.Time{}
+		}
+		for hash, expires := range state.RevokedAdminSessions {
+			if !s.now().Before(expires) {
+				delete(state.RevokedAdminSessions, hash)
+			}
+		}
+		state.RevokedAdminSessions[auth.SecretHash(cookie.Value)] = s.now().Add(12 * time.Hour)
+		return nil
+	})
+	if err != nil {
+		http.Error(w, "failed to revoke session; retry logout", http.StatusInternalServerError)
+		return
+	}
 	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteStrictMode})
 	http.Redirect(w, r, "/login", http.StatusSeeOther)
 }
 
 func (s *Server) requireAdmin(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
 		if !s.isAdmin(r) {
 			http.Redirect(w, r, "/login", http.StatusSeeOther)
 			return
@@ -250,8 +284,15 @@ func (s *Server) isAdmin(r *http.Request) bool {
 	if err != nil {
 		return false
 	}
-	user, ok := auth.VerifySession(s.cfg.sessionKey(), cookie.Value, s.now())
-	return ok && user == s.cfg.AdminUsername
+	user, ok := auth.VerifySession(s.cfg.adminSessionKey(), cookie.Value, s.now())
+	if !ok || user != s.cfg.AdminUsername {
+		return false
+	}
+	revoked := false
+	s.store.View(func(state *model.State) {
+		revoked = s.now().Before(state.RevokedAdminSessions[auth.SecretHash(cookie.Value)])
+	})
+	return !revoked
 }
 
 func (s *Server) csrf(next http.HandlerFunc) http.HandlerFunc {
@@ -337,7 +378,7 @@ func (s *Server) securityHeaders(next http.Handler) http.Handler {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Referrer-Policy", "no-referrer")
-		w.Header().Set("Content-Security-Policy", "default-src 'self'; style-src 'unsafe-inline'; script-src 'self'; frame-ancestors 'none'")
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; frame-ancestors 'none'")
 		next.ServeHTTP(w, r)
 	})
 }

@@ -57,6 +57,29 @@ func (r *Runtime) handleSOCKS(conn net.Conn, udpSem chan struct{}) {
 	}
 	grant, agentID, ok := r.grant(username, password)
 	if !ok {
+		_, _ = conn.Write([]byte{1, 1})
+		return
+	}
+	connectionCtx, cancelConnection := context.WithCancel(context.Background())
+	defer cancelConnection()
+	r.mu.Lock()
+	current := false
+	for _, allowed := range r.config.Grants {
+		if r.config.Gateway.Enabled && time.Now().Before(r.authorizationUntil) && allowed.Enabled && allowed.ID == grant.ID && allowed.AttachmentID == grant.AttachmentID && allowed.SOCKSUsername == grant.SOCKSUsername && allowed.SOCKSPassword == grant.SOCKSPassword && allowed.VMessUUID == grant.VMessUUID {
+			current = true
+			break
+		}
+	}
+	if current {
+		r.activeConnections[conn] = authorizedConnection{grant: grant, cancel: cancelConnection}
+	}
+	r.mu.Unlock()
+	if !current {
+		_, _ = conn.Write([]byte{1, 1})
+		return
+	}
+	defer func() { r.mu.Lock(); delete(r.activeConnections, conn); r.mu.Unlock() }()
+	if _, err := conn.Write([]byte{1, 0}); err != nil {
 		return
 	}
 	stats := r.grantCounters(grant.ID)
@@ -74,6 +97,11 @@ func (r *Runtime) handleSOCKS(conn net.Conn, udpSem chan struct{}) {
 			return
 		}
 		defer lease.Release()
+		stopRevocation := context.AfterFunc(connectionCtx, func() {
+			_ = conn.Close()
+			_ = stream.Close()
+		})
+		defer stopRevocation()
 		linkStats := r.grantLinkCounters(grant.ID, lease.Session.LinkID)
 		r.tcpConnections.Add(1)
 		defer r.tcpConnections.Add(-1)
@@ -100,7 +128,7 @@ func (r *Runtime) handleSOCKS(conn net.Conn, udpSem chan struct{}) {
 		defer r.udpAssociations.Add(-1)
 		stats.udp.Add(1)
 		defer stats.udp.Add(-1)
-		r.handleUDPAssociation(conn, reader, grant.ID, agentID, stats)
+		r.handleUDPAssociation(conn, reader, grant.ID, agentID, stats, target)
 	default:
 		_ = writeSOCKSReply(conn, 7, nil)
 	}
@@ -146,9 +174,6 @@ func socksAuthenticate(reader *bufio.Reader, conn net.Conn) (string, string, err
 	if username == "" || password == "" {
 		_, _ = conn.Write([]byte{1, 1})
 		return "", "", errors.New("empty credentials")
-	}
-	if _, err := conn.Write([]byte{1, 0}); err != nil {
-		return "", "", err
 	}
 	return username, password, nil
 }
@@ -253,13 +278,28 @@ func mapSOCKSError(err error) byte {
 	return 1
 }
 
-func (r *Runtime) handleUDPAssociation(control net.Conn, reader *bufio.Reader, grantID, agentID string, stats *grantCounters) {
+func (r *Runtime) handleUDPAssociation(control net.Conn, reader *bufio.Reader, grantID, agentID string, stats *grantCounters, requested socksTarget) {
 	udp, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0})
 	if err != nil {
 		_ = writeSOCKSReply(control, 1, nil)
 		return
 	}
 	defer udp.Close()
+	peer, ok := control.RemoteAddr().(*net.TCPAddr)
+	if !ok {
+		_ = writeSOCKSReply(control, 1, nil)
+		return
+	}
+	requestedIP := net.ParseIP(requested.Host)
+	if requestedIP == nil || (!requestedIP.IsUnspecified() && !requestedIP.Equal(peer.IP)) {
+		_ = writeSOCKSReply(control, 1, nil)
+		return
+	}
+	owner, ownerOK := udpControlOwner(control)
+	if requested.Port == 0 && !ownerOK {
+		_ = writeSOCKSReply(control, 1, nil)
+		return
+	}
 	if err := writeSOCKSReply(control, 0, udp.LocalAddr()); err != nil {
 		return
 	}
@@ -278,14 +318,20 @@ func (r *Runtime) handleUDPAssociation(control net.Conn, reader *bufio.Reader, g
 				cancel()
 				return
 			}
-			if client == nil {
-				client = source
-			} else if client.String() != source.String() {
+			if !source.IP.Equal(peer.IP) || (requested.Port != 0 && source.Port != requested.Port) || (client != nil && client.String() != source.String()) {
+				continue
+			}
+			// Recheck ownership on every packet: a closed UDP socket's port can
+			// be reused by another process while the TCP association stays open.
+			if ownerOK && !udpSourceOwned(source, owner) {
 				continue
 			}
 			datagram, err := decodeSOCKSUDP(buffer[:n])
 			if err != nil {
 				continue
+			}
+			if client == nil {
+				client = source
 			}
 			if !queue.offer(datagram) {
 				drops := r.udpQueueDrops.Add(1)

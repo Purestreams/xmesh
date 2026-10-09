@@ -177,7 +177,7 @@ func TestPanelRendersPopulatedRelationshipTables(t *testing.T) {
 	})
 	expires := server.now().Add(time.Hour)
 	request := httptest.NewRequest(http.MethodGet, "/", nil)
-	request.AddCookie(&http.Cookie{Name: sessionCookie, Value: auth.SignSession(server.cfg.sessionKey(), "admin", expires)})
+	request.AddCookie(&http.Cookie{Name: sessionCookie, Value: auth.SignSession(server.cfg.adminSessionKey(), "admin", expires)})
 	recorder := httptest.NewRecorder()
 	server.Handler().ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusOK {

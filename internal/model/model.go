@@ -284,29 +284,39 @@ type UsageCounter struct {
 	DownloadBytes uint64 `json:"download_bytes"`
 }
 
+// MonitorSettings contains only explicit publication choices. Empty aliases are
+// hidden; operational names and addresses must never be used as fallbacks.
+type MonitorSettings struct {
+	Enabled bool              `json:"enabled"`
+	Nodes   map[string]string `json:"nodes,omitempty"`
+	Links   map[string]string `json:"links,omitempty"`
+}
+
 type State struct {
-	Revision       uint64                   `json:"revision"`
-	Users          map[string]User          `json:"users"`
-	Gateways       map[string]Gateway       `json:"gateways"`
-	Agents         map[string]Agent         `json:"agents"`
-	Upstreams      map[string]VMessUpstream `json:"upstreams"`
-	Attachments    map[string]Attachment    `json:"attachments"`
-	Links          map[string]Link          `json:"links"`
-	Grants         map[string]Grant         `json:"grants"`
-	RetiredGrants  map[string]RetiredGrant  `json:"retired_grants,omitempty"`
-	RetiredLinks   map[string]RetiredLink   `json:"retired_links,omitempty"`
-	Enrollments    map[string]Enrollment    `json:"enrollments"`
-	NodeStatus     map[string]NodeStatus    `json:"node_status"`
-	LinkStatus     map[string]LinkStatus    `json:"link_status"`
-	GrantStatus    map[string]GrantStatus   `json:"grant_status"`
-	UsageHistory   map[string][]UsageBucket `json:"usage_history,omitempty"`
-	UsageLabels    map[string]string        `json:"usage_labels,omitempty"`
-	UsageCounters  map[string]UsageCounter  `json:"usage_counters,omitempty"`
-	LinkHistory    map[string][]LinkSample  `json:"link_history,omitempty"`
-	Operations     []Operation              `json:"operations,omitempty"`
-	Updaters       map[string]Updater       `json:"updaters,omitempty"`
-	UpgradeTasks   map[string]UpgradeTask   `json:"upgrade_tasks,omitempty"`
-	UpgradeBatches map[string]UpgradeBatch  `json:"upgrade_batches,omitempty"`
+	RevokedAdminSessions map[string]time.Time     `json:"revoked_admin_sessions,omitempty"`
+	Monitor              MonitorSettings          `json:"monitor,omitempty"`
+	Revision             uint64                   `json:"revision"`
+	Users                map[string]User          `json:"users"`
+	Gateways             map[string]Gateway       `json:"gateways"`
+	Agents               map[string]Agent         `json:"agents"`
+	Upstreams            map[string]VMessUpstream `json:"upstreams"`
+	Attachments          map[string]Attachment    `json:"attachments"`
+	Links                map[string]Link          `json:"links"`
+	Grants               map[string]Grant         `json:"grants"`
+	RetiredGrants        map[string]RetiredGrant  `json:"retired_grants,omitempty"`
+	RetiredLinks         map[string]RetiredLink   `json:"retired_links,omitempty"`
+	Enrollments          map[string]Enrollment    `json:"enrollments"`
+	NodeStatus           map[string]NodeStatus    `json:"node_status"`
+	LinkStatus           map[string]LinkStatus    `json:"link_status"`
+	GrantStatus          map[string]GrantStatus   `json:"grant_status"`
+	UsageHistory         map[string][]UsageBucket `json:"usage_history,omitempty"`
+	UsageLabels          map[string]string        `json:"usage_labels,omitempty"`
+	UsageCounters        map[string]UsageCounter  `json:"usage_counters,omitempty"`
+	LinkHistory          map[string][]LinkSample  `json:"link_history,omitempty"`
+	Operations           []Operation              `json:"operations,omitempty"`
+	Updaters             map[string]Updater       `json:"updaters,omitempty"`
+	UpgradeTasks         map[string]UpgradeTask   `json:"upgrade_tasks,omitempty"`
+	UpgradeBatches       map[string]UpgradeBatch  `json:"upgrade_batches,omitempty"`
 }
 
 // LinkSample uses only the Gateway report so tunnel traffic is not counted twice.

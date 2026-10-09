@@ -78,6 +78,28 @@ func (s *Server) resetSubscription(w http.ResponseWriter, r *http.Request) {
 		}
 		user.SubscriptionToken = token
 		state.Users[user.ID] = user
+		gateways := map[string]bool{}
+		for id, grant := range state.Grants {
+			if grant.UserID != user.ID {
+				continue
+			}
+			uuid, err := identity.UUID()
+			if err != nil {
+				return err
+			}
+			password, err := identity.Token(24)
+			if err != nil {
+				return err
+			}
+			grant.VMessUUID, grant.SOCKSPassword, grant.Published = uuid, password, false
+			state.Grants[id] = grant
+			gateways[state.Attachments[grant.AttachmentID].GatewayID] = true
+		}
+		for gatewayID := range gateways {
+			if _, exists := state.Gateways[gatewayID]; exists {
+				bumpGateway(state, gatewayID)
+			}
+		}
 		return nil
 	})
 	if err != nil {

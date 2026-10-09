@@ -44,7 +44,7 @@ One Agent can initiate connections to several Gateways, and one Gateway can use 
 
 ## Deployment
 
-This walkthrough uses three separate Linux hosts for Controller, Gateway and Agent. The systemd installers support Debian/Ubuntu on amd64 and arm64. The Docker installer supports Linux amd64 and arm64, requires Docker Engine with the Compose plugin, and uses host networking. Windows amd64 releases contain only a standalone executable, without a Windows service installer or bundled Xray.
+This walkthrough uses three separate Linux hosts for Controller, Gateway and Agent. The systemd installers support Debian/Ubuntu and CentOS 7/8 on amd64 and arm64; CentOS 7 automatically uses service settings compatible with systemd 219. The Docker installer supports Linux amd64 and arm64, requires Docker Engine with the Compose plugin, and uses host networking. Windows amd64 releases contain only a standalone executable, without a Windows service installer or bundled Xray.
 
 Choose one installation method per role on a host. The systemd installers use fixed service names and paths; deploy the Controller separately from nodes.
 
@@ -67,11 +67,22 @@ sudo apt update
 sudo apt install -y ca-certificates curl tar coreutils
 ```
 
-On the Controller host only, install these additional tools and obtain the source. This README describes the current code; the installation example pins release `v0.3.3`. To use another published version, set `VERSION` to its exact tag and use matching source and release assets. See [Releases](https://github.com/Purestreams/xmesh/releases) for available versions.
+On CentOS hosts, prepare the base tools below with working yum/dnf repositories, then use the same systemd installation commands:
+
+```sh
+# CentOS 7
+sudo yum install -y ca-certificates curl tar coreutils iproute shadow-utils
+# CentOS 8
+sudo dnf install -y ca-certificates curl tar coreutils iproute shadow-utils
+```
+
+If firewalld is enabled on the Gateway, allow the VMess and REALITY TCP ports in the zone used by its network interface. For `--vmess-port 8086`, allow TCP 8086 and 8443; Agents need no inbound ports. The Nginx/Certbot package commands and paths below target Debian/Ubuntu. On a CentOS Controller, configure the HTTPS reverse proxy for its repositories, Nginx layout and SELinux policy.
+
+On the Controller host only, install these additional tools and obtain the source. This README describes the current code; the installation example pins release `v0.3.7`. To use another published version, set `VERSION` to its exact tag and use matching source and release assets. See [Releases](https://github.com/Purestreams/xmesh/releases) for available versions.
 
 ```sh
 sudo apt install -y git nginx certbot
-VERSION=v0.3.5
+VERSION=v0.3.7
 git clone --depth 1 --branch "$VERSION" https://github.com/Purestreams/xmesh.git
 cd xmesh
 ```

@@ -29,9 +29,31 @@ done
 if [ "$(id -u)" -ne 0 ]; then echo 'run this installer as root' >&2; exit 1; fi
 if [ ! -r /etc/os-release ]; then echo 'unsupported system: /etc/os-release missing' >&2; exit 1; fi
 . /etc/os-release
-case "${ID:-}" in debian|ubuntu) ;; *) echo "unsupported distribution: ${ID:-unknown}" >&2; exit 1;; esac
+legacy_systemd='false'
+case "${ID:-}" in
+  debian|ubuntu) ;;
+  centos)
+    case "${VERSION_ID:-}" in
+      7|7.*) legacy_systemd='true' ;;
+      8|8.*) ;;
+      *) echo "unsupported CentOS version: ${VERSION_ID:-unknown} (expected 7 or 8)" >&2; exit 1 ;;
+    esac ;;
+  *) echo "unsupported distribution: ${ID:-unknown}" >&2; exit 1 ;;
+esac
 if [ ! -d /run/systemd/system ]; then echo 'systemd is required' >&2; exit 1; fi
 if [ -e /etc/systemd/system/xmesh-controller.service ]; then echo 'a Controller service already uses /usr/local/bin/xmesh; install nodes on separate hosts' >&2; exit 1; fi
+
+# CentOS 7 ships systemd 219, before strict protection and the *Paths names.
+write_paths='ReadWritePaths'
+service_sandbox='ProtectSystem=strict
+ReadWritePaths=/var/lib/xmesh
+AmbientCapabilities='
+if [ "$legacy_systemd" = 'true' ]; then
+  write_paths='ReadWriteDirectories'
+  service_sandbox='ProtectSystem=full
+ReadOnlyDirectories=/
+ReadWriteDirectories=/dev /proc /sys /var/lib/xmesh'
+fi
 
 if [ "$uninstall" = 'true' ]; then
   systemctl disable --now xmesh-updater.service 2>/dev/null || true
@@ -121,7 +143,7 @@ install_updater_service() {
   updater_tmp="/usr/local/bin/xmesh-updater.new.$$"
   install -m 0700 "$work/xmesh-updater" "$updater_tmp"
   mv -f "$updater_tmp" /usr/local/bin/xmesh-updater
-  cat >/etc/systemd/system/xmesh-updater.service <<'EOF'
+  cat >/etc/systemd/system/xmesh-updater.service <<EOF
 [Unit]
 Description=xmesh host upgrade assistant
 After=network-online.target
@@ -134,7 +156,7 @@ Restart=always
 RestartSec=10s
 ProtectHome=true
 NoNewPrivileges=true
-ReadWritePaths=/var/lib/xmesh-updater /usr/local/bin /usr/local/lib/xmesh
+$write_paths=/var/lib/xmesh-updater /usr/local/bin /usr/local/lib/xmesh
 
 [Install]
 WantedBy=multi-user.target
@@ -200,9 +222,7 @@ RestartSec=3s
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectHome=true
-ProtectSystem=strict
-ReadWritePaths=/var/lib/xmesh
-AmbientCapabilities=
+$service_sandbox
 CapabilityBoundingSet=
 
 [Install]

@@ -63,11 +63,12 @@ jobs:
             --mount "type=bind,source=$RUNNER_TEMP/xmesh-updater.test,target=/tmp/xmesh-updater.test,readonly" \
             -e XMESH_REAL_DOCKER_TEST=1 \
             docker:29-cli /tmp/xmesh-updater.test -test.run '^TestRealDockerComposeUpgradeAndRollback$' -test.v
-      - name: REALITY end-to-end in Docker
+      - name: Gateway protocols and security with real Xray in Docker
         run: |
           docker build -f tests/reality/Dockerfile -t xmesh-reality-test:ci tests/reality
           docker run --rm --mount "type=bind,source=$PWD,target=/src" xmesh-reality-test:ci
-      - run: sh -n scripts/install.sh scripts/install-controller.sh scripts/install-docker.sh scripts/install-updater.sh scripts/backup-controller.sh scripts/controller-updater.sh scripts/package.sh tests/install_docker_rollback.sh tests/install_gateway_ports.sh tests/controller_updater.sh
+      - run: sh -n scripts/install.sh scripts/install-controller.sh scripts/install-docker.sh scripts/install-updater.sh scripts/backup-controller.sh scripts/controller-updater.sh scripts/package.sh tests/install_docker_rollback.sh tests/install_gateway_ports.sh tests/controller_updater.sh tests/install_systemd_distributions.sh
+      - run: docker run --rm --mount "type=bind,source=$PWD,target=/src,readonly" -w /src golang:1.27.1-bookworm sh tests/install_systemd_distributions.sh
       - run: docker run --rm --mount "type=bind,source=$PWD,target=/src" -w /src golang:1.27.1-bookworm sh tests/install_gateway_ports.sh
       - run: sudo sh tests/install_docker_rollback.sh
       - run: sudo sh tests/controller_updater.sh
@@ -76,8 +77,24 @@ jobs:
       - run: docker run --rm --mount "type=bind,source=$PWD,target=/src" -w /src golang:1.27.1-bookworm sh tests/install_uninstall.sh
       - run: docker run --rm --mount "type=bind,source=$PWD,target=/src" -w /src golang:1.27.1-bookworm sh tests/install_systemd_rollback.sh
 
+  centos-install:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        image: ['centos:7', 'centos:8']
+    steps:
+      - uses: actions/checkout@v5
+      - name: Verify CentOS installers and regressions
+        env:
+          TEST_IMAGE: ${{ matrix.image }}
+        run: |
+          set -eu
+          for test in tests/install_systemd_distributions.sh tests/install_gateway_ports.sh tests/install_uninstall.sh; do
+            docker run --rm --mount "type=bind,source=$PWD,target=/src,readonly" -w /src "$TEST_IMAGE" sh "$test"
+          done
+
   build:
-    needs: [test, panel]
+    needs: [test, panel, centos-install]
     runs-on: ubuntu-latest
     strategy:
       matrix:

@@ -25,9 +25,29 @@ done
 if [ "$(id -u)" -ne 0 ]; then echo 'run this installer as root' >&2; exit 1; fi
 if [ ! -r /etc/os-release ]; then echo 'unsupported system: /etc/os-release missing' >&2; exit 1; fi
 . /etc/os-release
-case "${ID:-}" in debian|ubuntu) ;; *) echo "unsupported distribution: ${ID:-unknown}" >&2; exit 1;; esac
+legacy_systemd='false'
+case "${ID:-}" in
+  debian|ubuntu) ;;
+  centos)
+    case "${VERSION_ID:-}" in
+      7|7.*) legacy_systemd='true' ;;
+      8|8.*) ;;
+      *) echo "unsupported CentOS version: ${VERSION_ID:-unknown} (expected 7 or 8)" >&2; exit 1 ;;
+    esac ;;
+  *) echo "unsupported distribution: ${ID:-unknown}" >&2; exit 1 ;;
+esac
 if [ ! -d /run/systemd/system ]; then echo 'systemd is required' >&2; exit 1; fi
 if [ -e /etc/systemd/system/xmesh.service ]; then echo 'a node service already uses /usr/local/bin/xmesh; install the Controller on a separate host' >&2; exit 1; fi
+
+# Keep the filesystem sandbox compatible with CentOS 7's systemd 219.
+service_sandbox='ProtectSystem=strict
+ReadWritePaths=/var/lib/xmesh-controller
+AmbientCapabilities='
+if [ "$legacy_systemd" = 'true' ]; then
+  service_sandbox='ProtectSystem=full
+ReadOnlyDirectories=/
+ReadWriteDirectories=/dev /proc /sys /var/lib/xmesh-controller'
+fi
 
 if [ "$uninstall" = 'true' ]; then
   systemctl disable --now xmesh-controller.service 2>/dev/null || true
@@ -95,7 +115,7 @@ fi
 if [ -x /usr/local/bin/xmesh ]; then cp -p /usr/local/bin/xmesh "$work/xmesh.previous"; fi
 install -m 0755 "$work/xmesh" /usr/local/bin/xmesh.new
 mv -f /usr/local/bin/xmesh.new /usr/local/bin/xmesh
-cat >/etc/systemd/system/xmesh-controller.service <<'EOF'
+cat >/etc/systemd/system/xmesh-controller.service <<EOF
 [Unit]
 Description=xmesh Controller
 After=network-online.target
@@ -111,9 +131,7 @@ RestartSec=3s
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectHome=true
-ProtectSystem=strict
-ReadWritePaths=/var/lib/xmesh-controller
-AmbientCapabilities=
+$service_sandbox
 CapabilityBoundingSet=
 
 [Install]

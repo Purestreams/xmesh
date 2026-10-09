@@ -44,7 +44,7 @@ func TestPanelRendersManagementAndDeleteImpact(t *testing.T) {
 		return nil
 	})
 	request := httptest.NewRequest(http.MethodGet, "/", nil)
-	request.AddCookie(&http.Cookie{Name: sessionCookie, Value: auth.SignSession(server.cfg.sessionKey(), "admin", server.now().Add(time.Hour))})
+	request.AddCookie(&http.Cookie{Name: sessionCookie, Value: auth.SignSession(server.cfg.adminSessionKey(), "admin", server.now().Add(time.Hour))})
 	recorder := httptest.NewRecorder()
 	server.Handler().ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusOK {
@@ -60,7 +60,7 @@ func TestPanelRendersManagementAndDeleteImpact(t *testing.T) {
 func TestControllerWarnsOnlyForHTTPPublicURL(t *testing.T) {
 	server, _ := testServer(t, nil)
 	request := httptest.NewRequest(http.MethodGet, "/", nil)
-	request.AddCookie(&http.Cookie{Name: sessionCookie, Value: auth.SignSession(server.cfg.sessionKey(), "admin", server.now().Add(time.Hour))})
+	request.AddCookie(&http.Cookie{Name: sessionCookie, Value: auth.SignSession(server.cfg.adminSessionKey(), "admin", server.now().Add(time.Hour))})
 	for _, test := range []struct {
 		publicURL string
 		warning   bool

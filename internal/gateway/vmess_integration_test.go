@@ -32,14 +32,14 @@ func TestFullVMessTCPAndUDPChain(t *testing.T) {
 	link := model.Link{ID: "link-vmess", AttachmentID: "node-vmess", URL: "ws://" + tunnelAddress + "/tunnel", Priority: 10, Weight: 1, Connections: 1, MaxStreams: 16, Enabled: true}
 	grant := model.Grant{ID: "grant-vmess", AttachmentID: "node-vmess", VMessUUID: uuid, SOCKSUsername: "grant-vmess", SOCKSPassword: "secret-password", Enabled: true}
 	gatewayRuntime := New(runtimecfg.Config{NodeID: "gateway-vmess", Gateway: runtimecfg.Gateway{SOCKSListen: socksAddress, TunnelListen: tunnelAddress, TunnelPath: "/tunnel", MaxUDPAssociations: 8, UDPIdleTimeout: runtimecfg.Duration(5 * time.Second)}}, slog.Default())
-	gatewayConfig := controller.GatewayConfig{Gateway: model.Gateway{ID: "gateway-vmess", VMessPort: testPort(t, vmessAddress), VMessPath: "/proxy"}, Links: []controller.GatewayLinkConfig{{Link: link, AgentID: "agent-vmess", TunnelToken: "tunnel-secret"}}, Grants: []model.Grant{grant}}
+	gatewayConfig := controller.GatewayConfig{Gateway: model.Gateway{ID: "gateway-vmess", Enabled: true, VMessPort: testPort(t, vmessAddress), VMessPath: "/proxy"}, Links: []controller.GatewayLinkConfig{{Link: link, AgentID: "agent-vmess", TunnelToken: "tunnel-secret"}}, Grants: []model.Grant{grant}}
 	gatewayRuntime.config = gatewayConfig
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go gatewayRuntime.runTunnelServer(ctx)
 	go gatewayRuntime.runSOCKS(ctx)
 	agentRuntime := agentpkg.New(runtimecfg.Config{NodeID: "agent-vmess"}, slog.Default())
-	if err := agentRuntime.ApplyConfig(controller.AgentConfig{Agent: model.Agent{ID: "agent-vmess", AllowedCIDRs: []string{"127.0.0.0/8"}}, GrantIDs: []string{grant.ID}}); err != nil {
+	if err := agentRuntime.ApplyConfig(controller.AgentConfig{Agent: model.Agent{ID: "agent-vmess", Enabled: true, AllowedCIDRs: []string{"127.0.0.0/8"}}, Links: []controller.AgentLinkConfig{{Link: link, GrantIDs: []string{grant.ID}}}, GrantIDs: []string{grant.ID}}); err != nil {
 		t.Fatal(err)
 	}
 	go func() {

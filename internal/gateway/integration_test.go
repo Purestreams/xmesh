@@ -24,14 +24,14 @@ func TestSOCKSTCPAndUDPOverTunnel(t *testing.T) {
 	link := model.Link{ID: "link-1", AttachmentID: "node-1", URL: "ws://" + tunnelAddress + "/tunnel", TLSVerify: false, Priority: 10, Weight: 1, Connections: 1, MaxStreams: 16, Enabled: true}
 	grant := model.Grant{ID: "grant-1", AttachmentID: "node-1", SOCKSUsername: "grant-1", SOCKSPassword: "secret-password", Enabled: true}
 	gatewayRuntime := New(runtimecfg.Config{NodeID: "gateway-1", Gateway: runtimecfg.Gateway{SOCKSListen: socksAddress, TunnelListen: tunnelAddress, TunnelPath: "/tunnel", MaxUDPAssociations: 8, UDPIdleTimeout: runtimecfg.Duration(5 * time.Second)}}, slog.Default())
-	gatewayRuntime.config = controller.GatewayConfig{Gateway: model.Gateway{ID: "gateway-1"}, Links: []controller.GatewayLinkConfig{{Link: link, AgentID: "agent-1", TunnelToken: "tunnel-secret"}}, Grants: []model.Grant{grant}}
+	gatewayRuntime.config = controller.GatewayConfig{Gateway: model.Gateway{ID: "gateway-1", Enabled: true}, Links: []controller.GatewayLinkConfig{{Link: link, AgentID: "agent-1", TunnelToken: "tunnel-secret"}}, Grants: []model.Grant{grant}}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	errCh := make(chan error, 2)
 	go func() { errCh <- gatewayRuntime.runTunnelServer(ctx) }()
 	go func() { errCh <- gatewayRuntime.runSOCKS(ctx) }()
 	agentRuntime := agentpkg.New(runtimecfg.Config{NodeID: "agent-1"}, slog.Default())
-	if err := agentRuntime.ApplyConfig(controller.AgentConfig{Agent: model.Agent{ID: "agent-1", AllowedCIDRs: []string{"127.0.0.0/8"}}, GrantIDs: []string{"grant-1"}}); err != nil {
+	if err := agentRuntime.ApplyConfig(controller.AgentConfig{Agent: model.Agent{ID: "agent-1", Enabled: true, AllowedCIDRs: []string{"127.0.0.0/8"}}, Links: []controller.AgentLinkConfig{{Link: link, GrantIDs: []string{grant.ID}}}, GrantIDs: []string{"grant-1"}}); err != nil {
 		t.Fatal(err)
 	}
 	agentDone := make(chan struct{})

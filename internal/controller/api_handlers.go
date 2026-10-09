@@ -125,7 +125,7 @@ func (s *Server) enroll(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) nodeConfig(w http.ResponseWriter, r *http.Request) {
-	role, nodeID, ok := s.authenticateNode(r)
+	role, nodeID, ok := s.authenticateNodeIdentity(r, true)
 	if !ok {
 		w.Header().Set("WWW-Authenticate", "Bearer")
 		http.Error(w, "unauthorized", 401)
@@ -136,6 +136,10 @@ func (s *Server) nodeConfig(w http.ResponseWriter, r *http.Request) {
 	switch role {
 	case model.RoleGateway:
 		gateway := state.Gateways[nodeID]
+		if !gateway.Enabled {
+			writeJSON(w, http.StatusOK, GatewayConfig{Revision: gateway.DesiredVersion, Gateway: model.Gateway{ID: nodeID}})
+			return
+		}
 		gateway.CredentialHash = ""
 		gateway.PreviousCredentialHash = ""
 		gateway.PreviousCredentialExpiresAt = time.Time{}
@@ -171,21 +175,32 @@ func (s *Server) nodeConfig(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, response)
 	case model.RoleAgent:
 		agent := state.Agents[nodeID]
+		if !agent.Enabled {
+			writeJSON(w, http.StatusOK, AgentConfig{Revision: agent.DesiredVersion, Agent: model.Agent{ID: nodeID}})
+			return
+		}
 		agent.CredentialHash = ""
 		agent.PreviousCredentialHash = ""
 		agent.PreviousCredentialExpiresAt = time.Time{}
 		response := AgentConfig{Revision: agent.DesiredVersion, Agent: agent}
 		for _, attachment := range state.Attachments {
-			if attachment.AgentID != nodeID || !attachment.Enabled {
+			if attachment.AgentID != nodeID || !routeAvailable(&state, attachment) {
 				continue
 			}
+			var grantIDs []string
+			for _, grant := range state.Grants {
+				if grant.AttachmentID == attachment.ID && grant.Enabled && state.Users[grant.UserID].Enabled {
+					grantIDs = append(grantIDs, grant.ID)
+				}
+			}
+			sort.Strings(grantIDs)
 			for _, link := range state.Links {
 				if link.AttachmentID != attachment.ID || !link.Enabled {
 					continue
 				}
 				link.TunnelTokenHash = ""
 				gateway := state.Gateways[attachment.GatewayID]
-				response.Links = append(response.Links, AgentLinkConfig{Link: link, GatewayID: attachment.GatewayID, TunnelToken: auth.Derive(s.cfg.sessionKey(), "tunnel", link.ID), RealityPublicKey: gateway.RealityPublicKey, RealityName: gateway.RealityName})
+				response.Links = append(response.Links, AgentLinkConfig{Link: link, GrantIDs: grantIDs, GatewayID: attachment.GatewayID, TunnelToken: auth.Derive(s.cfg.sessionKey(), "tunnel", link.ID), RealityPublicKey: gateway.RealityPublicKey, RealityName: gateway.RealityName})
 			}
 			for _, grant := range state.Grants {
 				user := state.Users[grant.UserID]
@@ -330,6 +345,10 @@ func (s *Server) nodeStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) authenticateNode(r *http.Request) (model.Role, string, bool) {
+	return s.authenticateNodeIdentity(r, false)
+}
+
+func (s *Server) authenticateNodeIdentity(r *http.Request, includeDisabled bool) (model.Role, string, bool) {
 	header := r.Header.Get("Authorization")
 	if !strings.HasPrefix(header, "Bearer ") {
 		return "", "", false
@@ -347,13 +366,13 @@ func (s *Server) authenticateNode(r *http.Request) (model.Role, string, bool) {
 	}
 	s.store.View(func(state *model.State) {
 		for id, gateway := range state.Gateways {
-			if gateway.Enabled && (matches(gateway.CredentialHash) || now.Before(gateway.PreviousCredentialExpiresAt) && matches(gateway.PreviousCredentialHash)) {
+			if (includeDisabled || gateway.Enabled) && (matches(gateway.CredentialHash) || now.Before(gateway.PreviousCredentialExpiresAt) && matches(gateway.PreviousCredentialHash)) {
 				role, nodeID = model.RoleGateway, id
 				return
 			}
 		}
 		for id, agent := range state.Agents {
-			if agent.Enabled && (matches(agent.CredentialHash) || now.Before(agent.PreviousCredentialExpiresAt) && matches(agent.PreviousCredentialHash)) {
+			if (includeDisabled || agent.Enabled) && (matches(agent.CredentialHash) || now.Before(agent.PreviousCredentialExpiresAt) && matches(agent.PreviousCredentialHash)) {
 				role, nodeID = model.RoleAgent, id
 				return
 			}

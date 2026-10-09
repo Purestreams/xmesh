@@ -288,9 +288,22 @@ func (r *Runtime) xrayLoop(ctx context.Context) error {
 	case <-r.xrayApply:
 	}
 	for {
-		r.mu.RLock()
+		r.mu.Lock()
+		if r.config.Gateway.Enabled && !time.Now().Before(r.authorizationUntil) {
+			r.invalidateAuthorizationLocked()
+		}
 		config := r.config
-		r.mu.RUnlock()
+		epoch := r.authorizationEpoch
+		r.mu.Unlock()
+		if !config.Gateway.Enabled {
+			r.setXray(false, "gateway is disabled")
+			select {
+			case <-ctx.Done():
+				return nil
+			case <-r.xrayApply:
+				continue
+			}
+		}
 		payload, err := buildXrayConfigWithStats(config, r.local.Gateway.SOCKSListen, r.local.Gateway.RealityListen, r.local.Gateway.TunnelListen, r.local.Gateway.StatsListen)
 		if err != nil {
 			r.setXray(false, err.Error())
@@ -314,7 +327,7 @@ func (r *Runtime) xrayLoop(ctx context.Context) error {
 				continue
 			}
 		}
-		err = r.runXrayUntilChange(ctx, config)
+		err = r.runXrayUntilChange(ctx, config, epoch)
 		if ctx.Err() != nil {
 			return nil
 		}
@@ -333,19 +346,26 @@ func (r *Runtime) xrayLoop(ctx context.Context) error {
 	}
 }
 
-func (r *Runtime) runXrayUntilChange(ctx context.Context, config controller.GatewayConfig) error {
+func (r *Runtime) runXrayUntilChange(ctx context.Context, config controller.GatewayConfig, epoch uint64) error {
 	childCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	cmd := exec.CommandContext(childCtx, r.local.Gateway.XrayBinary, "run", "-config", r.local.Gateway.XrayConfigPath)
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+	r.mu.Lock()
+	if !r.config.Gateway.Enabled || !time.Now().Before(r.authorizationUntil) || r.authorizationEpoch != epoch || r.config.Revision != config.Revision {
+		r.mu.Unlock()
+		return errXrayReload
+	}
 	if err := cmd.Start(); err != nil {
+		r.mu.Unlock()
 		return fmt.Errorf("start xray: %w", err)
 	}
-	r.mu.Lock()
+	r.xrayCancel = cancel
 	r.xrayStatsConfig = config
 	r.mu.Unlock()
 	defer func() {
 		r.mu.Lock()
+		r.xrayCancel = nil
 		r.xrayStatsConfig = controller.GatewayConfig{}
 		r.mu.Unlock()
 		r.setXray(false, "")
@@ -355,6 +375,9 @@ func (r *Runtime) runXrayUntilChange(ctx context.Context, config controller.Gate
 	timer := time.NewTimer(750 * time.Millisecond)
 	defer timer.Stop()
 	select {
+	case <-childCtx.Done():
+		<-done
+		return errXrayReload
 	case err := <-done:
 		return fmt.Errorf("xray exited during startup: %w", err)
 	case <-timer.C:
@@ -362,12 +385,18 @@ func (r *Runtime) runXrayUntilChange(ctx context.Context, config controller.Gate
 		r.xrayAppliedRevision.Store(config.Revision)
 	}
 	select {
-	case <-ctx.Done():
-		r.collectXrayStats(context.Background())
-		cancel()
+	case <-childCtx.Done():
 		<-done
-		return nil
+		return errXrayReload
 	case <-r.xrayApply:
+		r.mu.RLock()
+		disabled := !r.config.Gateway.Enabled
+		r.mu.RUnlock()
+		if disabled {
+			cancel()
+			<-done
+			return errXrayReload
+		}
 		r.collectXrayStats(context.Background())
 		reportCtx, reportCancel := context.WithTimeout(context.Background(), 3*time.Second)
 		if err := r.report(reportCtx); err != nil {

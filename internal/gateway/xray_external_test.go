@@ -50,7 +50,7 @@ func TestVLESSRealityVisionOutboundConfig(t *testing.T) {
 }
 
 func TestInvalidRevisionKeepsWorkingXrayConfig(t *testing.T) {
-	old := controller.GatewayConfig{Revision: 1, Gateway: model.Gateway{ID: "gateway", VMessPort: 8080, VMessPath: "/proxy"}}
+	old := controller.GatewayConfig{Revision: 1, Gateway: model.Gateway{ID: "gateway", Enabled: true, VMessPort: 8080, VMessPath: "/proxy"}}
 	invalid := controller.GatewayConfig{Revision: 2, Gateway: old.Gateway, Upstreams: []controller.GatewayUpstreamConfig{{AttachmentID: "route", Endpoint: model.VMessEndpoint{Protocol: "unsupported", UUID: "00000000-0000-4000-8000-000000000021"}}}}
 	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _ = json.NewEncoder(w).Encode(invalid) }))
 	defer source.Close()

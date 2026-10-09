@@ -31,10 +31,11 @@ type AgentConfig struct {
 
 type AgentLinkConfig struct {
 	model.Link
-	GatewayID        string `json:"gateway_id"`
-	TunnelToken      string `json:"tunnel_token"`
-	RealityPublicKey string `json:"reality_public_key,omitempty"`
-	RealityName      string `json:"reality_name,omitempty"`
+	GrantIDs         []string `json:"grant_ids"`
+	GatewayID        string   `json:"gateway_id"`
+	TunnelToken      string   `json:"tunnel_token"`
+	RealityPublicKey string   `json:"reality_public_key,omitempty"`
+	RealityName      string   `json:"reality_name,omitempty"`
 }
 
 type EnrollmentRequest struct {

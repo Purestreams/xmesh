@@ -32,6 +32,10 @@ type Runtime struct {
 	pool                *scheduler.Pool
 	mu                  sync.RWMutex
 	config              controller.GatewayConfig
+	authorizationUntil  time.Time
+	authorizationEpoch  uint64
+	activeConnections   map[net.Conn]authorizedConnection
+	xrayCancel          context.CancelFunc
 	xrayStatsConfig     controller.GatewayConfig
 	pendingStats        map[uint64]pendingStatsConfig
 	statsMu             sync.Mutex
@@ -61,16 +65,22 @@ type pendingStatsConfig struct {
 	expiresAt time.Time
 }
 
+type authorizedConnection struct {
+	grant  model.Grant
+	cancel context.CancelFunc
+}
+
 const pendingStatsLifetime = 7 * 24 * time.Hour
 
 func New(local runtimecfg.Config, logger *slog.Logger) *Runtime {
-	return &Runtime{local: local, client: nodeclient.New(local.ControllerURL, local.Credential), logger: logger, pool: scheduler.New(), started: time.Now(), xrayApply: make(chan struct{}, 1), grantStats: map[string]*grantCounters{}, grantLinks: map[string]map[string]*grantCounters{}, pendingStats: map[uint64]pendingStatsConfig{}}
+	return &Runtime{local: local, client: nodeclient.New(local.ControllerURL, local.Credential), logger: logger, pool: scheduler.New(), started: time.Now(), xrayApply: make(chan struct{}, 1), grantStats: map[string]*grantCounters{}, grantLinks: map[string]map[string]*grantCounters{}, pendingStats: map[uint64]pendingStatsConfig{}, authorizationUntil: time.Now().Add(nodeclient.ConfigLease), activeConnections: map[net.Conn]authorizedConnection{}}
 }
 
 func (r *Runtime) Run(ctx context.Context) error {
 	if err := r.refresh(ctx); err != nil {
 		return fmt.Errorf("initial controller config: %w", err)
 	}
+	go r.watchAuthorization(ctx)
 	errCh := make(chan error, 4)
 	go func() { errCh <- r.runTunnelServer(ctx) }()
 	go func() { errCh <- r.runSOCKS(ctx) }()
@@ -106,28 +116,62 @@ func (r *Runtime) controlLoop(ctx context.Context) error {
 }
 
 func (r *Runtime) refresh(ctx context.Context) error {
+	r.mu.RLock()
+	epoch := r.authorizationEpoch
+	r.mu.RUnlock()
 	config, err := nodeclient.FetchGateway(ctx, r.client)
 	if err != nil {
+		if nodeclient.AuthorizationRejected(err) {
+			r.invalidateAuthorization()
+		}
 		return err
 	}
 	if config.Gateway.ID != r.local.NodeID {
 		return errors.New("controller returned another gateway identity")
 	}
 	r.mu.Lock()
-	changed := r.config.Revision != config.Revision || r.config.Gateway.ID == ""
+	if epoch != r.authorizationEpoch {
+		r.mu.Unlock()
+		return errors.New("authorization changed while fetching configuration")
+	}
+	changed := r.config.Revision != config.Revision || r.config.Gateway.ID == "" || r.config.Gateway.Enabled != config.Gateway.Enabled
 	r.mu.Unlock()
-	if changed {
+	if changed && config.Gateway.Enabled {
 		if err := r.validateXrayCandidate(ctx, config); err != nil {
 			return err
 		}
 	}
-	if changed && r.xrayReady.Load() {
+	if changed && config.Gateway.Enabled && r.xrayReady.Load() {
 		if err := r.report(ctx); err != nil {
+			if nodeclient.AuthorizationRejected(err) {
+				return err
+			}
 			r.logger.Warn("report traffic before Xray update", "error", err)
 		}
 	}
 	r.mu.Lock()
+	if epoch != r.authorizationEpoch {
+		r.mu.Unlock()
+		return errors.New("authorization changed while applying configuration")
+	}
+	r.retireConnectionsLocked(config)
+	for _, session := range r.pool.Snapshot() {
+		keep := false
+		for _, link := range config.Links {
+			if config.Gateway.Enabled && link.Enabled && link.ID == session.LinkID && link.AgentID == session.AgentID {
+				for _, old := range r.config.Links {
+					if old.ID == link.ID && old.TunnelToken == link.TunnelToken {
+						keep = true
+					}
+				}
+			}
+		}
+		if !keep && session.SMux != nil {
+			_ = session.SMux.Close()
+		}
+	}
 	r.config = config
+	r.authorizationUntil = time.Now().Add(nodeclient.ConfigLease)
 	r.mu.Unlock()
 	if changed {
 		select {
@@ -137,6 +181,66 @@ func (r *Runtime) refresh(ctx context.Context) error {
 	}
 	r.setError("")
 	return nil
+}
+
+func (r *Runtime) retireConnectionsLocked(config controller.GatewayConfig) {
+	for conn, active := range r.activeConnections {
+		previous := active.grant
+		keep := false
+		for _, grant := range config.Grants {
+			if config.Gateway.Enabled && grant.Enabled && grant.ID == previous.ID && grant.AttachmentID == previous.AttachmentID && grant.SOCKSUsername == previous.SOCKSUsername && grant.SOCKSPassword == previous.SOCKSPassword && grant.VMessUUID == previous.VMessUUID {
+				keep = true
+				break
+			}
+		}
+		if !keep {
+			active.cancel()
+			_ = conn.Close()
+		}
+	}
+}
+
+func (r *Runtime) invalidateAuthorizationLocked() {
+	r.authorizationEpoch++
+	r.config.Gateway.Enabled = false
+	if r.xrayCancel != nil {
+		r.xrayCancel()
+	}
+	r.setXray(false, "gateway authorization revoked")
+	r.config.Grants, r.config.Links, r.config.Upstreams = nil, nil, nil
+	r.retireConnectionsLocked(r.config)
+	for _, session := range r.pool.Snapshot() {
+		if session.SMux != nil {
+			_ = session.SMux.Close()
+		}
+	}
+	select {
+	case r.xrayApply <- struct{}{}:
+	default:
+	}
+}
+
+func (r *Runtime) invalidateAuthorization() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.invalidateAuthorizationLocked()
+}
+
+func (r *Runtime) watchAuthorization(ctx context.Context) {
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			r.mu.Lock()
+			if r.config.Gateway.Enabled && !time.Now().Before(r.authorizationUntil) {
+				r.invalidateAuthorizationLocked()
+			}
+			r.mu.Unlock()
+		}
+	}
 }
 
 func (r *Runtime) report(ctx context.Context) error {
@@ -270,6 +374,9 @@ func (r *Runtime) report(ctx context.Context) error {
 	}
 	nodeStatus := model.NodeStatus{NodeID: r.local.NodeID, Role: model.RoleGateway, BinaryVersion: r.local.BinaryVersion, InstanceID: r.local.InstanceID, Online: true, Ready: ready, DesiredVersion: config.Revision, AppliedVersion: r.xrayAppliedRevision.Load(), XrayReady: r.xrayReady.Load(), XrayError: xrayError, ExternalUpstreams: true, LastSeen: time.Now().UTC(), TunnelConnections: tunnelCount, TCPConnections: int(r.tcpConnections.Load()), UDPAssociations: int(r.udpAssociations.Load()), UploadBytes: upload, DownloadBytes: download, LastError: lastError, FailureCounters: map[string]uint64{"udp_queue_drops": r.udpQueueDrops.Load()}}
 	if err := r.client.Report(ctx, nodeStatus, linkList, grantList); err != nil {
+		if nodeclient.AuthorizationRejected(err) {
+			r.invalidateAuthorization()
+		}
 		return err
 	}
 	r.mu.Lock()
@@ -391,7 +498,14 @@ func (r *Runtime) acceptTunnel(w http.ResponseWriter, request *http.Request) {
 	}
 	sessionID := registration.AgentID + "/" + registration.LinkID + "/" + clientSessionID
 	entry := &scheduler.Session{ID: sessionID, AgentID: registration.AgentID, LinkID: registration.LinkID, Priority: link.Priority, Weight: link.Weight, MaxStreams: link.MaxStreams, SMux: session, Generation: registration.Generation, Ready: true, LastOK: time.Now()}
+	r.mu.RLock()
+	if _, ok := r.authorizeTunnelLocked(registration); !ok {
+		r.mu.RUnlock()
+		_ = session.Close()
+		return
+	}
 	previous := r.pool.Add(entry)
+	r.mu.RUnlock()
 	if previous != nil && previous.SMux != nil {
 		_ = previous.SMux.Close()
 	}
@@ -432,8 +546,15 @@ func (r *Runtime) probeSession(id string, session *smux.Session) {
 func (r *Runtime) authorizeTunnel(registration protocol.Message) (controller.GatewayLinkConfig, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+	return r.authorizeTunnelLocked(registration)
+}
+
+func (r *Runtime) authorizeTunnelLocked(registration protocol.Message) (controller.GatewayLinkConfig, bool) {
+	if !r.config.Gateway.Enabled || !time.Now().Before(r.authorizationUntil) {
+		return controller.GatewayLinkConfig{}, false
+	}
 	for _, link := range r.config.Links {
-		if link.ID == registration.LinkID && link.AgentID == registration.AgentID && auth.EqualSecretHash(auth.SecretHash(link.TunnelToken), registration.Token) {
+		if link.Enabled && link.ID == registration.LinkID && link.AgentID == registration.AgentID && auth.EqualSecretHash(auth.SecretHash(link.TunnelToken), registration.Token) {
 			return link, true
 		}
 	}
@@ -443,6 +564,9 @@ func (r *Runtime) authorizeTunnel(registration protocol.Message) (controller.Gat
 func (r *Runtime) grant(username, password string) (model.Grant, string, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+	if !r.config.Gateway.Enabled || !time.Now().Before(r.authorizationUntil) {
+		return model.Grant{}, "", false
+	}
 	for _, grant := range r.config.Grants {
 		userOK := subtle.ConstantTimeCompare([]byte(grant.SOCKSUsername), []byte(username)) == 1
 		passwordOK := subtle.ConstantTimeCompare([]byte(grant.SOCKSPassword), []byte(password)) == 1
@@ -459,6 +583,10 @@ func (r *Runtime) grant(username, password string) (model.Grant, string, bool) {
 
 func (r *Runtime) openStream(agentID string, request protocol.Message) (net.Conn, *scheduler.Lease, error) {
 	r.mu.RLock()
+	if !r.config.Gateway.Enabled || !time.Now().Before(r.authorizationUntil) {
+		r.mu.RUnlock()
+		return nil, nil, errors.New("gateway authorization expired or disabled")
+	}
 	allowed := map[string]bool{}
 	for _, grant := range r.config.Grants {
 		if grant.ID != request.GrantID || !grant.Enabled {

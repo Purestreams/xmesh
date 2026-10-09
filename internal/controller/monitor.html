@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex,nofollow">
+  <title>XMesh · 网络监控</title>
+  <link rel="stylesheet" href="/assets/monitor.css">
+  <script src="/assets/monitor.js" defer></script>
+</head>
+<body>
+  <header><div class="brand">◈ XMesh <span>NETWORK MONITOR</span></div><span class="readonly">监控</span></header>
+  <main>
+    <div class="heading"><div><p class="eyebrow">NETWORK / LIVE STATUS</p><h1>网络连接状态</h1><p class="muted">查看入口与出口之间的隧道状态和往返延迟。</p></div><div class="refresh"><button id="refresh" type="button">刷新状态</button><p id="updated" role="status">正在获取状态…</p></div></div>
+    <div id="notice" class="notice" role="alert" hidden></div>
+    <noscript><p class="notice">请启用 JavaScript 查看实时监控。</p></noscript>
+    <div id="metrics" class="metrics" aria-label="网络概览"></div>
+    <section><h2>节点状态</h2><div id="nodes" class="nodes"><p class="muted">正在加载节点…</p></div></section>
+    <section><div class="section-heading"><div><h2>链路矩阵</h2><p class="muted">点击已发布的节点组合，查看各条 Link 和延迟趋势。</p></div><label class="search">搜索公开名称<input id="search" type="search" placeholder="节点或链路名称" maxlength="48"></label></div><div id="matrix" class="table-scroll"><p class="muted">正在加载链路…</p></div><p class="legend">● 就绪　◐ 待就绪　○ 离线　◌ 数据过期　— 未发布链路 / 无测量</p></section>
+    <section id="detail" hidden><div class="section-heading"><h2 id="detail-title" tabindex="-1">链路详情</h2><button id="close-detail" type="button" class="secondary">关闭详情</button></div><div id="detail-body"></div></section>
+    <footer>延迟为 Gateway ↔ Agent 隧道 RTT，数值经过平滑处理；页面每 15 秒刷新。<br>历史保留近 24 小时，约每 5 分钟采样；外部出口显示“未探测”。</footer>
+  </main>
+</body>
+</html>

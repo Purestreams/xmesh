@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"xmesh/internal/identity"
+
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -40,7 +42,11 @@ func EqualSecretHash(hash, secret string) bool {
 }
 
 func SignSession(secret []byte, username string, expires time.Time) string {
-	payload := base64.RawURLEncoding.EncodeToString([]byte(username)) + "." + strconv.FormatInt(expires.Unix(), 10)
+	nonce, err := identity.Token(16)
+	if err != nil {
+		return ""
+	}
+	payload := base64.RawURLEncoding.EncodeToString([]byte(username)) + "." + strconv.FormatInt(expires.Unix(), 10) + "." + nonce
 	mac := hmac.New(sha256.New, secret)
 	_, _ = mac.Write([]byte(payload))
 	return payload + "." + base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
@@ -48,11 +54,11 @@ func SignSession(secret []byte, username string, expires time.Time) string {
 
 func VerifySession(secret []byte, value string, now time.Time) (string, bool) {
 	parts := strings.Split(value, ".")
-	if len(parts) != 3 {
+	if len(parts) != 4 {
 		return "", false
 	}
-	payload := parts[0] + "." + parts[1]
-	want, err := base64.RawURLEncoding.DecodeString(parts[2])
+	payload := strings.Join(parts[:3], ".")
+	want, err := base64.RawURLEncoding.DecodeString(parts[3])
 	if err != nil {
 		return "", false
 	}

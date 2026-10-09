@@ -1,0 +1,10 @@
+[
+  {
+    "remarks": "Docker Desktop direct (all containers)",
+    "enabled": true,
+    "outboundTag": "direct",
+    "process": [
+      "com.docker.backend.exe"
+    ]
+  }
+]

@@ -46,7 +46,7 @@ XMesh 将客户端入口与实际出口分开：Gateway 提供可访问的入口
 
 ## 部署
 
-下面以三台独立 Linux 主机分别部署 Controller、Gateway 和 Agent。systemd 安装器支持 Debian/Ubuntu 的 amd64、arm64；Docker 安装器支持 Linux amd64、arm64，需要 Docker Engine 和 Compose 插件，并使用主机网络。Windows amd64 Release 仅提供独立可执行文件，没有 Windows 服务安装器或配套 Xray 包。
+下面以三台独立 Linux 主机分别部署 Controller、Gateway 和 Agent。systemd 安装器支持 Debian/Ubuntu、CentOS 7/8 的 amd64、arm64；CentOS 7 自动使用兼容 systemd 219 的服务配置。Docker 安装器支持 Linux amd64、arm64，需要 Docker Engine 和 Compose 插件，并使用主机网络。Windows amd64 Release 仅提供独立可执行文件，没有 Windows 服务安装器或配套 Xray 包。
 
 同一主机、同一角色选择一种安装方式。systemd 安装器使用固定服务名和目录，Controller 与节点应分开部署。
 
@@ -69,11 +69,22 @@ sudo apt update
 sudo apt install -y ca-certificates curl tar coreutils
 ```
 
-仅在 Controller 主机安装以下工具并取得源码。本文说明当前代码行为，安装示例固定使用 `v0.3.3`；选择其他已发布版本时，将 `VERSION` 改为对应的精确 tag，源码与安装包使用同一版本。可用版本见 [Releases](https://github.com/Purestreams/xmesh/releases)。
+CentOS 主机使用以下命令准备基础工具（先确保 yum/dnf 软件源可用），随后运行相同的 systemd 安装命令：
+
+```sh
+# CentOS 7
+sudo yum install -y ca-certificates curl tar coreutils iproute shadow-utils
+# CentOS 8
+sudo dnf install -y ca-certificates curl tar coreutils iproute shadow-utils
+```
+
+Gateway 如启用 firewalld，需在实际网卡所在 zone 放行 VMess 端口和 REALITY 端口。例如使用 `--vmess-port 8086` 时，放行 TCP 8086 和 8443；Agent 无需开放入站端口。下文 Nginx/Certbot 的包安装和配置路径以 Debian/Ubuntu 为例，CentOS Controller 按本机的软件源、Nginx 布局和 SELinux 策略配置 HTTPS 反向代理。
+
+仅在 Controller 主机安装以下工具并取得源码。本文说明当前代码行为，安装示例固定使用 `v0.3.7`；选择其他已发布版本时，将 `VERSION` 改为对应的精确 tag，源码与安装包使用同一版本。可用版本见 [Releases](https://github.com/Purestreams/xmesh/releases)。
 
 ```sh
 sudo apt install -y git nginx certbot
-VERSION=v0.3.5
+VERSION=v0.3.7
 git clone --depth 1 --branch "$VERSION" https://github.com/Purestreams/xmesh.git
 cd xmesh
 ```
