@@ -384,11 +384,17 @@ func (s *Server) updateLinkPolicy(w http.ResponseWriter, r *http.Request) {
 		if !ok {
 			return fmt.Errorf("link not found")
 		}
+		schedulingChanged := link.Priority != priority || link.Weight != weight || link.MaxStreams != maxStreams
+		connectionsChanged := link.Connections != connections
 		link.Priority, link.Weight, link.Connections, link.MaxStreams = priority, weight, connections, maxStreams
 		state.Links[link.ID] = link
 		attachment := state.Attachments[link.AttachmentID]
-		bumpGateway(state, attachment.GatewayID)
-		bumpAgent(state, attachment.AgentID)
+		if schedulingChanged {
+			bumpGateway(state, attachment.GatewayID)
+		}
+		if connectionsChanged {
+			bumpAgent(state, attachment.AgentID)
+		}
 		return nil
 	})
 	if err != nil {

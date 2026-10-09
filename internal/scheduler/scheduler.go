@@ -84,6 +84,24 @@ func (p *Pool) Remove(id string, expected *Session) {
 	}
 }
 
+// UpdatePolicy changes selection for new streams without replacing sessions or
+// their load/lease accounting. A lower limit does not interrupt existing flows.
+func (p *Pool) UpdatePolicy(linkID, agentID string, priority, weight, maxStreams int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if weight <= 0 {
+		weight = 1
+	}
+	if maxStreams <= 0 {
+		maxStreams = 1
+	}
+	for _, session := range p.sessions {
+		if session.LinkID == linkID && session.AgentID == agentID {
+			session.Priority, session.Weight, session.MaxStreams = priority, weight, maxStreams
+		}
+	}
+}
+
 func (p *Pool) SetReady(id string, ready bool, err string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -95,11 +113,14 @@ func (p *Pool) SetReady(id string, ready bool, err string) {
 	}
 }
 
-func (p *Pool) UpdateProbe(id string, rtt time.Duration, err error) {
+func (p *Pool) UpdateProbe(expected *Session, rtt time.Duration, err error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	session := p.sessions[id]
-	if session == nil {
+	if expected == nil {
+		return
+	}
+	session := p.sessions[expected.ID]
+	if session != expected {
 		return
 	}
 	if err != nil {

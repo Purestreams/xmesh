@@ -175,9 +175,13 @@ func validMonitorAlias(alias string) bool {
 }
 
 func publicAliasKeys(aliases map[string]string) []string {
+	return monitorAliasKeys(aliases, false)
+}
+
+func monitorAliasKeys(aliases map[string]string, optional bool) []string {
 	keys := make([]string, 0, len(aliases))
 	for key, alias := range aliases {
-		if validMonitorAlias(alias) {
+		if validMonitorAlias(alias) || (optional && alias == "") {
 			keys = append(keys, key)
 		}
 	}
@@ -271,28 +275,33 @@ func (s *Server) publicMonitor(state *model.State, now time.Time) monitorPayload
 		refs[id], stages[id] = fmt.Sprintf("n%d", len(data.Nodes)+1), stage
 		data.Nodes = append(data.Nodes, monitorNode{Key: refs[id], Name: state.Monitor.Nodes[id], Role: role, State: stage})
 	}
-	for _, id := range publicAliasKeys(state.Monitor.Links) {
-		link, exists := state.Links[id]
+	linkKeys := monitorAliasKeys(state.Monitor.Links, true)
+	// Count only selected, existing links with visible endpoints. Derive default
+	// labels from public aliases; never copy a management Link name or URL.
+	pairCounts, pairIndexes := map[string]int{}, map[string]int{}
+	for _, id := range linkKeys {
+		route, exitID, exists := monitorLinkRoute(state, id)
+		if exists && refs[route.GatewayID] != "" && refs[exitID] != "" {
+			pairCounts[refs[route.GatewayID]+"/"+refs[exitID]]++
+		}
+	}
+	for _, id := range linkKeys {
+		link := state.Links[id]
 		external := strings.HasPrefix(id, "external:")
-		var route model.Attachment
-		if external {
-			route, exists = state.Attachments[strings.TrimPrefix(id, "external:")]
-			if route.UpstreamID == "" {
-				continue
-			}
-		} else {
-			var routeExists bool
-			route, routeExists = state.Attachments[link.AttachmentID]
-			exists = exists && routeExists && route.UpstreamID == ""
-		}
-		exitID := route.AgentID
-		if external {
-			exitID = route.UpstreamID
-		}
+		route, exitID, exists := monitorLinkRoute(state, id)
 		if !exists || refs[route.GatewayID] == "" || refs[exitID] == "" {
 			continue
 		}
-		out := monitorLink{Name: state.Monitor.Links[id], Gateway: refs[route.GatewayID], Exit: refs[exitID], State: "pending", History: []monitorSample{}}
+		pair := refs[route.GatewayID] + "/" + refs[exitID]
+		pairIndexes[pair]++
+		name := state.Monitor.Links[id]
+		if name == "" {
+			name = state.Monitor.Nodes[route.GatewayID] + " → " + state.Monitor.Nodes[exitID]
+			if pairCounts[pair] > 1 {
+				name += fmt.Sprintf(" / 链路 %d", pairIndexes[pair])
+			}
+		}
+		out := monitorLink{Name: name, Gateway: refs[route.GatewayID], Exit: refs[exitID], State: "pending", History: []monitorSample{}}
 		gs, as := state.LinkStatus[route.GatewayID+"/"+id], state.LinkStatus[exitID+"/"+id]
 		gatewayState, exitState := stages[route.GatewayID], stages[exitID]
 		switch {
@@ -348,8 +357,19 @@ func (s *Server) publicMonitor(state *model.State, now time.Time) monitorPayload
 	return data
 }
 
+func monitorLinkRoute(state *model.State, id string) (model.Attachment, string, bool) {
+	if strings.HasPrefix(id, "external:") {
+		route, exists := state.Attachments[strings.TrimPrefix(id, "external:")]
+		return route, route.UpstreamID, exists && route.UpstreamID != ""
+	}
+	link, exists := state.Links[id]
+	route, routeExists := state.Attachments[link.AttachmentID]
+	return route, route.AgentID, exists && routeExists && route.UpstreamID == ""
+}
+
 type monitorSettingRow struct {
 	ID, Name, Role, Alias string
+	Visible               bool
 }
 
 type monitorSettingsView struct {
@@ -363,13 +383,13 @@ type monitorSettingsView struct {
 func monitorSettingRows(state model.State) ([]monitorSettingRow, []monitorSettingRow) {
 	nodes, links := []monitorSettingRow{}, []monitorSettingRow{}
 	for _, node := range sortedGateways(state) {
-		nodes = append(nodes, monitorSettingRow{ID: node.ID, Name: node.Name, Role: "Gateway", Alias: state.Monitor.Nodes[node.ID]})
+		nodes = append(nodes, monitorSettingRow{ID: node.ID, Name: node.Name, Role: "Gateway", Alias: state.Monitor.Nodes[node.ID], Visible: state.Monitor.Nodes[node.ID] != ""})
 	}
 	for _, node := range sortedAgents(state) {
-		nodes = append(nodes, monitorSettingRow{ID: node.ID, Name: node.Name, Role: "Agent", Alias: state.Monitor.Nodes[node.ID]})
+		nodes = append(nodes, monitorSettingRow{ID: node.ID, Name: node.Name, Role: "Agent", Alias: state.Monitor.Nodes[node.ID], Visible: state.Monitor.Nodes[node.ID] != ""})
 	}
 	for _, node := range sortedUpstreams(state) {
-		nodes = append(nodes, monitorSettingRow{ID: node.ID, Name: node.Name, Role: "外部出口", Alias: state.Monitor.Nodes[node.ID]})
+		nodes = append(nodes, monitorSettingRow{ID: node.ID, Name: node.Name, Role: "外部出口", Alias: state.Monitor.Nodes[node.ID], Visible: state.Monitor.Nodes[node.ID] != ""})
 	}
 	for _, link := range sortedLinks(state) {
 		route, ok := state.Attachments[link.AttachmentID]
@@ -377,13 +397,15 @@ func monitorSettingRows(state model.State) ([]monitorSettingRow, []monitorSettin
 			continue
 		}
 		name := state.Gateways[route.GatewayID].Name + " → " + state.Agents[route.AgentID].Name + " / " + link.Name
-		links = append(links, monitorSettingRow{ID: link.ID, Name: name, Alias: state.Monitor.Links[link.ID]})
+		_, visible := state.Monitor.Links[link.ID]
+		links = append(links, monitorSettingRow{ID: link.ID, Name: name, Alias: state.Monitor.Links[link.ID], Visible: visible})
 	}
 	for _, route := range sortedAttachments(state) {
 		if route.UpstreamID != "" {
 			id := "external:" + route.ID
 			name := state.Gateways[route.GatewayID].Name + " → " + state.Upstreams[route.UpstreamID].Name
-			links = append(links, monitorSettingRow{ID: id, Name: name, Alias: state.Monitor.Links[id]})
+			_, visible := state.Monitor.Links[id]
+			links = append(links, monitorSettingRow{ID: id, Name: name, Alias: state.Monitor.Links[id], Visible: visible})
 		}
 	}
 	return nodes, links
@@ -427,6 +449,10 @@ func (s *Server) saveMonitorSettings(w http.ResponseWriter, r *http.Request) {
 					continue
 				}
 				alias := strings.TrimSpace(r.PostFormValue(group.prefix + row.ID))
+				if group.prefix == "link_" && alias == "" {
+					group.values[row.ID] = ""
+					continue
+				}
 				if !validMonitorAlias(alias) {
 					return fmt.Errorf("公开别名须为 1–48 个文字、数字、空格、横线、下划线或括号；不能包含地址或 URL")
 				}
@@ -445,7 +471,7 @@ func (s *Server) saveMonitorSettings(w http.ResponseWriter, r *http.Request) {
 				exitID = route.UpstreamID
 			}
 			if next.Nodes[route.GatewayID] == "" || next.Nodes[exitID] == "" {
-				return fmt.Errorf("公开链路时必须同时勾选入口和出口，并填写其公开别名")
+				return fmt.Errorf("公开链路前，请在上方勾选它的入口和出口节点，并填写节点公开别名")
 			}
 		}
 		state.Monitor = next

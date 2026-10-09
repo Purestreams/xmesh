@@ -37,6 +37,7 @@ type Runtime struct {
 	authorizationUntil time.Time
 	authorizationEpoch uint64
 	workers            map[string]context.CancelFunc
+	activeStreams      map[*smux.Stream]*streamAuthorization
 	statuses           map[string]*linkRuntimeStatus
 	realityMu          sync.Mutex
 	realities          map[string]*realityCore
@@ -51,12 +52,18 @@ type linkRuntimeStatus struct {
 	model.LinkStatus
 }
 
+type streamAuthorization struct {
+	linkID, grantID string
+	cancel          context.CancelFunc
+	target          *net.TCPAddr
+}
+
 func New(local runtimecfg.Config, logger *slog.Logger) *Runtime {
 	limit := local.MaxActiveStreams
 	if limit <= 0 {
 		limit = 1024
 	}
-	return &Runtime{local: local, client: nodeclient.New(local.ControllerURL, local.Credential), logger: logger, workers: map[string]context.CancelFunc{}, statuses: map[string]*linkRuntimeStatus{}, realities: map[string]*realityCore{}, streamSlots: make(chan struct{}, limit), authorizationUntil: time.Now().Add(nodeclient.ConfigLease)}
+	return &Runtime{local: local, client: nodeclient.New(local.ControllerURL, local.Credential), logger: logger, workers: map[string]context.CancelFunc{}, activeStreams: map[*smux.Stream]*streamAuthorization{}, statuses: map[string]*linkRuntimeStatus{}, realities: map[string]*realityCore{}, streamSlots: make(chan struct{}, limit), authorizationUntil: time.Now().Add(nodeclient.ConfigLease)}
 }
 
 func (r *Runtime) Run(ctx context.Context) error {
@@ -123,6 +130,9 @@ func (r *Runtime) applyConfig(config controller.AgentConfig, epoch uint64) error
 	}
 	// Config arrays are sets built from Controller maps. Their wire order may
 	// change between polls without any actual configuration change.
+	config.Agent.AllowedCIDRs = append([]string(nil), config.Agent.AllowedCIDRs...)
+	config.Agent.DeniedCIDRs = append([]string(nil), config.Agent.DeniedCIDRs...)
+	config.Agent.AllowedPorts = append([]int(nil), config.Agent.AllowedPorts...)
 	config.Links = append([]controller.AgentLinkConfig(nil), config.Links...)
 	for i := range config.Links {
 		config.Links[i].GrantIDs = append([]string(nil), config.Links[i].GrantIDs...)
@@ -137,17 +147,12 @@ func (r *Runtime) applyConfig(config controller.AgentConfig, epoch uint64) error
 		r.mu.Unlock()
 		return errors.New("authorization changed while applying configuration")
 	}
-	changed := r.configFingerprint != "" && r.configFingerprint != string(b)
-	if changed {
-		for _, cancel := range r.workers {
-			cancel()
-		}
-		r.workers = map[string]context.CancelFunc{}
-		r.closeRealities()
-	}
+	r.retireWorkersLocked(config)
+	policyChanged := !sameAccessPolicy(r.config.Agent, config.Agent)
 	r.config = config
 	r.authorizationUntil = time.Now().Add(nodeclient.ConfigLease)
 	r.configFingerprint = string(b)
+	r.retireStreamsLocked(policyChanged)
 	r.mu.Unlock()
 	r.setError("")
 	return nil
@@ -168,6 +173,7 @@ func (r *Runtime) invalidateAuthorizationLocked() {
 		cancel()
 	}
 	r.workers = map[string]context.CancelFunc{}
+	r.retireStreamsLocked(false)
 	r.closeRealities()
 }
 
@@ -190,7 +196,18 @@ func (r *Runtime) watchAuthorization(ctx context.Context) {
 
 // RunLink runs one tunnel connection until the connection or context ends.
 func (r *Runtime) RunLink(ctx context.Context, link controller.AgentLinkConfig) error {
-	defer r.closeRealities()
+	defer func() {
+		if ctx.Err() != nil {
+			r.mu.RLock()
+			defer r.mu.RUnlock()
+			for key := range r.workers {
+				if strings.HasPrefix(key, link.ID+"#") {
+					return
+				}
+			}
+			r.closeReality(link.ID)
+		}
+	}()
 	return r.runSession(ctx, link.ID+"#manual", link, 1)
 }
 
@@ -199,6 +216,9 @@ func (r *Runtime) reconcile(ctx context.Context) {
 	defer r.mu.Unlock()
 	desired := map[string]controller.AgentLinkConfig{}
 	for _, link := range r.config.Links {
+		if !r.config.Agent.Enabled || !link.Enabled {
+			continue
+		}
 		for i := 0; i < link.Connections; i++ {
 			desired[link.ID+"#"+strconv.Itoa(i)] = link
 		}
@@ -370,19 +390,30 @@ func (r *Runtime) handleStream(ctx context.Context, linkID string, stream *smux.
 		_ = protocol.WriteMessage(stream, protocol.Message{Type: protocol.TypePong, Version: protocol.Version, Success: true})
 		return
 	}
-	if !r.grantAllowed(linkID, request.GrantID) {
+	streamCtx, cancelStream := context.WithCancel(ctx)
+	defer cancelStream()
+	r.mu.Lock()
+	allowed := r.grantAllowedLocked(linkID, request.GrantID) && streamCtx.Err() == nil
+	if allowed {
+		r.activeStreams[stream] = &streamAuthorization{linkID: linkID, grantID: request.GrantID, cancel: cancelStream}
+	}
+	r.mu.Unlock()
+	if !allowed {
 		_ = protocol.WriteMessage(stream, protocol.Message{Type: protocol.TypeResponse, Version: protocol.Version, ErrorCode: "unauthorized", Error: "grant is not authorized"})
 		return
 	}
+	defer func() { r.mu.Lock(); delete(r.activeStreams, stream); r.mu.Unlock() }()
+	stopRevocation := context.AfterFunc(streamCtx, func() { _ = stream.Close() })
+	defer stopRevocation()
 	policy, err := r.policy()
 	if err != nil {
 		return
 	}
 	switch request.Type {
 	case protocol.TypeTCP:
-		r.handleTCP(ctx, linkID, stream, policy, request)
+		r.handleTCP(streamCtx, linkID, stream, policy, request)
 	case protocol.TypeUDP:
-		r.handleUDP(ctx, linkID, stream, policy, request)
+		r.handleUDP(streamCtx, linkID, stream, policy, request)
 	default:
 		_ = protocol.WriteMessage(stream, protocol.Message{Type: protocol.TypeResponse, Version: protocol.Version, ErrorCode: "unsupported", Error: "unsupported stream type"})
 	}
@@ -397,6 +428,20 @@ func (r *Runtime) handleTCP(ctx context.Context, linkID string, stream *smux.Str
 		return
 	}
 	defer target.Close()
+	// A policy can change while DNS/dialing is in flight. Check the actual
+	// connected address under the same lock used to retire established flows.
+	r.mu.Lock()
+	authorization := r.activeStreams[stream]
+	currentPolicy, policyErr := compilePolicy(r.config.Agent)
+	address, addressOK := target.RemoteAddr().(*net.TCPAddr)
+	valid := authorization != nil && ctx.Err() == nil && r.grantAllowedLocked(linkID, request.GrantID) && policyErr == nil && addressOK && currentPolicy.permitsTCP(address)
+	if valid {
+		authorization.target = address
+	}
+	r.mu.Unlock()
+	if !valid {
+		return
+	}
 	stopCancellation := context.AfterFunc(ctx, func() {
 		_ = target.Close()
 		_ = stream.Close()
@@ -480,7 +525,11 @@ func (r *Runtime) grantAllowed(linkID, id string) bool {
 	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	if !r.config.Agent.Enabled || !time.Now().Before(r.authorizationUntil) {
+	return r.grantAllowedLocked(linkID, id)
+}
+
+func (r *Runtime) grantAllowedLocked(linkID, id string) bool {
+	if id == "" || !r.config.Agent.Enabled || !time.Now().Before(r.authorizationUntil) {
 		return false
 	}
 	for _, link := range r.config.Links {

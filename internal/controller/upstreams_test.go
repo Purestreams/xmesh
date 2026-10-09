@@ -136,6 +136,7 @@ func TestVMessSubscriptionSelectionAndGatewayRoute(t *testing.T) {
 	if !state.Snapshot().Grants[grant.ID].Published {
 		t.Fatal("grant not published after Gateway applied")
 	}
+	versionBeforeCapabilities := state.Snapshot().Gateways["gateway"].DesiredVersion
 	report.Status.ExternalUpstreams = false
 	payload, _ = json.Marshal(report)
 	status = httptest.NewRequest(http.MethodPost, "/api/v1/status", bytes.NewReader(payload))
@@ -145,14 +146,32 @@ func TestVMessSubscriptionSelectionAndGatewayRoute(t *testing.T) {
 	if result.Code != http.StatusNoContent || state.Snapshot().Grants[grant.ID].Published {
 		t.Fatalf("old Gateway kept external grant published: %d", result.Code)
 	}
+	if state.Snapshot().Gateways["gateway"].DesiredVersion != versionBeforeCapabilities+1 {
+		t.Fatal("removing external users did not advance the configuration version")
+	}
 	report.Status.ExternalUpstreams = true
 	payload, _ = json.Marshal(report)
 	status = httptest.NewRequest(http.MethodPost, "/api/v1/status", bytes.NewReader(payload))
 	status.Header.Set("Authorization", "Bearer gateway-secret")
 	result = httptest.NewRecorder()
 	server.Handler().ServeHTTP(result, status)
-	if result.Code != http.StatusNoContent || !state.Snapshot().Grants[grant.ID].Published {
-		t.Fatalf("upgraded Gateway did not republish external grant: %d", result.Code)
+	if result.Code != http.StatusNoContent || state.Snapshot().Grants[grant.ID].Published {
+		t.Fatalf("upgraded Gateway published external grant before applying its users: %d", result.Code)
+	}
+	configVersion := state.Snapshot().Gateways["gateway"].DesiredVersion
+	if configVersion != versionBeforeCapabilities+2 {
+		t.Fatal("adding external users did not advance the configuration version")
+	}
+	report.Status.AppliedVersion = configVersion
+	payload, _ = json.Marshal(report)
+	for range 2 {
+		status = httptest.NewRequest(http.MethodPost, "/api/v1/status", bytes.NewReader(payload))
+		status.Header.Set("Authorization", "Bearer gateway-secret")
+		result = httptest.NewRecorder()
+		server.Handler().ServeHTTP(result, status)
+		if result.Code != http.StatusNoContent || !state.Snapshot().Grants[grant.ID].Published || state.Snapshot().Gateways["gateway"].DesiredVersion != configVersion {
+			t.Fatalf("applied external grant was not published or repeated report changed its version: %d", result.Code)
+		}
 	}
 	dashboard := httptest.NewRecorder()
 	server.dashboard(dashboard, httptest.NewRequest(http.MethodGet, "/admin/dashboard", nil))

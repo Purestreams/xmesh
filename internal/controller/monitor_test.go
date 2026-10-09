@@ -342,6 +342,96 @@ func TestMonitorRateLimit(t *testing.T) {
 	}
 }
 
+func TestMonitorOptionalLinkNamesAndPublicationPersistence(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0)
+	server, state := testServer(t, monitorFixture(now))
+	values := url.Values{
+		"enabled":              {"on"},
+		"show_node_private-gw": {"on"}, "node_private-gw": {"香港入口"},
+		"show_node_private-agent": {"on"}, "node_private-agent": {"东京出口"},
+		"show_node_private-upstream": {"on"}, "node_private-upstream": {"外部出口"},
+		"show_link_private-link": {"on"}, "link_private-link": {"  "},
+		"show_link_external:private-external-route": {"on"},
+	}
+	if w := monitorSave(server, values, true, true); w.Code != http.StatusSeeOther {
+		t.Fatalf("optional names rejected: %d %s", w.Code, w.Body.String())
+	}
+	for _, link := range readMonitor(t, server).Links {
+		if link.Name != "香港入口 → 东京出口" && link.Name != "香港入口 → 外部出口" {
+			t.Fatalf("unsafe or missing default name: %#v", link)
+		}
+	}
+	_, rows := monitorSettingRows(state.Snapshot())
+	for _, row := range rows {
+		if !row.Visible || row.Alias != "" {
+			t.Fatalf("blank name lost publication checkbox: %#v", row)
+		}
+	}
+	// A restart retains the empty map values and their membership.
+	path := filepath.Join(t.TempDir(), "state.json")
+	persisted, err := store.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := persisted.Update(func(s *model.State) error { *s = state.Snapshot(); return nil }); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := store.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if alias, exists := reopened.Snapshot().Monitor.Links["private-link"]; !exists || alias != "" {
+		t.Fatal("restart lost selected unnamed link")
+	}
+	// The raw name and identity of an additional Link must not be published.
+	if err := state.Update(func(s *model.State) error {
+		link := s.Links["private-link"]
+		link.ID, link.Name = "private-link-2", "192.0.2.99"
+		s.Links[link.ID] = link
+		for _, reporter := range []string{"private-gw", "private-agent"} {
+			status := s.LinkStatus[reporter+"/private-link"]
+			status.LinkID = link.ID
+			s.LinkStatus[reporter+"/"+link.ID] = status
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	values.Set("show_link_private-link-2", "on")
+	if w := monitorSave(server, values, true, true); w.Code != http.StatusSeeOther {
+		t.Fatalf("multiple unnamed links rejected: %d %s", w.Code, w.Body.String())
+	}
+	names := map[string]bool{}
+	for _, link := range readMonitor(t, server).Links {
+		names[link.Name] = true
+	}
+	if len(names) != 3 || !names["香港入口 → 东京出口 / 链路 1"] || !names["香港入口 → 东京出口 / 链路 2"] || !names["香港入口 → 外部出口"] {
+		t.Fatalf("unexpected generated names: %#v", names)
+	}
+	body := monitorRequest(server, "/api/public/monitor").Body.String()
+	for _, secret := range []string{"private-", "192.0.2.99", "192.0.2.42"} {
+		if strings.Contains(body, secret) {
+			t.Fatalf("default name exposed %s", secret)
+		}
+	}
+	// Unchecking publication remains independent of the blank name.
+	values.Del("show_link_private-link-2")
+	values.Set("link_private-link", "主链路")
+	if w := monitorSave(server, values, true, true); w.Code != http.StatusSeeOther {
+		t.Fatalf("custom name rejected: %d", w.Code)
+	}
+	if _, visible := state.Snapshot().Monitor.Links["private-link-2"]; visible {
+		t.Fatal("unchecked link stayed public")
+	}
+	names = map[string]bool{}
+	for _, link := range readMonitor(t, server).Links {
+		names[link.Name] = true
+	}
+	if !names["主链路"] || len(names) != 2 {
+		t.Fatalf("custom name not honored: %#v", names)
+	}
+}
+
 func TestMonitorCacheDoesNotOutliveProbeExpiry(t *testing.T) {
 	now := time.Unix(1_800_000_000, 0)
 	server, _ := testServer(t, monitorFixture(now))

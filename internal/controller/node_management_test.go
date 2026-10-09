@@ -118,3 +118,61 @@ func TestGatewayEditHoldsSubscriptionAndUpdatesGeneratedRealityAddress(t *testin
 		t.Fatalf("stale route or prematurely published grant: %+v", snapshot)
 	}
 }
+
+func TestMetadataAndPolicySavesOnlyAdvanceAffectedRuntimeVersions(t *testing.T) {
+	server, state := testServer(t, func(s *model.State) error {
+		s.Gateways["g"] = model.Gateway{ID: "g", Name: "Gateway", PublicHost: "edge.example", VMessPort: 8080, VMessPath: "/proxy", DesiredVersion: 1}
+		s.Agents["a"] = model.Agent{ID: "a", Name: "Agent", AllowedCIDRs: []string{"127.0.0.0/8", "10.0.0.0/8"}, DesiredVersion: 1}
+		s.Attachments["n"] = model.Attachment{ID: "n", GatewayID: "g", AgentID: "a", Enabled: true}
+		s.Links["l"] = model.Link{ID: "l", Name: "Link", AttachmentID: "n", URL: "wss://edge.example/tunnel", TLSVerify: true, Priority: 10, Weight: 1, Connections: 2, MaxStreams: 16, Enabled: true}
+		s.Grants["r"] = model.Grant{ID: "r", AttachmentID: "n", Enabled: true, Published: true}
+		return nil
+	})
+	save := func(path string, values url.Values, handler http.HandlerFunc) {
+		t.Helper()
+		response := postNodeForm(path, values, handler)
+		if response.Code != http.StatusSeeOther {
+			t.Fatalf("save %s: %d %s", path, response.Code, response.Body.String())
+		}
+	}
+	versions := func(gateway, agent uint64) {
+		t.Helper()
+		snapshot := state.Snapshot()
+		if snapshot.Gateways["g"].DesiredVersion != gateway || snapshot.Agents["a"].DesiredVersion != agent {
+			t.Fatalf("unexpected versions: gateway=%d agent=%d", snapshot.Gateways["g"].DesiredVersion, snapshot.Agents["a"].DesiredVersion)
+		}
+	}
+	gateway := url.Values{"name": {"Renamed gateway"}, "region": {"overseas"}, "public_host": {"edge.example"}, "vmess_port": {"8080"}, "vmess_path": {"/proxy"}}
+	agent := url.Values{"name": {"Renamed agent"}, "allowed_cidrs": {"10.0.0.1/8,127.0.0.0/8,10.0.0.0/8"}}
+	link := url.Values{"name": {"Renamed link"}, "url": {"wss://edge.example/tunnel"}, "tls_verify": {"on"}}
+	policy := url.Values{"priority": {"10"}, "weight": {"1"}, "connections": {"2"}, "max_streams": {"16"}}
+	for range 2 {
+		save("/admin/gateways/g/edit", gateway, server.editGateway)
+		save("/admin/agents/a/edit", agent, server.editAgent)
+		save("/admin/links/l/edit", link, server.editLink)
+		save("/admin/links/l/policy", policy, server.updateLinkPolicy)
+		versions(1, 1)
+	}
+	if !state.Snapshot().Grants["r"].Published || state.Snapshot().Gateways["g"].Name != "Renamed gateway" || state.Snapshot().Agents["a"].Name != "Renamed agent" || state.Snapshot().Links["l"].Name != "Renamed link" {
+		t.Fatal("metadata save did not persist names or unnecessarily withdrew the subscription")
+	}
+	policy.Set("weight", "3")
+	policy.Set("max_streams", "8")
+	save("/admin/links/l/policy", policy, server.updateLinkPolicy)
+	versions(2, 1)
+	policy.Set("connections", "3")
+	save("/admin/links/l/policy", policy, server.updateLinkPolicy)
+	versions(2, 2)
+	agent.Set("denied_cidrs", "127.0.0.0/8")
+	save("/admin/agents/a/edit", agent, server.editAgent)
+	versions(2, 3)
+	link.Set("url", "wss://new.example/tunnel")
+	save("/admin/links/l/edit", link, server.editLink)
+	versions(3, 4)
+	gateway.Set("vmess_port", "8081")
+	save("/admin/gateways/g/edit", gateway, server.editGateway)
+	versions(4, 4)
+	if state.Snapshot().Grants["r"].Published {
+		t.Fatal("connection change left a stale subscription published")
+	}
+}

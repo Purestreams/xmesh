@@ -160,3 +160,65 @@ func TestReplacingSessionIgnoresStaleRemoval(t *testing.T) {
 		t.Fatalf("current session removal returned %v", err)
 	}
 }
+
+func TestUpdatePolicyKeepsLeasesAndChangesNewSelection(t *testing.T) {
+	a, closeA := smuxPair(t)
+	defer closeA()
+	b, closeB := smuxPair(t)
+	defer closeB()
+	pool := New()
+	first := &Session{ID: "a", LinkID: "link-a", AgentID: "agent", Priority: 10, Weight: 1, MaxStreams: 4, SMux: a, Ready: true}
+	second := &Session{ID: "b", LinkID: "link-b", AgentID: "agent", Priority: 20, Weight: 1, MaxStreams: 4, SMux: b, Ready: true}
+	pool.Add(first)
+	pool.Add(second)
+	existing, err := pool.Acquire("agent")
+	if err != nil || existing.Session != first {
+		t.Fatalf("initial selection: %v %v", existing, err)
+	}
+	defer existing.Release()
+	first.ObserveWrite(25 * time.Millisecond)
+	pool.UpdatePolicy("link-a", "agent", 30, 3, 1)
+	if a.IsClosed() || existing.Session != first || first.active != 1 || first.load.stalls.Load() != 1 {
+		t.Fatal("policy update replaced a session or reset live lease/load accounting")
+	}
+	if _, err := pool.AcquireLinks("agent", map[string]bool{"link-a": true}); !errors.Is(err, ErrNoPath) {
+		t.Fatalf("lower stream limit was ignored: %v", err)
+	}
+	next, err := pool.Acquire("agent")
+	if err != nil || next.Session != second {
+		t.Fatalf("updated priority was ignored: %v %v", next, err)
+	}
+	next.Release()
+	existing.Release()
+	pool.UpdatePolicy("link-a", "agent", 5, 7, 2)
+	next, err = pool.Acquire("agent")
+	if err != nil || next.Session != first || first.Weight != 7 {
+		t.Fatalf("updated policy was ignored: %v %v", next, err)
+	}
+	next.Release()
+	if first.active != 0 || a.IsClosed() {
+		t.Fatal("live lease release corrupted session state")
+	}
+}
+
+func TestReplacingSessionIgnoresStaleProbe(t *testing.T) {
+	oldSMux, closeOld := smuxPair(t)
+	defer closeOld()
+	newSMux, closeNew := smuxPair(t)
+	defer closeNew()
+	pool := New()
+	old := &Session{ID: "agent/link/slot-0", AgentID: "agent", SMux: oldSMux, Ready: true}
+	current := &Session{ID: old.ID, AgentID: "agent", SMux: newSMux, Ready: true}
+	pool.Add(old)
+	pool.Add(current)
+	pool.UpdateProbe(old, time.Second, errors.New("old tunnel closed"))
+	pool.UpdateProbe(old, time.Second, nil)
+	state := pool.Snapshot()[0]
+	if state.ProbeTimeouts != 0 || state.LastError != "" || state.RTTMillis != 0 || !state.Ready {
+		t.Fatalf("stale probe changed the replacement: %+v", state)
+	}
+	pool.UpdateProbe(current, 25*time.Millisecond, nil)
+	if state := pool.Snapshot()[0]; state.RTTMillis != 25 || !state.Ready {
+		t.Fatalf("current session probe was not applied: %+v", state)
+	}
+}

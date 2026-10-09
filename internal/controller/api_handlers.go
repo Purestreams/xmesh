@@ -236,8 +236,20 @@ func (s *Server) nodeStatus(w http.ResponseWriter, r *http.Request) {
 	err := s.store.Update(func(state *model.State) error {
 		now := s.now().UTC()
 		report.Status.NodeID, report.Status.Role, report.Status.LastSeen = nodeID, role, now
+		externalChanged := role == model.RoleGateway && state.NodeStatus[nodeID].ExternalUpstreams != report.Status.ExternalUpstreams
 		state.NodeStatus[nodeID] = report.Status
-		if role == model.RoleGateway && !report.Status.ExternalUpstreams {
+		// Capability changes alter the users included in Gateway config. Require
+		// an acknowledgement of that new config before publishing its grants.
+		if externalChanged {
+			for _, grant := range state.Grants {
+				attachment := state.Attachments[grant.AttachmentID]
+				if attachment.GatewayID == nodeID && attachment.Enabled && state.Gateways[nodeID].Enabled && grant.Enabled && state.Users[grant.UserID].Enabled && upstreamAvailable(state, attachment) {
+					bumpGateway(state, nodeID)
+					break
+				}
+			}
+		}
+		if role == model.RoleGateway && (externalChanged || !report.Status.ExternalUpstreams) {
 			for id, grant := range state.Grants {
 				attachment := state.Attachments[grant.AttachmentID]
 				if attachment.GatewayID == nodeID && attachment.UpstreamID != "" {

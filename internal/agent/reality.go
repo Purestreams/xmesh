@@ -58,7 +58,14 @@ func (r *Runtime) dialReality(ctx context.Context, link controller.AgentLinkConf
 	if err != nil {
 		return nil, nil, err
 	}
+	// Do not let a cancelled worker recreate a retired core after ApplyConfig.
+	r.mu.RLock()
+	if err := ctx.Err(); err != nil {
+		r.mu.RUnlock()
+		return nil, nil, err
+	}
 	instance, err := r.realityInstance(link.ID, payload)
+	r.mu.RUnlock()
 	if err != nil {
 		return nil, nil, err
 	}
@@ -98,6 +105,15 @@ func (r *Runtime) closeRealities() {
 	r.realityMu.Lock()
 	defer r.realityMu.Unlock()
 	for id, current := range r.realities {
+		_ = current.instance.Close()
+		delete(r.realities, id)
+	}
+}
+
+func (r *Runtime) closeReality(id string) {
+	r.realityMu.Lock()
+	defer r.realityMu.Unlock()
+	if current := r.realities[id]; current != nil {
 		_ = current.instance.Close()
 		delete(r.realities, id)
 	}

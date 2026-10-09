@@ -284,8 +284,9 @@ type UsageCounter struct {
 	DownloadBytes uint64 `json:"download_bytes"`
 }
 
-// MonitorSettings contains only explicit publication choices. Empty aliases are
-// hidden; operational names and addresses must never be used as fallbacks.
+// MonitorSettings contains only explicit publication choices. Nodes require a
+// public alias. Link map membership selects publication; an empty value uses
+// public endpoint aliases. Operational names/addresses are never fallbacks.
 type MonitorSettings struct {
 	Enabled bool              `json:"enabled"`
 	Nodes   map[string]string `json:"nodes,omitempty"`

@@ -61,13 +61,16 @@ func (s *Server) editLink(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
+		previous := link
 		link.Name, link.URL = name, linkURL
 		link.HTTPHost = strings.TrimSpace(r.FormValue("http_host"))
 		link.TLSServerName = strings.TrimSpace(r.FormValue("tls_server_name"))
 		link.TLSVerify = r.FormValue("tls_verify") == "on"
 		state.Links[link.ID] = link
-		bumpGateway(state, attachment.GatewayID)
-		bumpAgent(state, attachment.AgentID)
+		if link.URL != previous.URL || link.HTTPHost != previous.HTTPHost || link.TLSServerName != previous.TLSServerName || link.TLSVerify != previous.TLSVerify {
+			bumpGateway(state, attachment.GatewayID)
+			bumpAgent(state, attachment.AgentID)
+		}
 		return nil
 	})
 	if err != nil {

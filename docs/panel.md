@@ -1,4 +1,4 @@
-# Control center (v0.3.7)
+# Control center (v0.3.8)
 
 The Controller embeds its HTML, CSS and JavaScript; no frontend service, CDN or
 production Node.js runtime is required. Existing management POST endpoints and
@@ -11,7 +11,11 @@ views. Basic forms remain usable with JavaScript disabled.
 Under **系统维护 → 公开监控**, open `/admin/monitor` to enable the public,
 read-only page at `/monitor`. It is disabled by default, including for existing
 state files. Select each node and Link to publish and enter a separate public
-alias. Aliases are never inferred from operational names. Publishing a Link
+alias. Link names are optional: a selected Link with a blank name uses its
+public endpoint aliases (for example, `香港入口 → 东京出口`). Multiple Links
+between the same endpoints receive a sequence number. A blank name does not
+clear the Link's publication checkbox. Aliases are never inferred from
+operational names. Publishing a Link
 requires both endpoint nodes to be selected; new objects remain hidden.
 Public aliases accept up to 48 letters, numbers, spaces, hyphens, underscores,
 or parentheses, and reject address/URL punctuation. Choose aliases without

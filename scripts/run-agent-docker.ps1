@@ -5,7 +5,7 @@ Deploy an XMesh Agent using Docker Desktop Linux containers and restart=always.
 .EXAMPLE
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\run-agent-docker.ps1
 .EXAMPLE
-.\scripts\run-agent-docker.ps1 -Controller https://panel.example.com -Version v0.3.7
+.\scripts\run-agent-docker.ps1 -Controller https://panel.example.com -Version v0.3.8
 .NOTES
 Enter an Agent enrollment token from the Controller when prompted. The token is
 sent through stdin, and node credentials persist in a named Docker volume.
@@ -20,7 +20,7 @@ network flags alone do not bypass a host TUN.
 param(
     [string]$Controller = 'https://xmesh.static.win7.win',
     [ValidatePattern('^[a-zA-Z0-9._-]+$')]
-    [string]$Version = 'v0.3.7',
+    [string]$Version = 'v0.3.8',
     [string]$ReleaseBaseUrl = 'https://xmesh.static.win7.win/releases',
     [ValidatePattern('^[a-zA-Z0-9][a-zA-Z0-9_.-]*$')]
     [string]$ContainerName = 'xmesh-agent'

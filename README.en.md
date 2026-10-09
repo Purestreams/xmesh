@@ -78,11 +78,11 @@ sudo dnf install -y ca-certificates curl tar coreutils iproute shadow-utils
 
 If firewalld is enabled on the Gateway, allow the VMess and REALITY TCP ports in the zone used by its network interface. For `--vmess-port 8086`, allow TCP 8086 and 8443; Agents need no inbound ports. The Nginx/Certbot package commands and paths below target Debian/Ubuntu. On a CentOS Controller, configure the HTTPS reverse proxy for its repositories, Nginx layout and SELinux policy.
 
-On the Controller host only, install these additional tools and obtain the source. This README describes the current code; the installation example pins release `v0.3.7`. To use another published version, set `VERSION` to its exact tag and use matching source and release assets. See [Releases](https://github.com/Purestreams/xmesh/releases) for available versions.
+On the Controller host only, install these additional tools and obtain the source. This README describes the current code; the installation example pins release `v0.3.8`. To use another published version, set `VERSION` to its exact tag and use matching source and release assets. See [Releases](https://github.com/Purestreams/xmesh/releases) for available versions.
 
 ```sh
 sudo apt install -y git nginx certbot
-VERSION=v0.3.7
+VERSION=v0.3.8
 git clone --depth 1 --branch "$VERSION" https://github.com/Purestreams/xmesh.git
 cd xmesh
 ```

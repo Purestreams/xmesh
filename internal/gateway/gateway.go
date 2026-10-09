@@ -37,6 +37,7 @@ type Runtime struct {
 	activeConnections   map[net.Conn]authorizedConnection
 	xrayCancel          context.CancelFunc
 	xrayStatsConfig     controller.GatewayConfig
+	xrayRunningPayload  string
 	pendingStats        map[uint64]pendingStatsConfig
 	statsMu             sync.Mutex
 	started             time.Time
@@ -135,13 +136,28 @@ func (r *Runtime) refresh(ctx context.Context) error {
 		return errors.New("authorization changed while fetching configuration")
 	}
 	changed := r.config.Revision != config.Revision || r.config.Gateway.ID == "" || r.config.Gateway.Enabled != config.Gateway.Enabled
+	previous := r.config
 	r.mu.Unlock()
-	if changed && config.Gateway.Enabled {
+	reload := changed
+	var nextPayload []byte
+	// Capabilities reported to Controller can change the returned users/routes
+	// without advancing DesiredVersion. Compare every accepted payload.
+	if config.Gateway.Enabled {
+		nextPayload, err = r.xrayPayload(config)
+		if err != nil {
+			return err
+		}
+		if previous.Gateway.ID != "" && previous.Gateway.Enabled {
+			oldPayload, oldErr := r.xrayPayload(previous)
+			reload = oldErr != nil || string(oldPayload) != string(nextPayload)
+		}
+	}
+	if reload && config.Gateway.Enabled {
 		if err := r.validateXrayCandidate(ctx, config); err != nil {
 			return err
 		}
 	}
-	if changed && config.Gateway.Enabled && r.xrayReady.Load() {
+	if reload && config.Gateway.Enabled && r.xrayReady.Load() {
 		if err := r.report(ctx); err != nil {
 			if nodeclient.AuthorizationRejected(err) {
 				return err
@@ -155,6 +171,9 @@ func (r *Runtime) refresh(ctx context.Context) error {
 		return errors.New("authorization changed while applying configuration")
 	}
 	r.retireConnectionsLocked(config)
+	for _, link := range config.Links {
+		r.pool.UpdatePolicy(link.ID, link.AgentID, link.Priority, link.Weight, link.MaxStreams)
+	}
 	for _, session := range r.pool.Snapshot() {
 		keep := false
 		for _, link := range config.Links {
@@ -172,8 +191,16 @@ func (r *Runtime) refresh(ctx context.Context) error {
 	}
 	r.config = config
 	r.authorizationUntil = time.Now().Add(nodeclient.ConfigLease)
+	if !config.Gateway.Enabled && r.xrayCancel != nil {
+		r.xrayCancel()
+		r.setXray(false, "gateway is disabled")
+	}
+	if !reload && r.xrayReady.Load() && r.xrayRunningPayload == string(nextPayload) {
+		r.xrayStatsConfig = config
+		r.xrayAppliedRevision.Store(config.Revision)
+	}
 	r.mu.Unlock()
-	if changed {
+	if reload {
 		select {
 		case r.xrayApply <- struct{}{}:
 		default:
@@ -499,11 +526,13 @@ func (r *Runtime) acceptTunnel(w http.ResponseWriter, request *http.Request) {
 	sessionID := registration.AgentID + "/" + registration.LinkID + "/" + clientSessionID
 	entry := &scheduler.Session{ID: sessionID, AgentID: registration.AgentID, LinkID: registration.LinkID, Priority: link.Priority, Weight: link.Weight, MaxStreams: link.MaxStreams, SMux: session, Generation: registration.Generation, Ready: true, LastOK: time.Now()}
 	r.mu.RLock()
-	if _, ok := r.authorizeTunnelLocked(registration); !ok {
+	currentLink, ok := r.authorizeTunnelLocked(registration)
+	if !ok {
 		r.mu.RUnlock()
 		_ = session.Close()
 		return
 	}
+	entry.Priority, entry.Weight, entry.MaxStreams = currentLink.Priority, currentLink.Weight, currentLink.MaxStreams
 	previous := r.pool.Add(entry)
 	r.mu.RUnlock()
 	if previous != nil && previous.SMux != nil {
@@ -511,12 +540,22 @@ func (r *Runtime) acceptTunnel(w http.ResponseWriter, request *http.Request) {
 	}
 	defer r.pool.Remove(sessionID, entry)
 	defer session.Close()
-	go r.probeSession(sessionID, session)
+	go r.probeSession(entry)
 	r.logger.Info("tunnel registered", "agent", registration.AgentID, "link", registration.LinkID, "session", sessionID)
-	<-session.CloseChan()
+	// smux reports transport errors through AcceptStream before CloseChan.
+	// Waiting only for CloseChan leaves dead slots in the pool until keepalive
+	// expiry. Gateway initiates business/probe streams; reject unsolicited ones.
+	for {
+		stream, err := session.AcceptStream()
+		if err != nil {
+			return
+		}
+		_ = stream.Close()
+	}
 }
 
-func (r *Runtime) probeSession(id string, session *smux.Session) {
+func (r *Runtime) probeSession(entry *scheduler.Session) {
+	session := entry.SMux
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
 	for {
@@ -539,7 +578,7 @@ func (r *Runtime) probeSession(id string, session *smux.Session) {
 			}
 			_ = stream.Close()
 		}
-		r.pool.UpdateProbe(id, time.Since(started), err)
+		r.pool.UpdateProbe(entry, time.Since(started), err)
 	}
 }
 

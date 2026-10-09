@@ -174,7 +174,17 @@ func TestGatewayDisabledConfigBypassesXrayValidationAndClosesSessions(t *testing
 }
 
 func TestGatewayCredentialRotationReleasesEstablishedStream(t *testing.T) {
+	binary := os.Getenv("XMESH_TEST_XRAY")
+	if binary == "" {
+		t.Skip("XMESH_TEST_XRAY not set")
+	}
 	r, address := securityGateway(t)
+	r.local.Gateway.XrayBinary = binary
+	r.local.Gateway.XrayConfigPath = filepath.Join(t.TempDir(), "xray.json")
+	r.mu.Lock()
+	r.config.Gateway.VMessPort = testPort(t, freeTCPAddress(t))
+	r.config.Gateway.VMessPath = "/proxy"
+	r.mu.Unlock()
 	target, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -448,7 +458,11 @@ func TestGatewayRevocationStopsXrayDuringBlockedReport(t *testing.T) {
 	go func() { done <- r.xrayLoop(ctx) }()
 	r.xrayApply <- struct{}{}
 	waitFor(t, 5*time.Second, r.xrayReady.Load)
-	r.xrayApply <- struct{}{} // Enter the final status report for a reload.
+	r.mu.Lock()
+	r.config.Revision++
+	r.config.Gateway.VMessPath = "/updated-proxy"
+	r.mu.Unlock()
+	r.xrayApply <- struct{}{} // Enter the final status report for a real payload change.
 	select {
 	case <-started:
 	case <-time.After(time.Second):

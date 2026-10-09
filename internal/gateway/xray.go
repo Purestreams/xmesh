@@ -16,6 +16,7 @@ import (
 
 	"xmesh/internal/atomicfile"
 	"xmesh/internal/controller"
+	"xmesh/internal/model"
 )
 
 type xrayConfig struct {
@@ -134,6 +135,14 @@ func buildXrayConfigWithReality(config controller.GatewayConfig, socksAddress, r
 }
 
 func buildXrayConfigWithStats(config controller.GatewayConfig, socksAddress, realityAddress, tunnelAddress, statsAddress string) ([]byte, error) {
+	// These arrays are sets. Canonical rendering keeps metadata/order-only
+	// changes from unnecessarily restarting the process.
+	config.Grants = append([]model.Grant(nil), config.Grants...)
+	config.Links = append([]controller.GatewayLinkConfig(nil), config.Links...)
+	config.Upstreams = append([]controller.GatewayUpstreamConfig(nil), config.Upstreams...)
+	sort.Slice(config.Grants, func(i, j int) bool { return config.Grants[i].ID < config.Grants[j].ID })
+	sort.Slice(config.Links, func(i, j int) bool { return config.Links[i].ID < config.Links[j].ID })
+	sort.Slice(config.Upstreams, func(i, j int) bool { return config.Upstreams[i].AttachmentID < config.Upstreams[j].AttachmentID })
 	host, portText, err := net.SplitHostPort(socksAddress)
 	if err != nil {
 		return nil, err
@@ -179,7 +188,6 @@ func buildXrayConfigWithStats(config controller.GatewayConfig, socksAddress, rea
 		result.Outbounds = append(result.Outbounds, xrayOutbound{Protocol: "vmess", Tag: "upstream-" + upstream.AttachmentID, Settings: xrayOutboundSettings{VNext: []xrayVMessServer{{Address: upstream.Endpoint.Address, Port: upstream.Endpoint.Port, Users: []xrayVMessUser{{ID: upstream.Endpoint.UUID, AlterID: 0, Security: cipher}}}}}, StreamSettings: &stream})
 	}
 	inbound := xrayInbound{Listen: "0.0.0.0", Port: config.Gateway.VMessPort, Protocol: "vmess", Tag: "xmesh-vmess", Settings: xrayInboundSettings{}, StreamSettings: &xrayStreamSettings{Network: "ws", Security: "none", WSSettings: xrayWSSettings{Path: config.Gateway.VMessPath, Host: config.Gateway.VMessHost}}}
-	sort.Slice(config.Grants, func(i, j int) bool { return config.Grants[i].ID < config.Grants[j].ID })
 	for _, grant := range config.Grants {
 		if !grant.Enabled {
 			continue
@@ -243,6 +251,10 @@ func buildXrayConfigWithStats(config controller.GatewayConfig, socksAddress, rea
 }
 
 var errXrayReload = errors.New("xray reload requested")
+
+func (r *Runtime) xrayPayload(config controller.GatewayConfig) ([]byte, error) {
+	return buildXrayConfigWithStats(config, r.local.Gateway.SOCKSListen, r.local.Gateway.RealityListen, r.local.Gateway.TunnelListen, r.local.Gateway.StatsListen)
+}
 
 // Validate the next config while the current Xray process is still serving.
 // A rejected revision must not trigger xrayApply and stop the working process.
@@ -351,8 +363,13 @@ func (r *Runtime) runXrayUntilChange(ctx context.Context, config controller.Gate
 	defer cancel()
 	cmd := exec.CommandContext(childCtx, r.local.Gateway.XrayBinary, "run", "-config", r.local.Gateway.XrayConfigPath)
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+	payload, err := r.xrayPayload(config)
+	if err != nil {
+		return err
+	}
 	r.mu.Lock()
-	if !r.config.Gateway.Enabled || !time.Now().Before(r.authorizationUntil) || r.authorizationEpoch != epoch || r.config.Revision != config.Revision {
+	currentPayload, currentErr := r.xrayPayload(r.config)
+	if !r.config.Gateway.Enabled || !time.Now().Before(r.authorizationUntil) || r.authorizationEpoch != epoch || currentErr != nil || string(payload) != string(currentPayload) {
 		r.mu.Unlock()
 		return errXrayReload
 	}
@@ -361,12 +378,14 @@ func (r *Runtime) runXrayUntilChange(ctx context.Context, config controller.Gate
 		return fmt.Errorf("start xray: %w", err)
 	}
 	r.xrayCancel = cancel
-	r.xrayStatsConfig = config
+	r.xrayStatsConfig = r.config
+	r.xrayRunningPayload = string(payload)
 	r.mu.Unlock()
 	defer func() {
 		r.mu.Lock()
 		r.xrayCancel = nil
 		r.xrayStatsConfig = controller.GatewayConfig{}
+		r.xrayRunningPayload = ""
 		r.mu.Unlock()
 		r.setXray(false, "")
 	}()
@@ -381,40 +400,68 @@ func (r *Runtime) runXrayUntilChange(ctx context.Context, config controller.Gate
 	case err := <-done:
 		return fmt.Errorf("xray exited during startup: %w", err)
 	case <-timer.C:
-		r.setXray(true, "")
-		r.xrayAppliedRevision.Store(config.Revision)
-	}
-	select {
-	case <-childCtx.Done():
-		<-done
-		return errXrayReload
-	case <-r.xrayApply:
-		r.mu.RLock()
-		disabled := !r.config.Gateway.Enabled
-		r.mu.RUnlock()
-		if disabled {
+		r.mu.Lock()
+		if childCtx.Err() != nil || !r.config.Gateway.Enabled || r.authorizationEpoch != epoch || !time.Now().Before(r.authorizationUntil) {
+			r.mu.Unlock()
 			cancel()
 			<-done
 			return errXrayReload
 		}
-		r.collectXrayStats(context.Background())
-		reportCtx, reportCancel := context.WithTimeout(context.Background(), 3*time.Second)
-		if err := r.report(reportCtx); err != nil {
-			r.logger.Warn("report traffic before Xray reload", "error", err)
-			r.mu.Lock()
-			if r.pendingStats == nil {
-				r.pendingStats = map[uint64]pendingStatsConfig{}
-			}
-			r.pendingStats[config.Revision] = pendingStatsConfig{config: config, expiresAt: time.Now().Add(pendingStatsLifetime)}
-			r.mu.Unlock()
+		r.setXray(true, "")
+		currentPayload, currentErr := r.xrayPayload(r.config)
+		if currentErr == nil && string(currentPayload) == string(payload) {
+			r.xrayStatsConfig = r.config
+			r.xrayAppliedRevision.Store(r.config.Revision)
+		} else {
+			r.xrayAppliedRevision.Store(config.Revision)
 		}
-		reportCancel()
-		cancel()
-		<-done
-		return errXrayReload
-	case err := <-done:
-		r.collectXrayStats(context.Background())
-		return fmt.Errorf("xray exited: %w", err)
+		r.mu.Unlock()
+	}
+	for {
+		select {
+		case <-childCtx.Done():
+			<-done
+			return errXrayReload
+		case <-r.xrayApply:
+			r.mu.Lock()
+			disabled := !r.config.Gateway.Enabled
+			currentPayload, currentErr := r.xrayPayload(r.config)
+			// A newer snapshot may already have been picked up during startup.
+			// Consume stale notifications without restarting that same payload.
+			unchanged := !disabled && childCtx.Err() == nil && r.authorizationEpoch == epoch && time.Now().Before(r.authorizationUntil) && currentErr == nil && string(currentPayload) == string(payload)
+			if unchanged {
+				r.xrayStatsConfig = r.config
+				r.xrayAppliedRevision.Store(r.config.Revision)
+			}
+			r.mu.Unlock()
+			if unchanged {
+				continue
+			}
+			if disabled {
+				cancel()
+				<-done
+				return errXrayReload
+			}
+			r.collectXrayStats(context.Background())
+			reportCtx, reportCancel := context.WithTimeout(context.Background(), 3*time.Second)
+			if err := r.report(reportCtx); err != nil {
+				r.logger.Warn("report traffic before Xray reload", "error", err)
+				r.mu.Lock()
+				if r.pendingStats == nil {
+					r.pendingStats = map[uint64]pendingStatsConfig{}
+				}
+				statsConfig := r.xrayStatsConfig
+				r.pendingStats[statsConfig.Revision] = pendingStatsConfig{config: statsConfig, expiresAt: time.Now().Add(pendingStatsLifetime)}
+				r.mu.Unlock()
+			}
+			reportCancel()
+			cancel()
+			<-done
+			return errXrayReload
+		case err := <-done:
+			r.collectXrayStats(context.Background())
+			return fmt.Errorf("xray exited: %w", err)
+		}
 	}
 }
 

@@ -129,6 +129,25 @@ whose writes recently stalled; established streams are never migrated.
 
 ## Runtime boundaries
 
+Controller configuration saves are applied according to their effect on live traffic:
+
+- Saving identical values or changing node/Link names and Gateway region does not
+  advance runtime versions or rebuild connections.
+- Link priority, weight and maximum streams update the Gateway's existing sessions.
+  The new policy applies to new streams; lowering the limit preserves active streams.
+- Increasing Link connections adds only the missing Agent slots. Decreasing the count
+  closes only surplus slots; streams using those slots may be interrupted.
+- Changing a Link's tunnel address, transport settings or credentials rebuilds that
+  Agent Link, while other Links remain connected. REALITY cores are retired per Link.
+- Agent access-policy changes keep tunnels and TCP streams whose connected target
+  remains allowed. Disallowed TCP streams close promptly. Pending TCP dials and UDP
+  associations close when the access policy changes. Equivalent CIDR/port ordering
+  does not count as a policy change. Removing a grant closes its Agent streams.
+- Gateway restarts Xray only when the generated Xray configuration changes. VMess
+  listener settings, users, upstream routes and REALITY settings can still require a
+  restart and interrupt clients on that Gateway. A metadata-only revision is reported
+  applied only when its payload matches the running process.
+
 - Upgrade Controller before Gateway and Agent for per-Link grant authorization.
   Updated Agents require the grant list attached to each Link and reject requests
   from Controllers that do not provide it. Existing administrator sessions must

@@ -20,7 +20,7 @@ function docker.exe {
             'volume' { 'xmesh-agent-config' }
             'inspect' { if ($global:agentDockerScenario -eq 'crash') { 'true/1' } else { 'true/0' } }
             'run' {
-                if ($commandArgs -contains 'version') { 'v0.3.7' }
+                if ($commandArgs -contains 'version') { 'v0.3.8' }
                 elseif ($commandArgs -contains 'enroll') {
                     if ($stdinValue -ne 'fake-enrollment-token') { throw 'Token missing from stdin.' }
                     if ($commandArgs -contains 'fake-enrollment-token') { throw 'Token leaked into argv.' }
@@ -48,7 +48,7 @@ function curl.exe {
         try { $hash = ([BitConverter]::ToString($hasher.ComputeHash($archiveBytes))).Replace('-', '').ToLowerInvariant() }
         finally { $hasher.Dispose() }
         if ($global:agentDockerScenario -eq 'checksum') { $hash = '0' * 64 }
-        [IO.File]::WriteAllText($destination, "$hash  xmesh-v0.3.7-linux-amd64.tar.gz`n")
+        [IO.File]::WriteAllText($destination, "$hash  xmesh-v0.3.8-linux-amd64.tar.gz`n")
     } else {
         [IO.File]::WriteAllBytes($destination, $archiveBytes)
     }

@@ -80,11 +80,11 @@ sudo dnf install -y ca-certificates curl tar coreutils iproute shadow-utils
 
 Gateway 如启用 firewalld，需在实际网卡所在 zone 放行 VMess 端口和 REALITY 端口。例如使用 `--vmess-port 8086` 时，放行 TCP 8086 和 8443；Agent 无需开放入站端口。下文 Nginx/Certbot 的包安装和配置路径以 Debian/Ubuntu 为例，CentOS Controller 按本机的软件源、Nginx 布局和 SELinux 策略配置 HTTPS 反向代理。
 
-仅在 Controller 主机安装以下工具并取得源码。本文说明当前代码行为，安装示例固定使用 `v0.3.7`；选择其他已发布版本时，将 `VERSION` 改为对应的精确 tag，源码与安装包使用同一版本。可用版本见 [Releases](https://github.com/Purestreams/xmesh/releases)。
+仅在 Controller 主机安装以下工具并取得源码。本文说明当前代码行为，安装示例固定使用 `v0.3.8`；选择其他已发布版本时，将 `VERSION` 改为对应的精确 tag，源码与安装包使用同一版本。可用版本见 [Releases](https://github.com/Purestreams/xmesh/releases)。
 
 ```sh
 sudo apt install -y git nginx certbot
-VERSION=v0.3.7
+VERSION=v0.3.8
 git clone --depth 1 --branch "$VERSION" https://github.com/Purestreams/xmesh.git
 cd xmesh
 ```

@@ -47,7 +47,9 @@ func (s *Server) editGateway(w http.ResponseWriter, r *http.Request) {
 		if r.Form.Has("region") {
 			gateway.Region = region
 		}
-		gateway.DesiredVersion++
+		if connectionChanged {
+			gateway.DesiredVersion++
+		}
 		state.Gateways[gateway.ID] = gateway
 		if connectionChanged {
 			for id, grant := range state.Grants {
@@ -89,9 +91,12 @@ func (s *Server) editAgent(w http.ResponseWriter, r *http.Request) {
 		if !ok {
 			return fmt.Errorf("agent not found")
 		}
+		policyChanged := !sameCIDRs(agent.AllowedCIDRs, allowed) || !sameCIDRs(agent.DeniedCIDRs, denied)
 		agent.Name = name
 		agent.AllowedCIDRs, agent.DeniedCIDRs = allowed, denied
-		agent.DesiredVersion++
+		if policyChanged {
+			agent.DesiredVersion++
+		}
 		state.Agents[agent.ID] = agent
 		return nil
 	})
@@ -100,6 +105,29 @@ func (s *Server) editAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+func sameCIDRs(left, right []string) bool {
+	set := func(values []string) map[netip.Prefix]bool {
+		result := map[netip.Prefix]bool{}
+		for _, value := range values {
+			prefix, err := netip.ParsePrefix(value)
+			if err == nil {
+				result[prefix.Masked()] = true
+			}
+		}
+		return result
+	}
+	a, b := set(left), set(right)
+	if len(a) != len(b) {
+		return false
+	}
+	for prefix := range a {
+		if !b[prefix] {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Server) deleteGateway(w http.ResponseWriter, r *http.Request) {

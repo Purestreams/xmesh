@@ -87,6 +87,11 @@ func contains(prefixes []netip.Prefix, address netip.Addr) bool {
 	return false
 }
 
+func (p accessPolicy) permitsTCP(address *net.TCPAddr) bool {
+	ip, ok := netip.AddrFromSlice(address.IP)
+	return ok && (len(p.ports) == 0 || p.ports[address.Port]) && contains(p.allow, ip.Unmap()) && !contains(p.deny, ip.Unmap())
+}
+
 func (p accessPolicy) dialTCP(ctx context.Context, host string, port int) (net.Conn, error) {
 	addresses, err := p.resolve(ctx, host, port)
 	if err != nil {

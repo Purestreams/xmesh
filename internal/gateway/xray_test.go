@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"bytes"
 	"crypto/ecdh"
 	"crypto/rand"
 	"encoding/base64"
@@ -76,5 +77,28 @@ func TestGeneratedConfigAcceptedByXray(t *testing.T) {
 	output, err := exec.Command(binary, "run", "-test", "-config", path).CombinedOutput()
 	if err != nil {
 		t.Fatalf("Xray rejected generated config: %v\n%s\nconfig:\n%s", err, output, b)
+	}
+}
+
+func TestXrayRenderingIgnoresCollectionOrderWithoutMutatingConfig(t *testing.T) {
+	config := controller.GatewayConfig{
+		Gateway:   model.Gateway{VMessPort: 8080, VMessPath: "/proxy", RealityPrivateKey: "key", RealityTarget: "example.com:443", RealityName: "example.com"},
+		Grants:    []model.Grant{{ID: "b", AttachmentID: "route-b", Enabled: true, VMessUUID: "uuid-b"}, {ID: "a", AttachmentID: "route-a", Enabled: true, VMessUUID: "uuid-a"}},
+		Links:     []controller.GatewayLinkConfig{{Link: model.Link{ID: "b", Enabled: true, RealityUUID: "link-b", RealityShortID: "bb"}}, {Link: model.Link{ID: "a", Enabled: true, RealityUUID: "link-a", RealityShortID: "aa"}}},
+		Upstreams: []controller.GatewayUpstreamConfig{{AttachmentID: "route-b", Endpoint: model.VMessEndpoint{Address: "b.example", Port: 443, UUID: "upstream-b", Network: "ws"}}, {AttachmentID: "route-a", Endpoint: model.VMessEndpoint{Address: "a.example", Port: 443, UUID: "upstream-a", Network: "ws"}}},
+	}
+	first, err := buildXrayConfigWithReality(config, "127.0.0.1:18080", "127.0.0.1:18443", "127.0.0.1:18081")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.Grants[0].ID != "b" || config.Links[0].ID != "b" || config.Upstreams[0].AttachmentID != "route-b" {
+		t.Fatal("rendering reordered caller-owned collections")
+	}
+	config.Grants[0], config.Grants[1] = config.Grants[1], config.Grants[0]
+	config.Links[0], config.Links[1] = config.Links[1], config.Links[0]
+	config.Upstreams[0], config.Upstreams[1] = config.Upstreams[1], config.Upstreams[0]
+	second, err := buildXrayConfigWithReality(config, "127.0.0.1:18080", "127.0.0.1:18443", "127.0.0.1:18081")
+	if err != nil || !bytes.Equal(first, second) {
+		t.Fatalf("collection order changed the running payload: %v", err)
 	}
 }

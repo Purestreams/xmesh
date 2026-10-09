@@ -182,3 +182,117 @@ func TestAgentExpiredAuthorizationStopsWorkers(t *testing.T) {
 		t.Fatal("expired worker retained grant authorization")
 	}
 }
+
+func TestAgentHotUpdatePreservesAllowedFlowsAndClosesRevokedFlows(t *testing.T) {
+	startEcho := func() net.Listener {
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = listener.Close() })
+		go func() {
+			for {
+				conn, err := listener.Accept()
+				if err != nil {
+					return
+				}
+				go func() { defer conn.Close(); _, _ = io.Copy(conn, conn) }()
+			}
+		}()
+		return listener
+	}
+	allowedTarget, deniedTarget := startEcho(), startEcho()
+	r := New(runtimecfg.Config{NodeID: "a"}, slog.Default())
+	config := securityAgentConfig()
+	config.Links[0].Connections = 1
+	config.Links[0].GrantIDs = []string{"keep", "revoke"}
+	if err := r.ApplyConfig(config); err != nil {
+		t.Fatal(err)
+	}
+	left, right := net.Pipe()
+	smuxConfig, _ := protocol.NewSMuxConfig()
+	server, err := smux.Server(left, smuxConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer server.Close()
+	client, err := smux.Client(right, smuxConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	r.workers["link-a#0"] = cancel
+	go func() {
+		for {
+			stream, err := client.AcceptStream()
+			if err != nil {
+				return
+			}
+			go r.handleStream(ctx, "link-a", stream)
+		}
+	}()
+	open := func(grant string, target net.Listener) *smux.Stream {
+		stream, err := server.OpenStream()
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = stream.Close() })
+		_ = stream.SetDeadline(time.Now().Add(3 * time.Second))
+		if err := protocol.WriteMessage(stream, protocol.Message{Type: protocol.TypeTCP, Version: protocol.Version, GrantID: grant, Host: "127.0.0.1", Port: target.Addr().(*net.TCPAddr).Port}); err != nil {
+			t.Fatal(err)
+		}
+		response, err := protocol.ReadMessage(stream)
+		if err != nil || !response.Success {
+			t.Fatalf("open stream: %+v %v", response, err)
+		}
+		return stream
+	}
+	echo := func(stream *smux.Stream) {
+		_ = stream.SetDeadline(time.Now().Add(time.Second))
+		if _, err := stream.Write([]byte("live")); err != nil {
+			t.Fatal(err)
+		}
+		reply := make([]byte, 4)
+		if _, err := io.ReadFull(stream, reply); err != nil || string(reply) != "live" {
+			t.Fatalf("existing flow interrupted: %q %v", reply, err)
+		}
+	}
+	closed := func(stream *smux.Stream) {
+		_ = stream.SetReadDeadline(time.Now().Add(time.Second))
+		_, err := stream.Read(make([]byte, 1))
+		if err == nil {
+			t.Fatal("revoked flow remained open")
+		} else if timeout, ok := err.(net.Error); ok && timeout.Timeout() {
+			t.Fatal("revoked flow was not closed promptly")
+		}
+	}
+	kept, revoked, restricted := open("keep", allowedTarget), open("revoke", allowedTarget), open("keep", deniedTarget)
+	config.Revision++
+	config.Agent.Name = "new name"
+	config.Agent.AllowedCIDRs = []string{"127.0.0.1/8", "127.0.0.0/8"}
+	config.Links[0].GrantIDs = []string{"new", "revoke", "keep"}
+	if err := r.ApplyConfig(config); err != nil {
+		t.Fatal(err)
+	}
+	echo(kept)
+	echo(revoked)
+	echo(restricted)
+	config.Links[0].GrantIDs = []string{"keep"}
+	if err := r.ApplyConfig(config); err != nil {
+		t.Fatal(err)
+	}
+	closed(revoked)
+	echo(kept)
+	echo(restricted)
+	config.Agent.AllowedPorts = []int{allowedTarget.Addr().(*net.TCPAddr).Port}
+	if err := r.ApplyConfig(config); err != nil {
+		t.Fatal(err)
+	}
+	closed(restricted)
+	echo(kept)
+	if ctx.Err() != nil || server.IsClosed() || client.IsClosed() {
+		t.Fatal("grant/policy update rebuilt the shared tunnel")
+	}
+}
