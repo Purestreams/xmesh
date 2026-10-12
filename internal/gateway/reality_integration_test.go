@@ -23,6 +23,19 @@ import (
 )
 
 func TestRealityTunnelTCPAndUDP(t *testing.T) {
+	testRealityTunnelTCPAndUDP(t, "127.0.0.1", true)
+}
+
+func TestRealityHostnameTunnelTCPAndUDP(t *testing.T) {
+	testRealityTunnelTCPAndUDP(t, "localhost", false)
+}
+
+func TestRealityWildcardTunnelTCPAndUDP(t *testing.T) {
+	testRealityTunnelTCPAndUDP(t, "", false)
+}
+
+func testRealityTunnelTCPAndUDP(t *testing.T, backendHost string, checkInvalidShortID bool) {
+	t.Helper()
 	xray := os.Getenv("XMESH_TEST_XRAY")
 	if xray == "" {
 		t.Skip("XMESH_TEST_XRAY not set")
@@ -36,6 +49,11 @@ func TestRealityTunnelTCPAndUDP(t *testing.T) {
 	target.StartTLS()
 	defer target.Close()
 	tunnelAddress, socksAddress, realityAddress := freeTCPAddress(t), freeTCPAddress(t), freeTCPAddress(t)
+	_, tunnelPort, err := net.SplitHostPort(tunnelAddress)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tunnelAddress = net.JoinHostPort(backendHost, tunnelPort)
 	link := model.Link{ID: "link-reality", AttachmentID: "node-reality", URL: "reality://" + realityAddress + "/tunnel", RealityUUID: "00000000-0000-4000-8000-000000000003", RealityShortID: "0123456789abcdef", Priority: 10, Weight: 1, Connections: 1, MaxStreams: 16, Enabled: true}
 	grant := model.Grant{ID: "grant-reality", AttachmentID: "node-reality", VMessUUID: "00000000-0000-4000-8000-000000000004", SOCKSUsername: "grant-reality", SOCKSPassword: "secret-password", Enabled: true}
 	gatewayConfig := controller.GatewayConfig{Gateway: model.Gateway{ID: "gateway-reality", Enabled: true, VMessPort: testPort(t, freeTCPAddress(t)), VMessPath: "/proxy", RealityTarget: target.Listener.Addr().String(), RealityName: "example.com", RealityPrivateKey: base64.RawURLEncoding.EncodeToString(key.Bytes())}, Links: []controller.GatewayLinkConfig{{Link: link, AgentID: "agent-reality", TunnelToken: "tunnel-secret"}}, Grants: []model.Grant{grant}}
@@ -100,6 +118,9 @@ func TestRealityTunnelTCPAndUDP(t *testing.T) {
 	defer udpClient.Close()
 	assertUDPEcho(t, udpClient, control.bound, udpTarget.LocalAddr().(*net.UDPAddr), []byte("udp-over-reality"), 8*time.Second)
 
+	if !checkInvalidShortID {
+		return
+	}
 	// A client with a different short ID must not reach tunnel registration.
 	badRuntime := agentpkg.New(runtimecfg.Config{NodeID: "agent-reality"}, slog.Default())
 	badLink := agentLink

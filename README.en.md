@@ -55,7 +55,7 @@ These ports match the default configuration:
 | Host | Example address | Inbound ports | Purpose |
 | --- | --- | --- | --- |
 | Controller | `panel.example.com` | TCP 80 / 443 | 80 handles ACME validation and redirects below; 443 serves the panel, node API, subscriptions and installation files |
-| Gateway | `edge.example.com` or a public IP | TCP 8080 / 8443 | 8080 accepts VMess/WS clients; 8443 accepts Agent REALITY tunnels |
+| Gateway | `edge.example.com` or a public IP | TCP 8080 / 8443, UDP 8080 | TCP 8080 accepts VMess/WS, UDP 8080 accepts HY2; 8443 accepts Agent REALITY tunnels |
 | Agent | No public address required | None required | Needs outbound access to Controller, Gateway and proxy destinations |
 
 Keep Controller `127.0.0.1:8088`, Gateway SOCKS `127.0.0.1:18080` and tunnel backend `127.0.0.1:18081` local. Gateway REALITY needs neither a certificate for `edge.example.com` nor Nginx. A different public port requires matching firewall rules, a listener or port mapping, and the Link URL; changing the URL alone does not change the host listener.
@@ -200,7 +200,7 @@ Follow enrollment, heartbeat, applied configuration and runtime status in the de
 
 Create a User under users and subscriptions, then select that user and the permitted routes in **Open VMess/WS subscription**. This creates or re-enables Grants. Clearing the selection only clears the form; disable or delete Grants separately to revoke access.
 
-A Grant publishes after the Gateway reports the corresponding configuration applied and Xray ready. Copy the subscription URL into a client supporting VMess/WS subscriptions. The response is a Base64-encoded list of `vmess://` entries. Clients connect to `edge.example.com:8080/proxy`; the Agent tunnel uses `8443`.
+A Grant publishes after the Gateway reports the corresponding configuration applied and Xray ready. Copy the subscription URL into a client supporting VMess/WS subscriptions. The response is a Base64-encoded list of enabled, ready `vmess://` and `hysteria2://` entries. Clients connect to `edge.example.com:8080/proxy`; the Agent tunnel uses `8443`.
 
 **Subscription publication is separate from route health.** Before accepting the deployment, check that both nodes are online with their configuration applied, Gateway Xray is ready, and the same enabled Link reports ready at both Gateway and Agent. Then test actual destination access.
 
@@ -287,3 +287,7 @@ It starts a Controller, two Gateways, one Agent, two clients and a destination s
 ## License
 
 XMesh uses the [MIT License](LICENSE). See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for third-party components used or distributed with releases.
+
+### Optional Hysteria 2 ingress
+
+New Gateways enable both VMess/WS and HY2 by default. The Gateway list and edit form provide independent switches. Disabling a protocol removes its listener and subscription entries; re-enabling preserves credentials, the certificate and pin. The Agent tunnel remains available when both protocols are off. Existing Gateways retain their settings. Set the HY2 UDP port in the panel. Multiple users and routes share one UDP listener with separate Grant credentials; VMess TCP and HY2 UDP may use the same port number. The Controller persists a self-signed ECDSA certificate and publishes its SHA-256 certificate pin. Download the strict-verification client bundle from Grant management for the official Hysteria client; it includes the public certificate for CA trust and never enables insecure. Unauthenticated HTTP/3 requests always return a static 404, with no original website proxy. See [HY2 details](docs/hy2.md).

@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"xmesh/internal/controller"
+	"xmesh/internal/hy2"
 	"xmesh/internal/model"
 	"xmesh/internal/runtimecfg"
 )
@@ -36,7 +37,14 @@ func TestFullVMessUpstreamRawTCPAndUDP(t *testing.T) {
 	runVMessUpstream(t, false, "tcp")
 }
 
-func runVMessUpstream(t *testing.T, withTLS bool, network string) {
+func TestHY2ExternalVMessUpstreamTCPUDPAndUsage(t *testing.T) {
+	if os.Getenv("XMESH_TEST_HYSTERIA") == "" {
+		t.Skip("official Hysteria binary required")
+	}
+	runVMessUpstream(t, false, "ws", true)
+}
+
+func runVMessUpstream(t *testing.T, withTLS bool, network string, hy2Ingress ...bool) {
 	xray := os.Getenv("XMESH_TEST_XRAY")
 	if xray == "" {
 		t.Skip("XMESH_TEST_XRAY not set")
@@ -60,7 +68,7 @@ func runVMessUpstream(t *testing.T, withTLS bool, network string) {
 	upstreamConfig := map[string]any{
 		"log":       map[string]string{"loglevel": "warning"},
 		"inbounds":  []any{map[string]any{"listen": upstreamHost, "port": upstreamPort, "protocol": "vmess", "settings": map[string]any{"clients": []any{map[string]any{"id": upstreamUUID, "alterId": 0}}}, "streamSettings": upstreamStream}},
-		"outbounds": []any{map[string]any{"protocol": "freedom", "tag": "direct"}},
+		"outbounds": []any{map[string]any{"protocol": "freedom", "tag": "direct", "settings": map[string]any{"finalRules": []any{map[string]any{"action": "allow", "ip": []string{"127.0.0.0/8"}}}}}},
 	}
 	upstreamJSON, _ := json.Marshal(upstreamConfig)
 	upstreamProcess := startTestXray(t, xray, upstreamJSON)
@@ -68,6 +76,16 @@ func runVMessUpstream(t *testing.T, withTLS bool, network string) {
 	waitTCP(t, upstreamAddress, 5*time.Second)
 	grant := model.Grant{ID: "grant-upstream", AttachmentID: "route-upstream", VMessUUID: clientUUID, Enabled: true}
 	config := controller.GatewayConfig{Gateway: model.Gateway{VMessPort: testPort(t, gatewayAddress), VMessPath: "/proxy"}, Grants: []model.Grant{grant}, Upstreams: []controller.GatewayUpstreamConfig{{AttachmentID: grant.AttachmentID, UpstreamID: "external-1", Endpoint: model.VMessEndpoint{Address: upstreamHost, Port: upstreamPort, UUID: upstreamUUID, Network: network, Path: "/upstream", TLS: withTLS, ServerName: "localhost"}}}}
+	useHY2 := len(hy2Ingress) > 0 && hy2Ingress[0]
+	if useHY2 {
+		certificate, key, pin, err := hy2.Generate("127.0.0.1", time.Now())
+		if err != nil {
+			t.Fatal(err)
+		}
+		config.Gateway.PublicHost, config.Gateway.HY2Port = "127.0.0.1", testPort(t, gatewayAddress)
+		config.Gateway.HY2Certificate, config.Gateway.HY2PrivateKey, config.Gateway.HY2PinSHA256 = certificate, key, pin
+		config.Grants[0].HY2Auth = "external-hy2-secret"
+	}
 	gatewayJSON, err := buildXrayConfigWithStats(config, localSOCKS, "", "", statsAddress)
 	if err != nil {
 		t.Fatal(err)
@@ -81,9 +99,13 @@ func runVMessUpstream(t *testing.T, withTLS bool, network string) {
 	gatewayHost, gatewayPortText, _ := net.SplitHostPort(gatewayAddress)
 	gatewayPort, _ := strconv.Atoi(gatewayPortText)
 	clientConfig := map[string]any{"log": map[string]string{"loglevel": "warning"}, "inbounds": []any{map[string]any{"listen": clientHost, "port": clientPort, "protocol": "socks", "settings": map[string]any{"auth": "noauth", "udp": true, "ip": clientHost}}}, "outbounds": []any{map[string]any{"protocol": "vmess", "settings": map[string]any{"vnext": []any{map[string]any{"address": gatewayHost, "port": gatewayPort, "users": []any{map[string]any{"id": clientUUID, "alterId": 0, "security": "auto"}}}}}, "streamSettings": map[string]any{"network": "ws", "security": "none", "wsSettings": map[string]any{"path": "/proxy"}}}}}
-	clientJSON, _ := json.Marshal(clientConfig)
-	clientProcess := startTestXray(t, xray, clientJSON)
-	defer stopTestProcess(clientProcess)
+	if useHY2 {
+		clientSOCKS = startHY2Client(t, gatewayAddress, config.Grants[0].HY2Auth, config.Gateway.HY2Certificate, config.Gateway.HY2PinSHA256, "127.0.0.1")
+	} else {
+		clientJSON, _ := json.Marshal(clientConfig)
+		clientProcess := startTestXray(t, xray, clientJSON)
+		defer stopTestProcess(clientProcess)
+	}
 	waitTCP(t, clientSOCKS, 5*time.Second)
 
 	tcpTarget := startTCPEcho(t)

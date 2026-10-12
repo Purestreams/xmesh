@@ -25,6 +25,12 @@ type Gateway struct {
 	VMessPort                   int       `json:"vmess_port"`
 	VMessPath                   string    `json:"vmess_path"`
 	VMessHost                   string    `json:"vmess_host"`
+	VMessDisabled               bool      `json:"vmess_disabled,omitempty"`
+	HY2Disabled                 bool      `json:"hy2_disabled,omitempty"`
+	HY2Port                     int       `json:"hy2_port,omitempty"`
+	HY2Certificate              string    `json:"hy2_certificate,omitempty"`
+	HY2PrivateKey               string    `json:"hy2_private_key,omitempty"`
+	HY2PinSHA256                string    `json:"hy2_pin_sha256,omitempty"`
 	RealityTarget               string    `json:"reality_target,omitempty"`
 	RealityName                 string    `json:"reality_name,omitempty"`
 	RealityPrivateKey           string    `json:"reality_private_key,omitempty"`
@@ -36,6 +42,10 @@ type Gateway struct {
 	DesiredVersion              uint64    `json:"desired_version"`
 	CreatedAt                   time.Time `json:"created_at"`
 }
+
+// Disabled flags keep old VMess configurations enabled by default.
+func (g Gateway) VMessEnabled() bool { return !g.VMessDisabled }
+func (g Gateway) HY2Enabled() bool   { return !g.HY2Disabled && g.HY2Port > 0 }
 
 type Agent struct {
 	ID                          string    `json:"id"`
@@ -123,6 +133,7 @@ type Grant struct {
 	UserID        string    `json:"user_id"`
 	AttachmentID  string    `json:"attachment_id"`
 	VMessUUID     string    `json:"vmess_uuid"`
+	HY2Auth       string    `json:"hy2_auth,omitempty"`
 	SOCKSUsername string    `json:"socks_username"`
 	SOCKSPassword string    `json:"socks_password"`
 	Enabled       bool      `json:"enabled"`
@@ -162,6 +173,8 @@ type Enrollment struct {
 }
 
 type NodeStatus struct {
+	IngressControls   bool              `json:"ingress_controls,omitempty"`
+	HY2Ready          bool              `json:"hy2_ready,omitempty"`
 	NodeID            string            `json:"node_id"`
 	Role              Role              `json:"role"`
 	BinaryVersion     string            `json:"binary_version,omitempty"`

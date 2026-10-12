@@ -10,6 +10,8 @@ uninstall='false'
 purge='false'
 rotate_credential='false'
 vmess_port='8080'
+vmess_enabled=true
+hy2_port='0'
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -22,6 +24,8 @@ while [ "$#" -gt 0 ]; do
     --purge) purge='true'; shift ;;
     --rotate-credential) rotate_credential='true'; shift ;;
     --vmess-port) vmess_port=$2; shift 2 ;;
+    --disable-vmess) vmess_enabled=false; shift ;;
+    --hy2-port) hy2_port=$2; shift 2 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -70,6 +74,8 @@ if [ -z "$controller" ] || [ -z "$version" ] || [ -z "$release_base_url" ]; then
 case "$controller" in https://*) ;; *) echo '--controller must use HTTPS' >&2; exit 2;; esac
 case "$version" in *[!a-zA-Z0-9._-]*|'') echo 'version must contain only letters, numbers, dots, underscores, or hyphens' >&2; exit 2;; esac
 if [ "$role" = gateway ]; then
+  case "$hy2_port" in ''|*[!0-9]*) echo '--hy2-port must be a UDP port from 0 to 65535 (0 disables HY2)' >&2; exit 2;; esac
+  if [ "$hy2_port" -gt 65535 ]; then echo '--hy2-port must be between 0 and 65535' >&2; exit 2; fi
   case "$vmess_port" in ''|*[!0-9]*) echo '--vmess-port must be a TCP port from 1 to 65535' >&2; exit 2;; esac
   if [ "$vmess_port" -lt 1 ] || [ "$vmess_port" -gt 65535 ]; then echo '--vmess-port must be a TCP port from 1 to 65535' >&2; exit 2; fi
 fi
@@ -82,7 +88,9 @@ curl --fail --silent --show-error --max-time 15 "${controller%/}/healthz" >/dev/
   exit 1
 }
 if [ ! -f /etc/xmesh/node.json ] && command -v ss >/dev/null 2>&1 && [ "$role" = gateway ]; then
-  for port in "$vmess_port" 8443; do
+  ports=8443
+  if [ "$vmess_enabled" = true ]; then ports="$vmess_port $ports"; fi
+  for port in $ports; do
     if ss -ltnH | awk '{print $4}' | grep -Eq ":$port\$"; then
       echo "TCP port $port is already in use" >&2
       exit 1
@@ -91,6 +99,12 @@ if [ ! -f /etc/xmesh/node.json ] && command -v ss >/dev/null 2>&1 && [ "$role" =
 fi
 
 case "$(uname -m)" in x86_64|amd64) arch=amd64;; aarch64|arm64) arch=arm64;; *) echo "unsupported architecture: $(uname -m)" >&2; exit 1;; esac
+if [ ! -f /etc/xmesh/node.json ] && [ "$role" = gateway ] && [ "$hy2_port" -gt 0 ] && command -v ss >/dev/null 2>&1; then
+  if ss -lunH | awk '{print $4}' | grep -Eq ":$hy2_port\$"; then
+    echo "UDP port $hy2_port is already in use; resolve the conflict before enabling HY2" >&2
+    exit 1
+  fi
+fi
 archive="xmesh-${version}-linux-${arch}.tar.gz"
 base="${release_base_url%/}/${version}"
 work=$(mktemp -d)

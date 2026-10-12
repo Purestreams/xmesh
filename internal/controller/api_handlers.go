@@ -143,6 +143,11 @@ func (s *Server) nodeConfig(w http.ResponseWriter, r *http.Request) {
 		gateway.CredentialHash = ""
 		gateway.PreviousCredentialHash = ""
 		gateway.PreviousCredentialExpiresAt = time.Time{}
+		// Older Gateways use the port as the HY2 switch. Keep their listener
+		// closed too, while preserving the configured port in Controller state.
+		if r.Header.Get("X-XMesh-Ingress-Controls") != "1" && gateway.HY2Disabled {
+			gateway.HY2Port = 0
+		}
 		response := GatewayConfig{Revision: gateway.DesiredVersion, Gateway: gateway}
 		for _, attachment := range state.Attachments {
 			if attachment.GatewayID != nodeID || !attachment.Enabled {
@@ -164,7 +169,7 @@ func (s *Server) nodeConfig(w http.ResponseWriter, r *http.Request) {
 			}
 			for _, grant := range state.Grants {
 				user := state.Users[grant.UserID]
-				if grant.AttachmentID == attachment.ID && grant.Enabled && user.Enabled && routeAvailable(&state, attachment) {
+				if grant.AttachmentID == attachment.ID && grant.Enabled && user.Enabled && routeAvailable(&state, attachment) && (!gateway.VMessDisabled || r.Header.Get("X-XMesh-Ingress-Controls") == "1") {
 					response.Grants = append(response.Grants, grant)
 				}
 			}
@@ -335,12 +340,13 @@ func (s *Server) nodeStatus(w http.ResponseWriter, r *http.Request) {
 		pruneLinkHistory(state, now)
 		if role == model.RoleGateway && report.Status.Ready && report.Status.XrayReady && report.Status.ApplyError == "" && report.Status.XrayError == "" {
 			gateway := state.Gateways[nodeID]
+			ingressAvailable := gateway.VMessEnabled() || (gateway.HY2Enabled() && report.Status.HY2Ready && report.Status.IngressControls)
 			if report.Status.AppliedVersion >= gateway.DesiredVersion {
 				for id, grant := range state.Grants {
 					attachment := state.Attachments[grant.AttachmentID]
 					user := state.Users[grant.UserID]
 					if attachment.GatewayID == nodeID && grant.Enabled && user.Enabled && routeAvailable(state, attachment) {
-						grant.Published = true
+						grant.Published = ingressAvailable
 						state.Grants[id] = grant
 					}
 				}

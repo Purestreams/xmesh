@@ -25,17 +25,62 @@ func TestRealityGatewayConfigAcceptedByXray(t *testing.T) {
 		t.Fatal(err)
 	}
 	config := controller.GatewayConfig{Gateway: model.Gateway{VMessPort: 18000, VMessPath: "/proxy", RealityTarget: "example.com:443", RealityName: "example.com", RealityPrivateKey: base64.RawURLEncoding.EncodeToString(key.Bytes())}, Links: []controller.GatewayLinkConfig{{Link: model.Link{ID: "link", Enabled: true, RealityUUID: "00000000-0000-4000-8000-000000000001", RealityShortID: "0123456789abcdef"}}}}
-	b, err := buildXrayConfigWithReality(config, "127.0.0.1:18080", "127.0.0.1:18443", "127.0.0.1:18081")
-	if err != nil {
-		t.Fatal(err)
+	for _, backend := range []string{"127.0.0.1:18081", "localhost:18081", "backend.example:18081", "[::1]:18081", ":18081", "0.0.0.0:18081", "[::]:18081"} {
+		t.Run(backend, func(t *testing.T) {
+			b, err := buildXrayConfigWithReality(config, "127.0.0.1:18080", "127.0.0.1:18443", backend)
+			if err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(t.TempDir(), "reality.json")
+			if err := os.WriteFile(path, b, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			output, err := exec.Command(binary, "run", "-test", "-config", path).CombinedOutput()
+			if err != nil {
+				t.Fatalf("Xray rejected gateway REALITY config: %v\n%s", err, output)
+			}
+		})
 	}
-	path := filepath.Join(t.TempDir(), "reality.json")
-	if err := os.WriteFile(path, b, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	output, err := exec.Command(binary, "run", "-test", "-config", path).CombinedOutput()
-	if err != nil {
-		t.Fatalf("Xray rejected gateway REALITY config: %v\n%s\n%s", err, output, b)
+}
+
+func TestRealityTunnelBackendRedirectIsFixed(t *testing.T) {
+	for _, test := range []struct{ backend, redirect, ip string }{
+		{"127.0.0.1:18081", "127.0.0.1:18081", "127.0.0.1"},
+		{"localhost:18081", "localhost:18081", ""},
+		{"backend.example:18081", "backend.example:18081", ""},
+		{"[::1]:18081", "[::1]:18081", "::1"},
+		{":18081", "127.0.0.1:18081", "127.0.0.1"},
+		{"0.0.0.0:18081", "127.0.0.1:18081", "127.0.0.1"},
+		{"[::]:18081", "[::1]:18081", "::1"},
+	} {
+		t.Run(test.backend, func(t *testing.T) {
+			config := controller.GatewayConfig{Gateway: model.Gateway{VMessPort: 8080, VMessPath: "/proxy", RealityPrivateKey: "key"}, Links: []controller.GatewayLinkConfig{{Link: model.Link{ID: "link", Enabled: true, RealityUUID: "uuid", RealityShortID: "short-id"}}}}
+			payload, err := buildXrayConfigWithReality(config, "127.0.0.1:18080", "127.0.0.1:18443", test.backend)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var rendered xrayConfig
+			if err := json.Unmarshal(payload, &rendered); err != nil {
+				t.Fatal(err)
+			}
+			for _, outbound := range rendered.Outbounds {
+				if outbound.Tag != "xmesh-reality-local" {
+					continue
+				}
+				if outbound.Settings.Redirect != test.redirect || len(outbound.Settings.FinalRules) != 1 {
+					t.Fatal("tunnel outbound lost its fixed backend")
+				}
+				rule := outbound.Settings.FinalRules[0]
+				if rule.Action != "allow" || rule.Network != "tcp" || rule.Port != "18081" {
+					t.Fatal("tunnel exception lost its network or port constraint")
+				}
+				if test.ip == "" && len(rule.IP) != 0 || test.ip != "" && (len(rule.IP) != 1 || rule.IP[0] != test.ip) {
+					t.Fatalf("invalid tunnel IP rule: %v", rule.IP)
+				}
+				return
+			}
+			t.Fatal("missing tunnel outbound")
+		})
 	}
 }
 

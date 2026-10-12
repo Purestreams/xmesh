@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"xmesh/internal/auth"
+	"xmesh/internal/hy2"
 	"xmesh/internal/identity"
 	"xmesh/internal/model"
 )
@@ -51,6 +52,8 @@ func main() {
 		err = probe()
 	} else if len(os.Args) == 3 && os.Args[1] == "verify-usage" {
 		err = verifyUsage(os.Args[2])
+	} else if len(os.Args) == 3 && os.Args[1] == "fetch-hy2" {
+		err = fetchHY2(os.Args[2])
 	} else {
 		err = errors.New("usage: deploycheck setup DIR | target | health | probe | verify-usage STATE")
 	}
@@ -134,7 +137,7 @@ func setup(dir string) error {
 	state.Attachments["attachment"] = model.Attachment{ID: "attachment", GatewayID: "gateway", AgentID: "agent", Enabled: true, CreatedAt: now}
 	token := auth.Derive(secret, "tunnel", "link")
 	state.Links["link"] = model.Link{ID: "link", AttachmentID: "attachment", Name: "Docker REALITY", URL: "reality://gateway:8443/tunnel", RealityUUID: realityUUID, RealityShortID: hex.EncodeToString(short), TLSVerify: true, Priority: 10, Weight: 1, Connections: 2, MaxStreams: 256, Enabled: true, TunnelTokenHash: auth.SecretHash(token), CreatedAt: now}
-	state.Users["user"] = model.User{ID: "user", Name: "Test user", Enabled: true, CreatedAt: now}
+	state.Users["user"] = model.User{ID: "user", Name: "Test user", Enabled: true, SubscriptionToken: "docker-test-subscription", CreatedAt: now}
 	state.Grants["grant"] = model.Grant{ID: "grant", UserID: "user", AttachmentID: "attachment", VMessUUID: vmessUUID, SOCKSUsername: grantUser, SOCKSPassword: grantPassword, Enabled: true, CreatedAt: now}
 	key2, err := ecdh.X25519().GenerateKey(rand.Reader)
 	if err != nil {
@@ -156,6 +159,20 @@ func setup(dir string) error {
 	state.Attachments["attachment2"] = model.Attachment{ID: "attachment2", GatewayID: "gateway2", AgentID: "agent", Enabled: true, CreatedAt: now}
 	state.Links["link2"] = model.Link{ID: "link2", AttachmentID: "attachment2", Name: "Docker REALITY 2", URL: "reality://gateway2:8443/tunnel", RealityUUID: realityUUID2, RealityShortID: hex.EncodeToString(short2), TLSVerify: true, Priority: 10, Weight: 1, Connections: 2, MaxStreams: 256, Enabled: true, TunnelTokenHash: auth.SecretHash(auth.Derive(secret, "tunnel", "link2")), CreatedAt: now}
 	state.Grants["grant2"] = model.Grant{ID: "grant2", UserID: "user", AttachmentID: "attachment2", VMessUUID: vmessUUID2, SOCKSUsername: "grant2-test", SOCKSPassword: grantPassword, Enabled: true, CreatedAt: now}
+	for _, id := range []string{"gateway", "gateway2"} {
+		gateway := state.Gateways[id]
+		certificate, key, pin, err := hy2.Generate(gateway.PublicHost, now)
+		if err != nil {
+			return err
+		}
+		gateway.HY2Port, gateway.HY2Certificate, gateway.HY2PrivateKey, gateway.HY2PinSHA256 = gateway.VMessPort, certificate, key, pin
+		state.Gateways[id] = gateway
+	}
+	for _, id := range []string{"grant", "grant2"} {
+		grant := state.Grants[id]
+		grant.HY2Auth = "docker-hy2-" + id
+		state.Grants[id] = grant
+	}
 	if err := writeJSON(filepath.Join(dir, "controller-data", "controller-state.json"), state); err != nil {
 		return err
 	}
@@ -272,8 +289,14 @@ func probe() error {
 	for time.Now().Before(deadline) {
 		if err := runProbe("client"); err == nil {
 			if err := runProbe("client2"); err == nil {
-				log.Print("two Gateways + one Agent + VMess/WS + REALITY TCP/UDP: PASS")
-				return nil
+				if err := runProbe("hy2client"); err != nil {
+					last = err
+				} else if err := runProbe("hy2client2"); err != nil {
+					last = err
+				} else {
+					log.Print("two Gateways + one Agent + VMess/WS + pinned HY2 + REALITY TCP/UDP: PASS")
+					return nil
+				}
 			} else {
 				last = err
 			}

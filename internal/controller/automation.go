@@ -185,6 +185,11 @@ func (s *Server) openSubscription(w http.ResponseWriter, r *http.Request) {
 				return err
 			}
 			state.Grants[id] = model.Grant{ID: id, UserID: userID, AttachmentID: attachmentID, VMessUUID: uuid, SOCKSUsername: id, SOCKSPassword: password, Enabled: true, CreatedAt: s.now().UTC()}
+			gateway := state.Gateways[attachment.GatewayID]
+			if err := configureHY2(state, &gateway, gateway.HY2Port, s.now()); err != nil {
+				return err
+			}
+			state.Gateways[gateway.ID] = gateway
 			created++
 			bumpGateway(state, attachment.GatewayID)
 		}

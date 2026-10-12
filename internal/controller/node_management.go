@@ -30,8 +30,18 @@ func (s *Server) editGateway(w http.ResponseWriter, r *http.Request) {
 			return fmt.Errorf("gateway not found")
 		}
 		vmessHost := strings.TrimSpace(r.FormValue("vmess_host"))
-		connectionChanged := gateway.PublicHost != host || gateway.VMessPort != port || gateway.VMessPath != path || gateway.VMessHost != vmessHost
+		previousVMessDisabled, previousHY2Disabled := gateway.VMessDisabled, gateway.HY2Disabled
+		applyIngressSwitches(r, &gateway)
+		hy2Port, err := parseHY2Port(r, gateway.HY2Port)
+		if err != nil {
+			return err
+		}
+		if r.Form.Has("ingress_controls") && !gateway.HY2Disabled && hy2Port == 0 {
+			hy2Port = port
+		}
+		connectionChanged := gateway.PublicHost != host || gateway.VMessPort != port || gateway.VMessPath != path || gateway.VMessHost != vmessHost || gateway.HY2Port != hy2Port || previousVMessDisabled != gateway.VMessDisabled || previousHY2Disabled != gateway.HY2Disabled
 		if gateway.PublicHost != host {
+			gateway.HY2Certificate, gateway.HY2PrivateKey, gateway.HY2PinSHA256 = "", "", ""
 			oldURL := "reality://" + net.JoinHostPort(gateway.PublicHost, "8443") + "/tunnel"
 			newURL := "reality://" + net.JoinHostPort(host, "8443") + "/tunnel"
 			for id, link := range state.Links {
@@ -44,6 +54,9 @@ func (s *Server) editGateway(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		gateway.Name, gateway.PublicHost, gateway.VMessPort, gateway.VMessPath, gateway.VMessHost = name, host, port, path, vmessHost
+		if err := configureHY2(state, &gateway, hy2Port, s.now()); err != nil {
+			return err
+		}
 		if r.Form.Has("region") {
 			gateway.Region = region
 		}

@@ -12,10 +12,12 @@ import (
 	"path/filepath"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"xmesh/internal/atomicfile"
 	"xmesh/internal/controller"
+	"xmesh/internal/hy2"
 	"xmesh/internal/model"
 )
 
@@ -45,23 +47,42 @@ type xrayInbound struct {
 }
 type xrayInboundSettings struct {
 	Clients    []xrayClient `json:"clients"`
+	Version    int          `json:"version,omitempty"`
 	Decryption string       `json:"decryption,omitempty"`
 	Address    string       `json:"address,omitempty"`
 }
 type xrayClient struct {
-	ID      string `json:"id"`
+	ID      string `json:"id,omitempty"`
+	Auth    string `json:"auth,omitempty"`
 	Email   string `json:"email"`
 	AlterID int    `json:"alterId"`
 }
 type xrayStreamSettings struct {
-	Network         string           `json:"network"`
-	Security        string           `json:"security"`
-	WSSettings      xrayWSSettings   `json:"wsSettings,omitempty"`
-	RealitySettings any              `json:"realitySettings,omitempty"`
-	TLSSettings     *xrayTLSSettings `json:"tlsSettings,omitempty"`
+	Network          string                `json:"network"`
+	Security         string                `json:"security"`
+	WSSettings       xrayWSSettings        `json:"wsSettings,omitempty"`
+	RealitySettings  any                   `json:"realitySettings,omitempty"`
+	TLSSettings      *xrayTLSSettings      `json:"tlsSettings,omitempty"`
+	HysteriaSettings *xrayHysteriaSettings `json:"hysteriaSettings,omitempty"`
+}
+type xrayHysteriaSettings struct {
+	Version    int               `json:"version"`
+	Masquerade xrayHY2Masquerade `json:"masquerade"`
+}
+type xrayHY2Masquerade struct {
+	Type       string `json:"type"`
+	Content    string `json:"content"`
+	StatusCode int    `json:"statusCode"`
 }
 type xrayTLSSettings struct {
-	ServerName string `json:"serverName,omitempty"`
+	ServerName   string               `json:"serverName,omitempty"`
+	ALPN         []string             `json:"alpn,omitempty"`
+	MinVersion   string               `json:"minVersion,omitempty"`
+	Certificates []xrayTLSCertificate `json:"certificates,omitempty"`
+}
+type xrayTLSCertificate struct {
+	Certificate []string `json:"certificate"`
+	Key         []string `json:"key"`
 }
 type xrayRealitySettings struct {
 	Target      string   `json:"target"`
@@ -87,14 +108,21 @@ type xrayOutbound struct {
 	StreamSettings *xrayStreamSettings  `json:"streamSettings,omitempty"`
 }
 type xrayOutboundSettings struct {
-	Servers    []xraySOCKSServer `json:"servers,omitempty"`
-	Redirect   string            `json:"redirect,omitempty"`
-	VNext      []xrayVMessServer `json:"vnext,omitempty"`
-	Address    string            `json:"address,omitempty"`
-	Port       int               `json:"port,omitempty"`
-	ID         string            `json:"id,omitempty"`
-	Encryption string            `json:"encryption,omitempty"`
-	Flow       string            `json:"flow,omitempty"`
+	FinalRules []xrayFreedomFinalRule `json:"finalRules,omitempty"`
+	Servers    []xraySOCKSServer      `json:"servers,omitempty"`
+	Redirect   string                 `json:"redirect,omitempty"`
+	VNext      []xrayVMessServer      `json:"vnext,omitempty"`
+	Address    string                 `json:"address,omitempty"`
+	Port       int                    `json:"port,omitempty"`
+	ID         string                 `json:"id,omitempty"`
+	Encryption string                 `json:"encryption,omitempty"`
+	Flow       string                 `json:"flow,omitempty"`
+}
+type xrayFreedomFinalRule struct {
+	Action  string   `json:"action"`
+	Network string   `json:"network,omitempty"`
+	IP      []string `json:"ip,omitempty"`
+	Port    string   `json:"port,omitempty"`
 }
 type xrayVMessServer struct {
 	Address string          `json:"address"`
@@ -153,7 +181,7 @@ func buildXrayConfigWithStats(config controller.GatewayConfig, socksAddress, rea
 	}
 	result := xrayConfig{Log: map[string]string{"loglevel": "warning"}, Routing: xrayRouting{DomainStrategy: "AsIs"}}
 	upstreams := make(map[string]controller.GatewayUpstreamConfig, len(config.Upstreams))
-	if len(config.Upstreams) > 0 {
+	if len(config.Upstreams) > 0 || config.Gateway.HY2Enabled() || !config.Gateway.VMessEnabled() {
 		// Xray defaults to the first outbound when no rule matches.
 		result.Outbounds = append(result.Outbounds, xrayOutbound{Protocol: "blackhole", Tag: "xmesh-deny", Settings: xrayOutboundSettings{}})
 	}
@@ -188,20 +216,53 @@ func buildXrayConfigWithStats(config controller.GatewayConfig, socksAddress, rea
 		result.Outbounds = append(result.Outbounds, xrayOutbound{Protocol: "vmess", Tag: "upstream-" + upstream.AttachmentID, Settings: xrayOutboundSettings{VNext: []xrayVMessServer{{Address: upstream.Endpoint.Address, Port: upstream.Endpoint.Port, Users: []xrayVMessUser{{ID: upstream.Endpoint.UUID, AlterID: 0, Security: cipher}}}}}, StreamSettings: &stream})
 	}
 	inbound := xrayInbound{Listen: "0.0.0.0", Port: config.Gateway.VMessPort, Protocol: "vmess", Tag: "xmesh-vmess", Settings: xrayInboundSettings{}, StreamSettings: &xrayStreamSettings{Network: "ws", Security: "none", WSSettings: xrayWSSettings{Path: config.Gateway.VMessPath, Host: config.Gateway.VMessHost}}}
+	var hy2Inbound *xrayInbound
+	if config.Gateway.HY2Enabled() {
+		gateway := config.Gateway
+		if gateway.HY2Port < 1 || gateway.HY2Port > 65535 {
+			return nil, errors.New("invalid HY2 UDP port")
+		}
+		if err := hy2.Validate(gateway.HY2Certificate, gateway.HY2PrivateKey, gateway.HY2PinSHA256, gateway.PublicHost, time.Now()); err != nil {
+			return nil, err
+		}
+		hy2Inbound = &xrayInbound{Listen: "0.0.0.0", Port: gateway.HY2Port, Protocol: "hysteria", Tag: "xmesh-hy2", Settings: xrayInboundSettings{Version: 2}, StreamSettings: &xrayStreamSettings{Network: "hysteria", Security: "tls", HysteriaSettings: &xrayHysteriaSettings{Version: 2, Masquerade: xrayHY2Masquerade{Type: "string", Content: "Not Found", StatusCode: 404}}, TLSSettings: &xrayTLSSettings{ALPN: []string{"h3"}, MinVersion: "1.3", Certificates: []xrayTLSCertificate{{Certificate: strings.Split(strings.TrimSpace(gateway.HY2Certificate), "\n"), Key: strings.Split(strings.TrimSpace(gateway.HY2PrivateKey), "\n")}}}}}
+	}
+	seenHY2Auth := map[string]bool{}
 	for _, grant := range config.Grants {
 		if !grant.Enabled {
 			continue
 		}
 		email, tag := "grant-"+grant.ID, "grant-"+grant.ID
-		inbound.Settings.Clients = append(inbound.Settings.Clients, xrayClient{ID: grant.VMessUUID, Email: email, AlterID: 0})
+		inboundTags := []string{}
+		if config.Gateway.VMessEnabled() {
+			inbound.Settings.Clients = append(inbound.Settings.Clients, xrayClient{ID: grant.VMessUUID, Email: email, AlterID: 0})
+			inboundTags = append(inboundTags, "xmesh-vmess")
+		}
+		if hy2Inbound != nil {
+			if grant.HY2Auth == "" || seenHY2Auth[grant.HY2Auth] {
+				return nil, errors.New("HY2 requires a unique credential for each Grant")
+			}
+			seenHY2Auth[grant.HY2Auth] = true
+			hy2Inbound.Settings.Clients = append(hy2Inbound.Settings.Clients, xrayClient{Auth: grant.HY2Auth, Email: email})
+			inboundTags = append(inboundTags, "xmesh-hy2")
+		}
+		if len(inboundTags) == 0 {
+			continue
+		}
 		if _, external := upstreams[grant.AttachmentID]; external {
 			tag = "upstream-" + grant.AttachmentID
 		} else {
 			result.Outbounds = append(result.Outbounds, xrayOutbound{Protocol: "socks", Tag: tag, Settings: xrayOutboundSettings{Servers: []xraySOCKSServer{{Address: host, Port: port, Users: []xraySOCKSUser{{User: grant.SOCKSUsername, Pass: grant.SOCKSPassword}}}}}})
 		}
-		result.Routing.Rules = append(result.Routing.Rules, xrayRule{Type: "field", InboundTag: []string{"xmesh-vmess"}, User: []string{email}, OutboundTag: tag})
+		result.Routing.Rules = append(result.Routing.Rules, xrayRule{Type: "field", InboundTag: inboundTags, User: []string{email}, OutboundTag: tag})
 	}
-	result.Inbounds = []xrayInbound{inbound}
+	result.Inbounds = []xrayInbound{}
+	if config.Gateway.VMessEnabled() {
+		result.Inbounds = append(result.Inbounds, inbound)
+	}
+	if hy2Inbound != nil {
+		result.Inbounds = append(result.Inbounds, *hy2Inbound)
+	}
 	if len(config.Upstreams) > 0 && statsAddress != "" {
 		statsHost, statsPortText, err := net.SplitHostPort(statsAddress)
 		if err != nil || statsHost != "127.0.0.1" {
@@ -229,7 +290,8 @@ func buildXrayConfigWithStats(config controller.GatewayConfig, socksAddress, rea
 		if realityHost == "" {
 			realityHost = "0.0.0.0"
 		}
-		if _, _, err := net.SplitHostPort(tunnelAddress); err != nil {
+		tunnelHost, tunnelPort, err := net.SplitHostPort(tunnelAddress)
+		if err != nil {
 			return nil, fmt.Errorf("tunnel listen: %w", err)
 		}
 		realityInbound := xrayInbound{Listen: realityHost, Port: realityPort, Protocol: "vless", Tag: "xmesh-reality", Settings: xrayInboundSettings{Decryption: "none"}, StreamSettings: &xrayStreamSettings{Network: "raw", Security: "reality", RealitySettings: &xrayRealitySettings{Target: config.Gateway.RealityTarget, ServerNames: []string{config.Gateway.RealityName}, PrivateKey: config.Gateway.RealityPrivateKey}}}
@@ -243,7 +305,26 @@ func buildXrayConfigWithStats(config controller.GatewayConfig, socksAddress, rea
 		}
 		if len(realityInbound.Settings.Clients) > 0 {
 			result.Inbounds = append(result.Inbounds, realityInbound)
-			result.Outbounds = append(result.Outbounds, xrayOutbound{Protocol: "freedom", Tag: "xmesh-reality-local", Settings: xrayOutboundSettings{Redirect: tunnelAddress}})
+			// New Xray defaults block private destinations on VLESS inbounds.
+			// Redirect fixes both the backend host and port before finalRules run.
+			// Hostnames are resolved by Xray; they are not valid IP rule entries.
+			// Wildcard listen addresses must redirect to a concrete local address.
+			if tunnelHost == "" {
+				tunnelHost = "127.0.0.1"
+			}
+			rule := xrayFreedomFinalRule{Action: "allow", Network: "tcp", Port: tunnelPort}
+			if ip := net.ParseIP(tunnelHost); ip != nil {
+				if ip.IsUnspecified() {
+					if ip.To4() != nil {
+						ip = net.ParseIP("127.0.0.1")
+					} else {
+						ip = net.ParseIP("::1")
+					}
+				}
+				tunnelHost = ip.String()
+				rule.IP = []string{tunnelHost}
+			}
+			result.Outbounds = append(result.Outbounds, xrayOutbound{Protocol: "freedom", Tag: "xmesh-reality-local", Settings: xrayOutboundSettings{Redirect: net.JoinHostPort(tunnelHost, tunnelPort), FinalRules: []xrayFreedomFinalRule{rule}}})
 			result.Routing.Rules = append(result.Routing.Rules, xrayRule{Type: "field", InboundTag: []string{"xmesh-reality"}, OutboundTag: "xmesh-reality-local"})
 		}
 	}

@@ -6,7 +6,7 @@ $ErrorActionPreference = 'Stop'
 $repoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..\..')).Path
 $suffix = [guid]::NewGuid().ToString('N').Substring(0, 10)
 $networkName = "xmesh-reality-$suffix"
-$fixtureDir = Join-Path $repoRoot "tmp\reality-multi-$suffix"
+$fixtureDir = Join-Path $repoRoot "tmp\.reality-multi-$suffix"
 $imageName = 'xmesh-reality-deployment:local'
 $containerIds = [System.Collections.Generic.List[string]]::new()
 $networkCreated = $false
@@ -67,12 +67,21 @@ try {
         '--mount', "type=bind,source=$(Join-Path $fixtureDir 'client2-xray.json'),target=/etc/xmesh/client-xray.json,readonly"
     ) @('run', '-config', '/etc/xmesh/client-xray.json')
 
+    & docker run --rm --network $networkName --entrypoint /usr/local/bin/deploycheck --mount "type=bind,source=$fixtureDir,target=/fixture" $imageName fetch-hy2 /fixture
+    Assert-LastExit 'download published HY2 client bundles'
+    foreach ($client in @(@{Alias='hy2client';Folder='hy2client1'},@{Alias='hy2client2';Folder='hy2client2'})) {
+        Start-TestContainer $client.Alias @(
+            '--entrypoint', '/usr/local/bin/hysteria', '--workdir', '/client',
+            '--mount', "type=bind,source=$(Join-Path $fixtureDir $client.Folder),target=/client,readonly"
+        ) @('client','-c','client.json')
+    }
+
     & docker run --rm --network $networkName --entrypoint /usr/local/bin/deploycheck $imageName probe
     Assert-LastExit 'multi-container TCP/UDP probe'
     & docker run --rm --entrypoint /usr/local/bin/deploycheck --mount "type=bind,source=$(Join-Path $fixtureDir 'controller-data'),target=/state,readonly" $imageName verify-usage /state/controller-state.json
     Assert-LastExit 'Gateway Link and user usage reporting'
     $passed = $true
-    Write-Host 'Two-Gateway one-Agent REALITY deployment: PASS'
+    Write-Host 'Two-Gateway one-Agent VMess + pinned HY2 + REALITY deployment: PASS'
 }
 finally {
     if (-not $passed) {

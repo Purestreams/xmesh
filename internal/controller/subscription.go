@@ -79,12 +79,17 @@ func BuildSubscription(state model.State, userID string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		items = append(items, item{
-			name:    share.Name,
-			nodeID:  attachment.ID,
-			grantID: grant.ID,
-			link:    "vmess://" + base64.RawStdEncoding.EncodeToString(payload),
-		})
+		if gateway.VMessEnabled() {
+			items = append(items, item{
+				name:    share.Name,
+				nodeID:  attachment.ID,
+				grantID: grant.ID,
+				link:    "vmess://" + base64.RawStdEncoding.EncodeToString(payload),
+			})
+		}
+		if gateway.HY2Enabled() && state.NodeStatus[gateway.ID].HY2Ready && grant.HY2Auth != "" && gateway.HY2PinSHA256 != "" {
+			items = append(items, item{name: share.Name, nodeID: attachment.ID, grantID: grant.ID + "/hy2", link: hy2Share(gateway, grant, share.Name)})
+		}
 	}
 	sort.Slice(items, func(i, j int) bool {
 		left, right := items[i], items[j]

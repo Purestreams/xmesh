@@ -107,6 +107,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /admin/quick-setup", s.requireAdmin(s.csrf(s.quickSetup)))
 	mux.HandleFunc("POST /admin/gateways/{id}/toggle", s.requireAdmin(s.csrf(s.toggleGateway)))
 	mux.HandleFunc("POST /admin/gateways/{id}/edit", s.requireAdmin(s.csrf(s.editGateway)))
+	mux.HandleFunc("POST /admin/gateways/{id}/ingress", s.requireAdmin(s.csrf(s.saveGatewayIngress)))
 	mux.HandleFunc("POST /admin/gateways/{id}/delete", s.requireAdmin(s.csrf(s.deleteGateway)))
 	mux.HandleFunc("POST /admin/agents", s.requireAdmin(s.csrf(s.createAgent)))
 	mux.HandleFunc("POST /admin/agents/{id}/toggle", s.requireAdmin(s.csrf(s.toggleAgent)))
@@ -353,6 +354,10 @@ func (s *Server) subscription(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	if r.URL.Query().Get("format") == "hysteria2" {
+		s.hy2ClientBundle(w, r, state, userID)
+		return
+	}
 	payload, err := BuildSubscription(state, userID)
 	if err != nil {
 		http.Error(w, "subscription unavailable", http.StatusForbidden)
@@ -475,7 +480,8 @@ func subscriptionCounts(state model.State) map[string]string {
 			if grant.UserID == user.ID && grant.Enabled {
 				total++
 				attachment, ok := state.Attachments[grant.AttachmentID]
-				if ok && grant.Published && routeAvailable(&state, attachment) {
+				gateway := state.Gateways[attachment.GatewayID]
+				if ok && grant.Published && routeAvailable(&state, attachment) && (gateway.VMessEnabled() || (gateway.HY2Enabled() && state.NodeStatus[gateway.ID].HY2Ready)) {
 					available++
 				}
 			}

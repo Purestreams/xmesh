@@ -918,6 +918,10 @@ if (typeof document !== "undefined")
               `${node.status.online ? "当前" : "上次上报"}：隧道 ${node.status.tunnel_connections} · TCP ${node.status.tcp_connections} · UDP ${node.status.udp_associations}`,
             ),
           );
+          if (role === "Gateway") {
+            runtime.append(el("small", `VMess/WS ${node.vmess_disabled ? "已关闭" : "已开启"}`));
+            runtime.append(el("small", `HY2 ${node.hy2_disabled || !node.hy2_port ? "已关闭" : `UDP ${node.hy2_port} · ${node.status.hy2_ready ? "就绪" : "待应用"}`}`));
+          }
           if (!node.status.online && node.status.last_seen && !node.status.last_seen.startsWith("0001"))
             runtime.append(el("small", `最后上报 ${new Date(node.status.last_seen).toLocaleString()}`));
           if (node.status.last_error)

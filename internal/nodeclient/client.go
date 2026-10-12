@@ -42,7 +42,7 @@ func New(controllerURL, credential string) *Client {
 
 func FetchGateway(ctx context.Context, client *Client) (controller.GatewayConfig, error) {
 	var result controller.GatewayConfig
-	err := client.getJSON(ctx, "/api/v1/config", &result)
+	err := client.getJSON(ctx, "/api/v1/config", &result, true)
 	return result, err
 }
 
@@ -56,12 +56,15 @@ func (c *Client) Report(ctx context.Context, status model.NodeStatus, links []mo
 	return c.postJSON(ctx, "/api/v1/status", controller.StatusReport{Status: status, Links: links, Grants: grants}, nil)
 }
 
-func (c *Client) getJSON(ctx context.Context, path string, target any) error {
+func (c *Client) getJSON(ctx context.Context, path string, target any, ingressControls ...bool) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.ControllerURL+path, nil)
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Authorization", "Bearer "+c.Credential)
+	if len(ingressControls) > 0 && ingressControls[0] {
+		req.Header.Set("X-XMesh-Ingress-Controls", "1")
+	}
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
 		return fmt.Errorf("controller request: %w", err)

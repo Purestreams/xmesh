@@ -31,7 +31,7 @@ XMesh 将客户端入口与实际出口分开：Gateway 提供可访问的入口
 | 部署与维护 | 一次性注册令牌、systemd / Docker Compose 安装命令、Release 缓存、节点升级及凭据轮换 |
 | 状态与历史 | 拓扑、Gateway × Agent 矩阵、部署进度、15 秒局部刷新、24 小时链路历史和最近 100 次管理请求结果 |
 
-新建线路使用 `reality://`；已有 `wss://` 链路仍可使用，需要外部 TLS 终止服务。客户端入口目前生成 **VMess/WS，TLS 关闭**；Gateway–Agent 的 REALITY 加密不等于客户端入口启用了 TLS。当前订阅生成器没有客户端 TLS 配置，不能只加 HTTPS 反向代理就期待订阅自动适配。
+新建线路使用 `reality://`；已有 `wss://` 链路仍可使用，需要外部 TLS 终止服务。客户端 VMess/WS 默认 TLS 关闭，新建 Gateway 同时默认开启带自签证书和 SHA-256 pin 的 HY2；Gateway–Agent 的 REALITY 加密不等于客户端入口启用了 TLS。当前订阅生成器没有客户端 TLS 配置，不能只加 HTTPS 反向代理就期待订阅自动适配。
 
 ## 先理解四个对象
 
@@ -57,7 +57,7 @@ XMesh 将客户端入口与实际出口分开：Gateway 提供可访问的入口
 | 主机 | 地址示例 | 入站端口 | 说明 |
 | --- | --- | --- | --- |
 | Controller | `panel.example.com` | TCP 80 / 443 | 80 用于下文的 ACME 验证和跳转，443 提供面板、节点 API、订阅及安装文件 |
-| Gateway | `edge.example.com` 或公网 IP | TCP 8080 / 8443 | 8080 是客户端 VMess/WS；8443 是 Agent REALITY 隧道 |
+| Gateway | `edge.example.com` 或公网 IP | TCP 8080 / 8443，UDP 8080 | TCP 8080 是客户端 VMess/WS，UDP 8080 是 HY2；8443 是 Agent REALITY 隧道 |
 | Agent | 无需公网地址 | 无需开放入站端口 | 需出站访问 Controller、Gateway，以及代理目标网络 |
 
 Controller `127.0.0.1:8088`、Gateway SOCKS `127.0.0.1:18080` 和隧道后端 `127.0.0.1:18081` 保持本机访问。Gateway 的 REALITY 入口无需为 `edge.example.com` 申请证书，也不需要 Nginx。使用其他公网端口时，需同步调整防火墙、实际监听或端口映射及 Link URL；仅修改 URL 不会修改主机监听端口。
@@ -202,9 +202,11 @@ curl -fsS https://panel.example.com/healthz
 
 ### 6. 授权并导入订阅
 
+新建 Gateway 默认同时开启 **VMess/WS 和 HY2**，可在 Gateway 列表或编辑表单中独立关闭任一协议。关闭后移除对应监听和订阅项，重新开启保留授权、证书及 pin；两种都关闭时 Agent 隧道仍保留。已有 Gateway 保持原设置。多个用户和线路共用一个 UDP 端口，每个 Grant 使用独立凭据；端口号可与 VMess 相同，例如 TCP/UDP 8080。HY2 使用持久自签证书及 SHA-256 pin，未认证的 HTTP/3 请求固定返回 404，不代理 REALITY target 或任何原网站。严格验证客户端包、UDP 防火墙和验收方式见 [HY2 接入](docs/hy2.md)。
+
 在“用户与订阅”创建 User，然后通过 **Open VMess/WS subscription** 选择用户及允许使用的线路。操作会新增或重新启用 Grant；清除勾选只清空当前选择，撤销访问需单独停用或删除 Grant。
 
-Gateway 报告对应配置已应用且 Xray 就绪后，授权才会发布。复制面板中的订阅 URL，导入支持 VMess/WS 订阅的客户端。订阅是 Base64 编码的 `vmess://` 列表；客户端连接 `edge.example.com:8080/proxy`，Agent 隧道使用 `8443`。
+Gateway 报告对应配置已应用且 Xray 就绪后，授权才会发布。复制面板中的订阅 URL，导入支持 VMess/WS 订阅的客户端。订阅是 Base64 编码的 `vmess://` 和 `hysteria2://` 列表，仅包含已开启且就绪的接入；客户端连接 `edge.example.com:8080/proxy`，Agent 隧道使用 `8443`。
 
 **订阅发布不等于线路健康检查通过。** 验收还需确认两端在线、配置已应用、Gateway Xray 就绪，且同一个已启用 Link 在 Gateway 和 Agent 两端均报告 ready，最后实际测试目标访问。
 

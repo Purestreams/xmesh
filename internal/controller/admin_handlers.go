@@ -92,6 +92,10 @@ func (s *Server) resetSubscription(w http.ResponseWriter, r *http.Request) {
 				return err
 			}
 			grant.VMessUUID, grant.SOCKSPassword, grant.Published = uuid, password, false
+			grant.HY2Auth, err = identity.Token(32)
+			if err != nil {
+				return err
+			}
 			state.Grants[id] = grant
 			gateways[state.Attachments[grant.AttachmentID].GatewayID] = true
 		}
@@ -119,6 +123,11 @@ func (s *Server) createGateway(w http.ResponseWriter, r *http.Request) {
 	host := strings.TrimSpace(r.FormValue("public_host"))
 	path := strings.TrimSpace(r.FormValue("vmess_path"))
 	port, err := parsePositive(r.FormValue("vmess_port"), 8080)
+	hy2Port, hy2Err := parseHY2Port(r, port)
+	if hy2Err != nil {
+		http.Error(w, hy2Err.Error(), http.StatusBadRequest)
+		return
+	}
 	if err != nil || port > 65535 || name == "" || host == "" {
 		http.Error(w, "valid name, public host, and port are required", 400)
 		return
@@ -137,6 +146,12 @@ func (s *Server) createGateway(w http.ResponseWriter, r *http.Request) {
 	}
 	err = s.store.Update(func(state *model.State) error {
 		state.Gateways[id] = model.Gateway{ID: id, Name: name, PublicHost: host, Region: region, VMessPort: port, VMessPath: path, VMessHost: strings.TrimSpace(r.FormValue("vmess_host")), Enabled: true, DesiredVersion: 1, CreatedAt: s.now().UTC()}
+		gateway := state.Gateways[id]
+		applyIngressSwitches(r, &gateway)
+		if err := configureHY2(state, &gateway, hy2Port, s.now()); err != nil {
+			return err
+		}
+		state.Gateways[id] = gateway
 		return nil
 	})
 	if err != nil {
@@ -192,6 +207,11 @@ func (s *Server) quickSetup(w http.ResponseWriter, r *http.Request) {
 	linkURL := strings.TrimSpace(r.FormValue("link_url"))
 	vmessPath := strings.TrimSpace(r.FormValue("vmess_path"))
 	vmessPort, portErr := parsePositive(r.FormValue("vmess_port"), 8080)
+	hy2Port, hy2Err := parseHY2Port(r, vmessPort)
+	if hy2Err != nil {
+		http.Error(w, hy2Err.Error(), http.StatusBadRequest)
+		return
+	}
 	allowedCIDRs := splitCSV(r.FormValue("allowed_cidrs"))
 	deniedCIDRs := splitCSV(r.FormValue("denied_cidrs"))
 	if gwName == "" || agtName == "" || publicHost == "" || strings.ContainsAny(publicHost, "/?#@ \t\r\n") ||
@@ -229,6 +249,12 @@ func (s *Server) quickSetup(w http.ResponseWriter, r *http.Request) {
 	now := s.now().UTC()
 	err = s.store.Update(func(state *model.State) error {
 		state.Gateways[gwID] = model.Gateway{ID: gwID, Name: gwName, PublicHost: publicHost, Region: region, VMessPort: vmessPort, VMessPath: vmessPath, VMessHost: strings.TrimSpace(r.FormValue("vmess_host")), Enabled: true, DesiredVersion: 1, CreatedAt: now}
+		gateway := state.Gateways[gwID]
+		applyIngressSwitches(r, &gateway)
+		if err := configureHY2(state, &gateway, hy2Port, now); err != nil {
+			return err
+		}
+		state.Gateways[gwID] = gateway
 		state.Agents[agtID] = model.Agent{ID: agtID, Name: agtName, Enabled: true, AllowedCIDRs: allowedCIDRs, DeniedCIDRs: deniedCIDRs, DesiredVersion: 1, CreatedAt: now}
 		state.Attachments[attachmentID] = model.Attachment{ID: attachmentID, GatewayID: gwID, AgentID: agtID, Enabled: true, CreatedAt: now}
 		link := model.Link{ID: linkID, AttachmentID: attachmentID, Name: gwName + " / " + agtName, URL: linkURL, HTTPHost: strings.TrimSpace(r.FormValue("link_http_host")), TLSServerName: strings.TrimSpace(r.FormValue("tls_server_name")), TLSVerify: true, Priority: 10, Weight: 1, Connections: 2, MaxStreams: 256, Enabled: true, TunnelTokenHash: auth.SecretHash(auth.Derive(s.cfg.sessionKey(), "tunnel", linkID)), CreatedAt: now}
@@ -530,6 +556,11 @@ func (s *Server) createGrant(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		state.Grants[id] = model.Grant{ID: id, UserID: userID, AttachmentID: attachmentID, VMessUUID: uuid, SOCKSUsername: id, SOCKSPassword: password, Enabled: true, Published: false, CreatedAt: s.now().UTC()}
+		gateway := state.Gateways[state.Attachments[attachmentID].GatewayID]
+		if err := configureHY2(state, &gateway, gateway.HY2Port, s.now()); err != nil {
+			return err
+		}
+		state.Gateways[gateway.ID] = gateway
 		bumpGatewayForAttachment(state, attachmentID)
 		return nil
 	})
@@ -661,7 +692,14 @@ func nodeInstallPortArgs(state model.State, role model.Role, nodeID string) []st
 	if port == 0 {
 		port = 8080
 	}
-	return []string{"--vmess-port", strconv.Itoa(port)}
+	args := []string{"--vmess-port", strconv.Itoa(port)}
+	if !state.Gateways[nodeID].VMessEnabled() {
+		args = append(args, "--disable-vmess")
+	}
+	if hy2Port := state.Gateways[nodeID].HY2Port; state.Gateways[nodeID].HY2Enabled() {
+		args = append(args, "--hy2-port", strconv.Itoa(hy2Port))
+	}
+	return args
 }
 
 func (s *Server) writeInstallOptions(w http.ResponseWriter, label, base string, role model.Role, extra ...string) {

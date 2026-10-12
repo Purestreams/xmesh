@@ -1,4 +1,4 @@
-// Start TestPanelBrowserFixture first; install Playwright outside the repository.
+// Start TestPanelBrowserFixture first; keep Playwright in a disposable test directory.
 const { chromium } = require("playwright");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
@@ -7,6 +7,7 @@ const fs = require("node:fs");
   const browser = await chromium.launch({
     headless: true,
     channel: process.env.XMESH_BROWSER_CHANNEL || undefined,
+    executablePath: process.env.XMESH_BROWSER_EXECUTABLE || undefined,
   });
   try {
     const page = await browser.newPage({
@@ -117,6 +118,8 @@ const fs = require("node:fs");
     await page.getByRole("cell", { name: /Browser QA user/ }).waitFor();
     // Native validation reveals advanced required fields instead of trapping focus.
     await page.goto(base + "/#create-route");
+    assert.ok(await page.locator('#create-route input[name="vmess_enabled"]').isChecked());
+    assert.ok(await page.locator('#create-route input[name="hy2_enabled"]').isChecked());
     const region = page.locator("#create-route select[name=region]");
     const realityTarget = page.locator(
       "#create-route input[name=reality_target]",
@@ -159,11 +162,28 @@ const fs = require("node:fs");
     assert.ok((await page.locator("#operation-list tbody tr").count()) >= 4);
     // Create each node type through the deployment wizard, then connect an external exit.
     await page.goto(base + "/#wizard-gateway");
+    assert.ok(await page.locator('#wizard-gateway input[name="vmess_enabled"]').isChecked());
+    assert.ok(await page.locator('#wizard-gateway input[name="hy2_enabled"]').isChecked());
     await page.locator('#wizard-gateway input[name="name"]').fill("Browser QA Gateway");
     await page.locator('#wizard-gateway input[name="public_host"]').fill("qa.example.com");
     await page.locator('#wizard-gateway select[name="region"]').selectOption("overseas");
     await page.locator('#wizard-gateway form[action="/admin/gateways"] button').click();
     await page.locator("#wizard-gateway .form-success").waitFor();
+    await page.goto(base + "/#gateways");
+    const gatewayRow = page.locator('#gateways tbody tr').filter({ hasText: "Browser QA Gateway" });
+    const ingressForm = gatewayRow.locator('form.ingress-controls');
+    for (const [vmess, hy2] of [[false, true], [true, false], [false, false], [true, true]]) {
+      await ingressForm.locator('input[name="vmess_enabled"]').setChecked(vmess);
+      await ingressForm.locator('input[name="hy2_enabled"]').setChecked(hy2);
+      await ingressForm.getByRole('button', { name: "保存接入开关" }).click();
+      await page.locator('#gateways .form-success').waitFor();
+      await page.waitForFunction(() => !document.querySelector('#gateways form.ingress-controls[data-dirty]'));
+      assert.equal(await ingressForm.locator('input[name="vmess_enabled"]').isChecked(), vmess);
+      assert.equal(await ingressForm.locator('input[name="hy2_enabled"]').isChecked(), hy2);
+      assert.match(await gatewayRow.locator('td').nth(1).textContent(), vmess ? /VMess\/WS qa\.example\.com/ : /VMess\/WS 已关闭/);
+      assert.match(await gatewayRow.locator('td').nth(1).textContent(), hy2 ? /HY2 UDP qa\.example\.com/ : /HY2 已关闭/);
+    }
+    await page.screenshot({ path: out + "/ingress-switches.png", fullPage: true });
     await page.goto(base + "/#wizard-agent");
     await page.locator('#wizard-agent input[name="name"]').fill("Browser QA Agent");
     await page.locator('#wizard-agent form[action="/admin/agents"] button').click();
@@ -207,7 +227,7 @@ const fs = require("node:fs");
     );
     assert.deepEqual(errors, []);
     console.log(
-      "Panel browser checks passed: navigation, topology, matrix, selection, refresh, grants, validation, audit, node wizard, external exit, mobile.",
+      "Panel browser checks passed: navigation, topology, matrix, selection, refresh, grants, validation, audit, node wizard, ingress defaults and all switch combinations, external exit, mobile.",
     );
   } finally {
     await browser.close();

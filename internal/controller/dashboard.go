@@ -42,17 +42,20 @@ func pruneLinkHistory(state *model.State, now time.Time) {
 }
 
 type dashboardNode struct {
-	ID       string           `json:"id"`
-	Name     string           `json:"name"`
-	Role     string           `json:"role"`
-	Host     string           `json:"host"`
-	Region   string           `json:"region"`
-	Target   string           `json:"target"`
-	Enabled  bool             `json:"enabled"`
-	Enrolled bool             `json:"enrolled"`
-	Desired  uint64           `json:"desired"`
-	Status   model.NodeStatus `json:"status"`
-	Next     string           `json:"next"`
+	HY2Port       int              `json:"hy2_port,omitempty"`
+	VMessDisabled bool             `json:"vmess_disabled,omitempty"`
+	HY2Disabled   bool             `json:"hy2_disabled,omitempty"`
+	ID            string           `json:"id"`
+	Name          string           `json:"name"`
+	Role          string           `json:"role"`
+	Host          string           `json:"host"`
+	Region        string           `json:"region"`
+	Target        string           `json:"target"`
+	Enabled       bool             `json:"enabled"`
+	Enrolled      bool             `json:"enrolled"`
+	Desired       uint64           `json:"desired"`
+	Status        model.NodeStatus `json:"status"`
+	Next          string           `json:"next"`
 }
 type dashboardRoute struct {
 	ID         string `json:"id"`
@@ -123,7 +126,7 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 	state := s.panelState()
 	data := dashboardData{At: s.now().UTC(), Revision: state.Revision, Nodes: []dashboardNode{}, Routes: []dashboardRoute{}, Links: []dashboardLink{}, Users: []dashboardUser{}, Grants: []dashboardGrant{}, History: map[string][]model.LinkSample{}, Usage: usageViews(state, s.now()), Operations: state.Operations, Upgrade: s.controllerUpgradeStatus(), UpgradeTasks: sortedUpgradeTasks(state), Updaters: updaterViews(state, s.now()), UpgradeBatches: state.UpgradeBatches}
 	for _, node := range sortedGateways(state) {
-		data.Nodes = append(data.Nodes, dashboardNode{ID: node.ID, Name: node.Name, Role: "Gateway", Host: node.PublicHost, Region: node.Region, Target: node.RealityTarget, Enabled: node.Enabled, Enrolled: node.CredentialHash != "", Desired: node.DesiredVersion, Status: state.NodeStatus[node.ID], Next: nextDeploymentAction(state, node.ID, model.RoleGateway)})
+		data.Nodes = append(data.Nodes, dashboardNode{ID: node.ID, Name: node.Name, Role: "Gateway", HY2Port: node.HY2Port, VMessDisabled: node.VMessDisabled, HY2Disabled: node.HY2Disabled, Host: node.PublicHost, Region: node.Region, Target: node.RealityTarget, Enabled: node.Enabled, Enrolled: node.CredentialHash != "", Desired: node.DesiredVersion, Status: state.NodeStatus[node.ID], Next: nextDeploymentAction(state, node.ID, model.RoleGateway)})
 	}
 	for _, node := range sortedAgents(state) {
 		data.Nodes = append(data.Nodes, dashboardNode{ID: node.ID, Name: node.Name, Role: "Agent", Enabled: node.Enabled, Enrolled: node.CredentialHash != "", Desired: node.DesiredVersion, Status: state.NodeStatus[node.ID], Next: nextDeploymentAction(state, node.ID, model.RoleAgent)})
