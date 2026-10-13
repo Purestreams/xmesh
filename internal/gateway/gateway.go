@@ -409,7 +409,7 @@ func (r *Runtime) report(ctx context.Context) error {
 	nodeStatus := model.NodeStatus{NodeID: r.local.NodeID, Role: model.RoleGateway, BinaryVersion: r.local.BinaryVersion, InstanceID: r.local.InstanceID, Online: true, Ready: ready, DesiredVersion: config.Revision, AppliedVersion: r.xrayAppliedRevision.Load(), XrayReady: r.xrayReady.Load(), XrayError: xrayError, ExternalUpstreams: true, LastSeen: time.Now().UTC(), TunnelConnections: tunnelCount, TCPConnections: int(r.tcpConnections.Load()), UDPAssociations: int(r.udpAssociations.Load()), UploadBytes: upload, DownloadBytes: download, LastError: lastError, FailureCounters: map[string]uint64{"udp_queue_drops": r.udpQueueDrops.Load()}}
 	nodeStatus.IngressControls = true
 	nodeStatus.UpstreamProbes = true
-	nodeStatus.UpstreamProbeIntervalSeconds = int64(r.local.Gateway.UpstreamProbeInterval.Value(5*time.Minute) / time.Second)
+	nodeStatus.UpstreamProbeIntervalSeconds = int64(r.local.Gateway.UpstreamProbeInterval.Value(time.Minute) / time.Second)
 	nodeStatus.HY2Ready = nodeStatus.XrayReady && activeXrayConfig.Gateway.HY2Enabled() && nodeStatus.AppliedVersion == config.Revision
 	if err := r.client.Report(ctx, nodeStatus, linkList, grantList, r.upstreamProbeSnapshot(config)); err != nil {
 		if nodeclient.AuthorizationRejected(err) {

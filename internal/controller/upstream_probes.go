@@ -22,7 +22,7 @@ func currentUpstreamProbe(state *model.State, attachment model.Attachment) *mode
 func upstreamProbeFreshness(status model.NodeStatus) time.Duration {
 	interval := time.Duration(status.UpstreamProbeIntervalSeconds) * time.Second
 	if interval <= 0 {
-		interval = 5 * time.Minute
+		interval = time.Minute
 	}
 	return interval*2 + 35*time.Second
 }
@@ -106,6 +106,15 @@ func (s *Server) acceptUpstreamProbes(state *model.State, role model.Role, nodeI
 			if result.StartedAt.Before(previous.StartedAt) ||
 				(result.StartedAt.Equal(previous.StartedAt) && !previous.CompletedAt.IsZero() && result.CompletedAt.IsZero()) {
 				continue
+			}
+		}
+		if !result.CompletedAt.IsZero() {
+			if result.Successful() {
+				attachment.UpstreamProbeFailureSince = time.Time{}
+				attachment.UpstreamProbeFailureVersion = 0
+			} else if attachment.UpstreamProbeFailureSince.IsZero() || attachment.UpstreamProbeFailureVersion != result.Revision {
+				attachment.UpstreamProbeFailureSince = now
+				attachment.UpstreamProbeFailureVersion = result.Revision
 			}
 		}
 		attachment.UpstreamProbe = &result

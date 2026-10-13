@@ -1,4 +1,4 @@
-# Control center (v0.4.0)
+# Control center (v0.4.1)
 
 The Controller embeds its HTML, CSS and JavaScript; no frontend service, CDN or
 production Node.js runtime is required. Existing management POST endpoints and
@@ -233,9 +233,11 @@ grants. It requests IP.SB's HTTPS IP API and Microsoft's HTTPS homepage, verifie
 TLS, and shows each site's status, HTTP request time, error, and the exit IP.
 The route is verified only when both checks succeed.
 
-Tests run once after the Gateway applies a configuration and then every five
-minutes by default. Set the Gateway's local `upstream_probe_interval` (for
-example `"5m"`) to change this interval. `upstream_probe_listen` defaults to
+Tests run once after the Gateway applies a configuration and then every minute
+by default. Set the Gateway's local `upstream_probe_interval` (for example
+`"1m"`) to change this interval. An external route is omitted from user
+subscriptions after five continuous minutes of failed tests and returns after
+the next successful test. `upstream_probe_listen` defaults to
 `127.0.0.1:18083` and must remain on loopback. Manual requests do not restart
 Xray. Results from older configurations or superseded requests are ignored.
 Probe traffic is excluded from user usage counters. Upgrade both Controller and

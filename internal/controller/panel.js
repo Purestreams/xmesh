@@ -335,7 +335,7 @@ if (typeof document !== "undefined")
     function upstreamProbeSummary(route) {
       const body = el("div", null, "upstream-probe");
       const probe = route.probe;
-      if (route.probe_supported) body.append(el("p", t("定时测试间隔：{0} 秒", route.probe_interval_seconds || 300), "muted"));
+      if (route.probe_supported) body.append(el("p", t("定时测试间隔：{0} 秒", route.probe_interval_seconds || 60), "muted"));
       if (!route.probe_supported) {
         body.append(el("p", t("升级 Gateway 后可使用出口连通性测试。"), "muted"));
       } else if (!probe) {

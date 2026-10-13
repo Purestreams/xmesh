@@ -209,7 +209,7 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	counts := subscriptionCounts(state)
+	counts := subscriptionCounts(state, s.now())
 	for _, user := range sortedUsers(state) {
 		data.Users = append(data.Users, dashboardUser{ID: user.ID, Name: user.Name, Enabled: user.Enabled, Publication: counts[user.ID]})
 	}

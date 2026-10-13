@@ -7,6 +7,8 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -70,6 +72,28 @@ func TestUpstreamProbeUsesPrivateAuthenticatedRoutesWithoutGrants(t *testing.T) 
 			t.Fatalf("accepted unsafe listener %q", address)
 		}
 	}
+}
+
+func TestRunningXrayConfigIncludesProbeListener(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "xray.json")
+	r := New(runtimecfg.Config{Credential: "node-secret", Gateway: runtimecfg.Gateway{SOCKSListen: "127.0.0.1:18080", UpstreamProbeListen: "127.0.0.1:18083", XrayConfigPath: path}}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err := r.writeXrayConfig(probeTestConfig()); err != nil {
+		t.Fatal(err)
+	}
+	payload, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rendered xrayConfig
+	if err := json.Unmarshal(payload, &rendered); err != nil {
+		t.Fatal(err)
+	}
+	for _, inbound := range rendered.Inbounds {
+		if inbound.Tag == "xmesh-upstream-probe" && inbound.Listen == "127.0.0.1" && inbound.Port == 18083 {
+			return
+		}
+	}
+	t.Fatal("running Xray config omitted the upstream probe listener")
 }
 
 func TestUpstreamHTTPSResultsRequireBothSitesAndValidExitIP(t *testing.T) {

@@ -119,8 +119,28 @@ func TestUpstreamProbeLifecycleThroughGatewayConfigAndReports(t *testing.T) {
 	if got := report(failed); got.Code != http.StatusNoContent {
 		t.Fatal(got.Body.String())
 	}
+	failureSince := store.Snapshot().Attachments["route"].UpstreamProbeFailureSince
+	if failureSince.IsZero() {
+		t.Fatal("failed probe did not start the continuous failure window")
+	}
+	now = now.Add(time.Minute)
+	failed.StartedAt, failed.CompletedAt = now.Add(-time.Second), now
+	if got := report(failed); got.Code != http.StatusNoContent {
+		t.Fatal(got.Body.String())
+	}
+	if !store.Snapshot().Attachments["route"].UpstreamProbeFailureSince.Equal(failureSince) {
+		t.Fatal("repeated failure reset the continuous failure window")
+	}
 	if readRoute().State != "probe_failed" {
 		t.Fatal("partial website failure falsely marked route healthy")
+	}
+	now = now.Add(time.Minute)
+	recovered := completedProbe(now, request)
+	if got := report(recovered); got.Code != http.StatusNoContent {
+		t.Fatal(got.Body.String())
+	}
+	if !store.Snapshot().Attachments["route"].UpstreamProbeFailureSince.IsZero() {
+		t.Fatal("successful probe did not clear the failure window")
 	}
 	foreign := failed
 	foreign.AttachmentID = "foreign"

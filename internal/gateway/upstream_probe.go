@@ -137,7 +137,7 @@ func (r *Runtime) reconcileUpstreamProbes(ctx context.Context) {
 		}
 		if result, ok := r.probeResults[id]; ok && result.Revision == key.revision &&
 			result.RequestID == key.request && !result.CompletedAt.IsZero() &&
-			time.Since(result.CompletedAt) < r.local.Gateway.UpstreamProbeInterval.Value(5*time.Minute) {
+			time.Since(result.CompletedAt) < r.local.Gateway.UpstreamProbeInterval.Value(time.Minute) {
 			continue
 		}
 		if len(r.probeJobs) >= 4 {

@@ -130,11 +130,11 @@ sudo dnf install -y ca-certificates curl tar coreutils iproute shadow-utils
 
 If firewalld is enabled on the Gateway, allow the VMess and REALITY TCP ports in the zone used by its network interface. For `--vmess-port 8086`, allow TCP 8086 and 8443; Agents need no inbound ports. The Nginx/Certbot package commands and paths below target Debian/Ubuntu. On a CentOS Controller, configure the HTTPS reverse proxy for its repositories, Nginx layout and SELinux policy.
 
-On the Controller host only, install these additional tools and obtain the source. This README describes the current code; the installation example pins release `v0.4.0`. To use another published version, set `VERSION` to its exact tag and use matching source and release assets. See [Releases](https://github.com/Purestreams/xmesh/releases) for available versions.
+On the Controller host only, install these additional tools and obtain the source. This README describes the current code; the installation example pins release `v0.4.1`. To use another published version, set `VERSION` to its exact tag and use matching source and release assets. See [Releases](https://github.com/Purestreams/xmesh/releases) for available versions.
 
 ```sh
 sudo apt install -y git nginx certbot
-VERSION=v0.4.0
+VERSION=v0.4.1
 git clone --depth 1 --branch "$VERSION" https://github.com/Purestreams/xmesh.git
 cd xmesh
 ```
@@ -260,7 +260,7 @@ A Grant publishes after the Gateway reports the corresponding configuration appl
 
 **Subscription publication is separate from route health.** For an Agent route, check that both nodes are online with their configuration applied, Gateway Xray is ready, and the same enabled Link reports ready at both Gateway and Agent. Then test actual destination access. For an external exit, confirm Gateway configuration acknowledgement and test upstream and destination connectivity.
 
-Add an external exit under **节点与线路 → 外部出口** using a VMess/TCP or VMess/WS link with optional TLS, a VLESS/TCP + REALITY + Vision link, or a subscription URL. Select one supported node explicitly, bind it to a Gateway and grant user access. The Controller refreshes subscriptions every 30 minutes, with manual refresh available. Failed fetches retain the last valid endpoint; a successful refresh that loses the selected node disables the exit. Upgrade older Gateways before using this route. After applying configuration, the Gateway automatically tests ip.sb and microsoft.com through that upstream and repeats every five minutes by default. The panel provides a Test connection button, per-site results, HTTPS timing, exit IP and errors. Tests are independent of user grants, do not count toward user usage, and do not restart Xray. Upgrade both Controller and Gateway to enable testing. User subscriptions contain neither the upstream subscription URL nor its UUID. Private subscription sources require the explicit Controller setting `allow_private_upstream_sources`.
+Add an external exit under **节点与线路 → 外部出口** using a VMess/TCP or VMess/WS link with optional TLS, a VLESS/TCP + REALITY + Vision link, or a subscription URL. Select one supported node explicitly, bind it to a Gateway and grant user access. The Controller refreshes subscriptions every 30 minutes, with manual refresh available. Failed fetches retain the last valid endpoint; a successful refresh that loses the selected node disables the exit. Upgrade older Gateways before using this route. After applying configuration, the Gateway automatically tests ip.sb and microsoft.com through that upstream and repeats every 60 seconds by default. Routes that fail continuously for more than 5 minutes are hidden from user subscriptions and return automatically after a successful test. The panel provides a Test connection button, per-site results, HTTPS timing, exit IP and errors. Tests are independent of user grants, do not count toward user usage, and do not restart Xray. Upgrade both Controller and Gateway to enable testing. User subscriptions contain neither the upstream subscription URL nor its UUID. Private subscription sources require the explicit Controller setting `allow_private_upstream_sources`.
 
 ## Operations
 

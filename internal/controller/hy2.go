@@ -73,7 +73,7 @@ func (s *Server) hy2ClientBundle(w http.ResponseWriter, r *http.Request, state m
 	grant, ok := state.Grants[r.URL.Query().Get("grant")]
 	attachment := state.Attachments[grant.AttachmentID]
 	gateway := state.Gateways[attachment.GatewayID]
-	if !ok || grant.UserID != userID || !state.Users[userID].Enabled || !grant.Enabled || !grant.Published || !routeAvailable(&state, attachment) || !gateway.Enabled || !gateway.HY2Enabled() || !state.NodeStatus[gateway.ID].HY2Ready || grant.HY2Auth == "" {
+	if !ok || grant.UserID != userID || !state.Users[userID].Enabled || !grant.Enabled || !grant.Published || !subscriptionRouteAvailable(&state, attachment, s.now()) || !gateway.Enabled || !gateway.HY2Enabled() || !state.NodeStatus[gateway.ID].HY2Ready || grant.HY2Auth == "" {
 		http.Error(w, "HY2 authorization unavailable", http.StatusForbidden)
 		return
 	}

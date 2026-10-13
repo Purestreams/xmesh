@@ -76,6 +76,43 @@ func TestSubscriptionContainsOnlyPublishedAuthorizedNodes(t *testing.T) {
 	}
 }
 
+func TestSubscriptionOmitsExternalRouteAfterFiveMinutesOfProbeFailures(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0).UTC()
+	state := model.NewState()
+	state.Users["u"] = model.User{ID: "u", Enabled: true}
+	state.Gateways["g"] = model.Gateway{ID: "g", Name: "Gateway", PublicHost: "gateway.example", VMessPort: 8080, VMessPath: "/proxy", Enabled: true, DesiredVersion: 3}
+	state.NodeStatus["g"] = model.NodeStatus{ExternalUpstreams: true}
+	state.Upstreams["up"] = model.VMessUpstream{ID: "up", Name: "Tokyo", Enabled: true, Endpoint: model.VMessEndpoint{UUID: "upstream-node"}}
+	state.Attachments["route"] = model.Attachment{ID: "route", GatewayID: "g", UpstreamID: "up", Enabled: true, UpstreamProbeFailureSince: now, UpstreamProbeFailureVersion: 3}
+	state.Grants["grant"] = model.Grant{ID: "grant", UserID: "u", AttachmentID: "route", VMessUUID: "00000000-0000-4000-8000-000000000001", Enabled: true, Published: true}
+
+	decode := func(at time.Time) string {
+		t.Helper()
+		payload, err := buildSubscriptionAt(state, "u", at)
+		if err != nil {
+			t.Fatal(err)
+		}
+		plain, err := base64.StdEncoding.DecodeString(payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(plain)
+	}
+	if got := decode(now.Add(5 * time.Minute)); !strings.Contains(got, "vmess://") {
+		t.Fatalf("route removed before grace period elapsed: %q", got)
+	}
+	if got := decode(now.Add(5*time.Minute + time.Second)); got != "" {
+		t.Fatalf("failed route remained in subscription: %q", got)
+	}
+	attachment := state.Attachments["route"]
+	attachment.UpstreamProbeFailureSince = time.Time{}
+	attachment.UpstreamProbeFailureVersion = 0
+	state.Attachments["route"] = attachment
+	if got := decode(now.Add(6 * time.Minute)); !strings.Contains(got, "vmess://") {
+		t.Fatalf("recovered route did not return: %q", got)
+	}
+}
+
 func TestGatewayStatusPublishesGrantOnlyAfterXrayApplied(t *testing.T) {
 	server, state := testServer(t, func(s *model.State) error {
 		s.Users["u"] = model.User{ID: "u", Enabled: true}

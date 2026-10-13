@@ -13,7 +13,7 @@
     "xray_binary": "/usr/local/lib/xmesh/xray",
     "xray_config_path": "/var/lib/xmesh/xray.json",
     "upstream_probe_listen": "127.0.0.1:18083",
-    "upstream_probe_interval": "5m",
+    "upstream_probe_interval": "1m",
     "udp_idle_timeout": "2m",
     "max_udp_associations": 1024
   }

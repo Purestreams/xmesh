@@ -130,11 +130,11 @@ sudo dnf install -y ca-certificates curl tar coreutils iproute shadow-utils
 
 Gateway 如启用 firewalld，需在实际网卡所在 zone 放行 VMess 端口和 REALITY 端口。例如使用 `--vmess-port 8086` 时，放行 TCP 8086 和 8443；Agent 无需开放入站端口。下文 Nginx/Certbot 的包安装和配置路径以 Debian/Ubuntu 为例，CentOS Controller 按本机的软件源、Nginx 布局和 SELinux 策略配置 HTTPS 反向代理。
 
-仅在 Controller 主机安装以下工具并取得源码。本文说明当前代码行为，安装示例固定使用 `v0.4.0`；选择其他已发布版本时，将 `VERSION` 改为对应的精确 tag，源码与安装包使用同一版本。可用版本见 [Releases](https://github.com/Purestreams/xmesh/releases)。
+仅在 Controller 主机安装以下工具并取得源码。本文说明当前代码行为，安装示例固定使用 `v0.4.1`；选择其他已发布版本时，将 `VERSION` 改为对应的精确 tag，源码与安装包使用同一版本。可用版本见 [Releases](https://github.com/Purestreams/xmesh/releases)。
 
 ```sh
 sudo apt install -y git nginx certbot
-VERSION=v0.4.0
+VERSION=v0.4.1
 git clone --depth 1 --branch "$VERSION" https://github.com/Purestreams/xmesh.git
 cd xmesh
 ```
@@ -262,7 +262,7 @@ Gateway 报告对应配置已应用且相应接入就绪后，授权才会发布
 
 **订阅发布不等于线路健康检查通过。** Agent 线路验收需确认两端在线、配置已应用、Gateway Xray 就绪，且同一个已启用 Link 在 Gateway 和 Agent 两端均报告 ready，最后实际测试目标访问。外部出口需确认 Gateway 配置已应用，并实际测试上游与目标连通性。
 
-外部出口在“节点与线路 → 外部出口”添加，支持 `vmess://`（TCP 或 WS，可带 TLS）和 `vless://`（TCP + REALITY + Vision）链接。无法准确表示的 VMess 选项会在导入时被拒绝。订阅 URL 包含多个节点时，先明确选择一个，再绑定 Gateway 并为用户开通该线路。Controller 每 30 分钟刷新订阅，也可手动刷新；拉取失败时保留上次有效配置，已选节点在成功刷新后消失时会关闭该出口，不能自动切换到其他节点。旧版 Gateway 须升级到支持外部出口的版本，授权才能发布。Gateway 应用配置后自动测试，并默认每 5 分钟经所选上游测试 ip.sb 和 microsoft.com；页面提供“测试连接”按钮及两站结果、HTTPS 耗时、出口 IP 和失败原因。测试与用户授权无关，不计入用户流量，手动测试不重启 Xray。Controller 与 Gateway 均需升级以支持测试。订阅 URL 和上游 UUID 不出现在给用户的订阅中。公网订阅 URL 才能自动抓取；内网订阅仅可通过 Controller 配置的 `allow_private_upstream_sources` 显式放行。
+外部出口在“节点与线路 → 外部出口”添加，支持 `vmess://`（TCP 或 WS，可带 TLS）和 `vless://`（TCP + REALITY + Vision）链接。无法准确表示的 VMess 选项会在导入时被拒绝。订阅 URL 包含多个节点时，先明确选择一个，再绑定 Gateway 并为用户开通该线路。Controller 每 30 分钟刷新订阅，也可手动刷新；拉取失败时保留上次有效配置，已选节点在成功刷新后消失时会关闭该出口，不能自动切换到其他节点。旧版 Gateway 须升级到支持外部出口的版本，授权才能发布。Gateway 应用配置后自动测试，并默认每 60 秒经所选上游测试 ip.sb 和 microsoft.com；连续失败超过 5 分钟的线路会从用户订阅中隐藏，测试恢复成功后自动重新出现。页面提供“测试连接”按钮及两站结果、HTTPS 耗时、出口 IP 和失败原因。测试与用户授权无关，不计入用户流量，手动测试不重启 Xray。Controller 与 Gateway 均需升级以支持测试。订阅 URL 和上游 UUID 不出现在给用户的订阅中。公网订阅 URL 才能自动抓取；内网订阅仅可通过 Controller 配置的 `allow_private_upstream_sources` 显式放行。
 
 ## 日常维护
 

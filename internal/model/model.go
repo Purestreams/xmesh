@@ -65,15 +65,17 @@ type Agent struct {
 }
 
 type Attachment struct {
-	ProbeRequestID   string               `json:"probe_request_id,omitempty"`
-	ProbeRequestedAt time.Time            `json:"probe_requested_at,omitempty"`
-	UpstreamProbe    *UpstreamProbeStatus `json:"upstream_probe,omitempty"`
-	ID               string               `json:"id"`
-	GatewayID        string               `json:"gateway_id"`
-	AgentID          string               `json:"agent_id"`
-	UpstreamID       string               `json:"upstream_id,omitempty"`
-	Enabled          bool                 `json:"enabled"`
-	CreatedAt        time.Time            `json:"created_at"`
+	ProbeRequestID              string               `json:"probe_request_id,omitempty"`
+	ProbeRequestedAt            time.Time            `json:"probe_requested_at,omitempty"`
+	UpstreamProbe               *UpstreamProbeStatus `json:"upstream_probe,omitempty"`
+	UpstreamProbeFailureSince   time.Time            `json:"upstream_probe_failure_since,omitempty"`
+	UpstreamProbeFailureVersion uint64               `json:"upstream_probe_failure_version,omitempty"`
+	ID                          string               `json:"id"`
+	GatewayID                   string               `json:"gateway_id"`
+	AgentID                     string               `json:"agent_id"`
+	UpstreamID                  string               `json:"upstream_id,omitempty"`
+	Enabled                     bool                 `json:"enabled"`
+	CreatedAt                   time.Time            `json:"created_at"`
 }
 
 type UpstreamProbeTarget struct {

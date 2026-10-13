@@ -391,7 +391,7 @@ func (s *Server) panel(w http.ResponseWriter, r *http.Request) {
 		Release:            s.releaseStatus(),
 		Deployments:        deploymentStatuses(state),
 		Enrollments:        enrollmentStatuses(state, s.now()),
-		SubscriptionCounts: subscriptionCounts(state),
+		SubscriptionCounts: subscriptionCounts(state, s.now()),
 		NodeImpacts:        nodeImpacts(state),
 		RouteImpacts:       routeImpacts(state),
 		ControllerUpgrade:  s.controllerUpgradeStatus(),
@@ -429,7 +429,7 @@ func (s *Server) subscription(w http.ResponseWriter, r *http.Request) {
 		s.hy2ClientBundle(w, r, state, userID)
 		return
 	}
-	payload, err := BuildSubscription(state, userID)
+	payload, err := buildSubscriptionAt(state, userID, s.now())
 	if err != nil {
 		http.Error(w, "subscription unavailable", http.StatusForbidden)
 		return
@@ -544,7 +544,7 @@ type panelData struct {
 	PendingConnections     []pendingConnection
 }
 
-func subscriptionCounts(state model.State) map[string]string {
+func subscriptionCounts(state model.State, now time.Time) map[string]string {
 	result := make(map[string]string, len(state.Users))
 	for _, user := range state.Users {
 		available, total := 0, 0
@@ -553,7 +553,7 @@ func subscriptionCounts(state model.State) map[string]string {
 				total++
 				attachment, ok := state.Attachments[grant.AttachmentID]
 				gateway := state.Gateways[attachment.GatewayID]
-				if ok && grant.Published && routeAvailable(&state, attachment) && (gateway.VMessEnabled() || (gateway.HY2Enabled() && state.NodeStatus[gateway.ID].HY2Ready)) {
+				if ok && grant.Published && subscriptionRouteAvailable(&state, attachment, now) && (gateway.VMessEnabled() || (gateway.HY2Enabled() && state.NodeStatus[gateway.ID].HY2Ready)) {
 					available++
 				}
 			}

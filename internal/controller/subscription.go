@@ -6,9 +6,25 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"xmesh/internal/model"
 )
+
+const upstreamSubscriptionFailureGrace = 5 * time.Minute
+
+func subscriptionRouteAvailable(state *model.State, attachment model.Attachment, now time.Time) bool {
+	if !routeAvailable(state, attachment) {
+		return false
+	}
+	if attachment.UpstreamID == "" {
+		return true
+	}
+	gateway := state.Gateways[attachment.GatewayID]
+	return attachment.UpstreamProbeFailureVersion != gateway.DesiredVersion ||
+		attachment.UpstreamProbeFailureSince.IsZero() ||
+		now.Sub(attachment.UpstreamProbeFailureSince) <= upstreamSubscriptionFailureGrace
+}
 
 func routeDisplayName(state model.State, route model.Attachment) string {
 	if route.UpstreamID != "" {
@@ -46,6 +62,10 @@ type vmessShare struct {
 }
 
 func BuildSubscription(state model.State, userID string) (string, error) {
+	return buildSubscriptionAt(state, userID, time.Now())
+}
+
+func buildSubscriptionAt(state model.State, userID string, now time.Time) (string, error) {
 	user, ok := state.Users[userID]
 	if !ok || !user.Enabled {
 		return "", fmt.Errorf("user unavailable")
@@ -62,7 +82,7 @@ func BuildSubscription(state model.State, userID string) (string, error) {
 			continue
 		}
 		attachment, ok := state.Attachments[grant.AttachmentID]
-		if !ok || !routeAvailable(&state, attachment) {
+		if !ok || !subscriptionRouteAvailable(&state, attachment, now) {
 			continue
 		}
 		gateway, gatewayOK := state.Gateways[attachment.GatewayID]

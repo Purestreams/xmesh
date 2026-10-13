@@ -357,6 +357,14 @@ func (r *Runtime) xrayPayload(config controller.GatewayConfig) ([]byte, error) {
 	return addUpstreamProbeInbound(payload, config, r.local.Gateway.UpstreamProbeListen, r.local.Credential)
 }
 
+func (r *Runtime) writeXrayConfig(config controller.GatewayConfig) error {
+	payload, err := r.xrayPayload(config)
+	if err != nil {
+		return err
+	}
+	return writeProtectedAtomic(r.local.Gateway.XrayConfigPath, payload)
+}
+
 // Validate the next config while the current Xray process is still serving.
 // A rejected revision must not trigger xrayApply and stop the working process.
 func (r *Runtime) validateXrayCandidate(ctx context.Context, config controller.GatewayConfig) error {
@@ -417,12 +425,7 @@ func (r *Runtime) xrayLoop(ctx context.Context) error {
 				continue
 			}
 		}
-		payload, err := buildXrayConfigWithStats(config, r.local.Gateway.SOCKSListen, r.local.Gateway.RealityListen, r.local.Gateway.TunnelListen, r.local.Gateway.StatsListen)
-		if err != nil {
-			r.setXray(false, err.Error())
-			return err
-		}
-		if err := writeProtectedAtomic(r.local.Gateway.XrayConfigPath, payload); err != nil {
+		if err := r.writeXrayConfig(config); err != nil {
 			r.setXray(false, err.Error())
 			return err
 		}
