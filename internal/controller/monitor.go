@@ -369,6 +369,30 @@ func (s *Server) publicMonitor(state *model.State, now time.Time) monitorPayload
 		}
 		data.Links = append(data.Links, out)
 	}
+	// External exits do not report node heartbeats of their own. Their public
+	// node state is the best state of the published routes that actually probe
+	// them; otherwise a successfully measured exit would remain "unprobed"
+	// while its matrix cells were already ready.
+	externalStateRank := map[string]int{
+		"disabled": 0,
+		"unprobed": 1,
+		"unknown":  2,
+		"offline":  3,
+		"stale":    4,
+		"pending":  5,
+		"ready":    6,
+	}
+	for i := range data.Nodes {
+		node := &data.Nodes[i]
+		if node.Role != "external" || node.State == "disabled" {
+			continue
+		}
+		for _, link := range data.Links {
+			if link.Exit == node.Key && externalStateRank[link.State] > externalStateRank[node.State] {
+				node.State = link.State
+			}
+		}
+	}
 	return data
 }
 

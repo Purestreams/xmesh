@@ -138,6 +138,41 @@ func TestMonitorAnonymousAllowlistAndAuthentication(t *testing.T) {
 	}
 }
 
+func TestMonitorExternalNodeUsesSuccessfulPublishedProbe(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0)
+	server, state := testServer(t, monitorFixture(now))
+	if err := state.Update(func(s *model.State) error {
+		route := s.Attachments["private-external-route"]
+		route.ProbeRequestID = "probe-current"
+		route.UpstreamProbe = &model.UpstreamProbeStatus{
+			AttachmentID: route.ID,
+			Revision:     s.Gateways[route.GatewayID].DesiredVersion,
+			RequestID:    route.ProbeRequestID,
+			StartedAt:    now.Add(-time.Second),
+			CompletedAt:  now,
+			Targets: []model.UpstreamProbeTarget{
+				{URL: model.UpstreamIPProbeURL, Success: true, HTTPStatus: http.StatusOK, DurationMillis: 299, ExitIP: "203.0.113.10"},
+				{URL: model.UpstreamMicrosoftProbeURL, Success: true, HTTPStatus: http.StatusOK, DurationMillis: 310},
+			},
+		}
+		s.Attachments[route.ID] = route
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	payload := readMonitor(t, server)
+	for _, node := range payload.Nodes {
+		if node.Name == "外部出口" {
+			if node.State != "ready" {
+				t.Fatalf("successfully probed external node is %q, want ready", node.State)
+			}
+			return
+		}
+	}
+	t.Fatal("external node missing")
+}
+
 func TestMonitorStatusFreshness(t *testing.T) {
 	now := time.Unix(1_800_000_000, 0)
 	server, _ := testServer(t, nil)
