@@ -18,6 +18,9 @@ type Store struct {
 	state model.State
 }
 
+// Path is the immutable location of the persisted control-plane state.
+func (s *Store) Path() string { return s.path }
+
 func Open(path string) (*Store, error) {
 	s := &Store{path: path, state: model.NewState()}
 	b, err := os.ReadFile(path)

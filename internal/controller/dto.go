@@ -1,6 +1,9 @@
 package controller
 
-import "xmesh/internal/model"
+import (
+	"xmesh/internal/audit"
+	"xmesh/internal/model"
+)
 
 type GatewayConfig struct {
 	Revision  uint64                  `json:"revision"`
@@ -11,9 +14,10 @@ type GatewayConfig struct {
 }
 
 type GatewayUpstreamConfig struct {
-	AttachmentID string              `json:"attachment_id"`
-	UpstreamID   string              `json:"upstream_id"`
-	Endpoint     model.VMessEndpoint `json:"endpoint"`
+	ProbeRequestID string              `json:"probe_request_id,omitempty"`
+	AttachmentID   string              `json:"attachment_id"`
+	UpstreamID     string              `json:"upstream_id"`
+	Endpoint       model.VMessEndpoint `json:"endpoint"`
 }
 
 type GatewayLinkConfig struct {
@@ -23,10 +27,11 @@ type GatewayLinkConfig struct {
 }
 
 type AgentConfig struct {
-	Revision uint64            `json:"revision"`
-	Agent    model.Agent       `json:"agent"`
-	Links    []AgentLinkConfig `json:"links"`
-	GrantIDs []string          `json:"grant_ids"`
+	AuditGrants map[string]audit.Policy `json:"audit_grants,omitempty"`
+	Revision    uint64                  `json:"revision"`
+	Agent       model.Agent             `json:"agent"`
+	Links       []AgentLinkConfig       `json:"links"`
+	GrantIDs    []string                `json:"grant_ids"`
 }
 
 type AgentLinkConfig struct {

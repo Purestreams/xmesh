@@ -15,11 +15,15 @@ func TestLoginRateLimitExpires(t *testing.T) {
 	server, _ := testServer(t, nil)
 	now := server.now()
 	for range 5 {
-		server.recordLoginFailure("192.0.2.1")
+		if !server.beginLoginAttempt("192.0.2.1") {
+			t.Fatal("login limited before five attempts")
+		}
+		server.finishLoginAttempt("192.0.2.1", false)
 	}
-	if !server.loginLimited("192.0.2.1") || server.loginLimited("192.0.2.2") {
+	if server.beginLoginAttempt("192.0.2.1") || !server.beginLoginAttempt("192.0.2.2") {
 		t.Fatal("rate limit not scoped to source IP")
 	}
+	server.finishLoginAttempt("192.0.2.2", false)
 	request := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader("username=admin&password=wrong"))
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	request.RemoteAddr = "192.0.2.1:12345"
@@ -29,9 +33,10 @@ func TestLoginRateLimitExpires(t *testing.T) {
 		t.Fatalf("login endpoint did not enforce limit: %d", recorder.Code)
 	}
 	server.now = func() time.Time { return now.Add(16 * time.Minute) }
-	if server.loginLimited("192.0.2.1") {
+	if !server.beginLoginAttempt("192.0.2.1") {
 		t.Fatal("rate limit did not expire")
 	}
+	server.finishLoginAttempt("192.0.2.1", false)
 }
 
 func TestPanelRendersManagementAndDeleteImpact(t *testing.T) {
@@ -50,8 +55,9 @@ func TestPanelRendersManagementAndDeleteImpact(t *testing.T) {
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("panel: %d %s", recorder.Code, recorder.Body.String())
 	}
+	text := strings.NewReplacer("<span data-i18n>", "", "</span>", "").Replace(recorder.Body.String())
 	for _, want := range []string{"删除影响：1 个节点组合、1 条 Link、1 项授权", "删除节点组合", "删除 Link", "删除授权", "刷新状态", "单独添加 Gateway", "单独添加 Agent", "线路总览"} {
-		if !strings.Contains(recorder.Body.String(), want) {
+		if !strings.Contains(text, want) {
 			t.Fatalf("panel missing %q", want)
 		}
 	}

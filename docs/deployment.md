@@ -164,10 +164,36 @@ Controller configuration saves are applied according to their effect on live tra
 - The client manages its own DNS, routing, IPv6 choice, and Gateway selection.
 - The Agent uses the host's system resolver and routing table. It does not modify either.
 - Agent target access is checked against its allow/deny CIDRs after DNS resolution. Deny rules win.
+- Client proxy traffic always blocks destination TCP ports 25, 465, 587 and 2525.
+  Gateway client ingress rules cover both Agent and external exits; the local SOCKS
+  listener and Agent TCP dialer also reject these ports before opening a stream or
+  resolving a target. Agent port allow lists cannot override this default block.
+  IPv4, IPv6 and domain targets are covered; UDP and node management/tunnel
+  connections are unaffected. This is a port restriction, not a complete email
+  sending ban: HTTPS webmail, email APIs and custom ports remain available.
+  Upgrade existing Gateways and Agents to apply it; no Controller state migration
+  or configuration change is needed.
 - A selected Agent with no healthy Link fails closed; traffic never falls back to another Agent or
   to the Gateway's own network.
 - Existing TCP streams are not replayed after tunnel loss. New streams use the remaining healthy
   Link in the best priority group.
+
+## Batch node upgrades
+
+The Controller upgrades selected nodes one at a time. After the updater confirms a
+successful process switch, the batch enters `recovering` for up to two minutes.
+The next task stays pending until every previously healthy Link has fresh, ready,
+online reports from both Gateway and Agent, received since upgrade completion.
+Node reports and updater heartbeats recheck recovery; its deadline persists across
+Controller restarts. A successful process switch remains `succeeded` while the
+batch waits for its Links.
+
+If recovery times out, the batch pauses and identifies the Link, reporting node,
+and failed condition. After fixing the Link, use **重新检查并继续** in the panel.
+This also supports Link recovery pauses saved by older Controllers. It rechecks
+all completed tasks' baseline Links before releasing the remaining tasks, without
+repeating successful upgrades. Failed, rolled-back, cancelled or expired tasks
+cannot be bypassed with this action.
 
 ## Logs and diagnosis
 

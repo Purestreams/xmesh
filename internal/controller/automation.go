@@ -2,18 +2,15 @@ package controller
 
 import (
 	"fmt"
-	"net"
 	"net/http"
 	"net/url"
 	"strings"
 
-	"xmesh/internal/auth"
 	"xmesh/internal/identity"
 	"xmesh/internal/model"
 )
 
-// assignGateways creates missing Agent/Gateway routes in one state transaction.
-// Existing routes are never silently re-enabled or modified.
+// assignGateways creates or re-enables only the selected Agent/Gateway routes.
 func (s *Server) assignGateways(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, "invalid form", http.StatusBadRequest)
@@ -29,93 +26,21 @@ func (s *Server) assignGateways(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	target := strings.TrimSpace(r.FormValue("reality_target"))
-	seen := map[string]bool{}
-	created, reenabled, unchanged := 0, 0, 0
+	pairs := make([]connectionPair, 0, len(selected))
+	for _, gatewayID := range selected {
+		pairs = append(pairs, connectionPair{AgentID: agentID, GatewayID: gatewayID})
+	}
+	var counts connectionCounts
 	err := s.store.Update(func(state *model.State) error {
-		agent, ok := state.Agents[agentID]
-		if !ok || !agent.Enabled {
-			return fmt.Errorf("Agent unavailable")
-		}
-		for _, gatewayID := range selected {
-			if seen[gatewayID] {
-				continue
-			}
-			seen[gatewayID] = true
-			routeReenabled := false
-			gateway, ok := state.Gateways[gatewayID]
-			if !ok || !gateway.Enabled || gateway.PublicHost == "" {
-				return fmt.Errorf("Gateway %s unavailable", gatewayID)
-			}
-			attachmentID := ""
-			for _, attachment := range state.Attachments {
-				if attachment.AgentID == agentID && attachment.GatewayID == gatewayID {
-					if !attachment.Enabled {
-						attachment.Enabled = true
-						state.Attachments[attachment.ID] = attachment
-						bumpGateway(state, gatewayID)
-						bumpAgent(state, agentID)
-						routeReenabled = true
-					}
-					attachmentID = attachment.ID
-					break
-				}
-			}
-			if attachmentID != "" {
-				hasExistingLink := false
-				for id, link := range state.Links {
-					if link.AttachmentID == attachmentID {
-						hasExistingLink = true
-						if !link.Enabled {
-							link.Enabled = true
-							state.Links[id] = link
-							bumpGateway(state, gatewayID)
-							bumpAgent(state, agentID)
-							routeReenabled = true
-						}
-						break
-					}
-				}
-				if hasExistingLink {
-					if routeReenabled {
-						reenabled++
-					} else {
-						unchanged++
-					}
-					continue
-				}
-			} else {
-				var err error
-				attachmentID, err = newID("node")
-				if err != nil {
-					return err
-				}
-				state.Attachments[attachmentID] = model.Attachment{ID: attachmentID, AgentID: agentID, GatewayID: gatewayID, Enabled: true, CreatedAt: s.now().UTC()}
-			}
-			linkID, err := newID("lnk")
-			if err != nil {
-				return err
-			}
-			linkURL := "reality://" + net.JoinHostPort(gateway.PublicHost, "8443") + "/tunnel"
-			linkTarget := target
-			if gateway.RealityTarget != "" {
-				linkTarget = gateway.RealityTarget
-			}
-			uuid, shortID, err := provisionReality(state, gatewayID, linkTarget, linkURL)
-			if err != nil {
-				return fmt.Errorf("Gateway %s: %w", gateway.Name, err)
-			}
-			state.Links[linkID] = model.Link{ID: linkID, AttachmentID: attachmentID, Name: gateway.Name + " / " + agent.Name, URL: linkURL, TLSVerify: true, RealityUUID: uuid, RealityShortID: shortID, Priority: 10, Weight: 1, Connections: 2, MaxStreams: 256, Enabled: true, TunnelTokenHash: auth.SecretHash(auth.Derive(s.cfg.sessionKey(), "tunnel", linkID)), CreatedAt: s.now().UTC()}
-			created++
-			bumpGateway(state, gatewayID)
-			bumpAgent(state, agentID)
-		}
-		return nil
+		var err error
+		counts, err = s.enableConnections(state, pairs, target)
+		return err
 	})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	http.Redirect(w, r, "/?notice="+url.QueryEscape(fmt.Sprintf("Gateway assignment: %d created, %d re-enabled, %d already active", created, reenabled, unchanged)), http.StatusSeeOther)
+	http.Redirect(w, r, "/?notice="+url.QueryEscape(fmt.Sprintf("Gateway assignment: %d created, %d re-enabled, %d already active", counts.Created, counts.Reenabled, counts.Unchanged)), http.StatusSeeOther)
 }
 
 // openSubscription grants only the routes selected by the administrator.

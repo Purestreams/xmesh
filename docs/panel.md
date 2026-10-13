@@ -1,10 +1,26 @@
-# Control center (v0.3.8)
+# Control center (v0.4.0)
 
 The Controller embeds its HTML, CSS and JavaScript; no frontend service, CDN or
 production Node.js runtime is required. Existing management POST endpoints and
 CSRF checks remain in use. JavaScript enables five navigation sections, drawers
 for details, collapsed creation and advanced forms, search, topology and matrix
 views. Basic forms remain usable with JavaScript disabled.
+
+## Interface language
+
+The sign-in page, control center, public monitor and monitor settings support
+Chinese and English. On the first visit, the browser's primary language selects
+Chinese for `zh-*` locales and English otherwise. Use the language selector in
+the header to switch. An explicit choice is stored in `localStorage` under
+`xmesh.language` and takes precedence on later visits to the same origin. When
+local storage is unavailable, a language preference cookie provides a fallback.
+Switching reloads the current page; save pending edits first. Node names, public
+aliases, addresses, credentials and installation commands keep their original
+values. Dates use the selected language and the browser's local time zone.
+
+Run `node --test tests/i18n.test.cjs` for locale and translation checks. For browser
+checks, start `TestPanelBrowserFixture` on port 18088 and `TestMonitorBrowserFixture`
+on port 18090, then run `node tests/i18n.browser.cjs` with Playwright on `NODE_PATH`.
 
 ## Anonymous network monitor
 
@@ -36,8 +52,9 @@ not latency from the visitor's device or a complete proxy end-to-end test.
 Both nodes must be online, ready and have applied their configuration, Gateway
 Xray must be ready, and both endpoints must report the Link ready. Expired node,
 Link or successful-probe timestamps suppress current RTT. Missing/invalid RTT is
-shown as a dash, not zero. External exits are labeled **未探测** and have no
-fabricated RTT or reachability assertion. History is sampled about every five
+shown as a dash, not zero. External routes remain **未探测** until their Gateway
+reports a completed HTTPS probe. Their latency is the request time to IP.SB
+through the selected upstream. History is sampled about every five
 minutes; unavailable samples and long gaps are not joined in the chart.
 
 The browser refreshes every 15 seconds. Failures mark displayed live data stale;
@@ -79,6 +96,16 @@ Advanced ports, CIDRs and transport settings remain editable. For existing nodes
 choose an Agent and Gateways; missing associations and Links are created by the
 existing transactional assignment handler. An unassigned matrix cell preselects
 this pair. Installation commands are generated from each created node.
+
+In **连接已有节点**, the **全部未开启连接** tab lists missing, disabled, or
+Link-less pairs across all Agents and Gateways. Active pairs are excluded even
+when offline. Search and Agent/Gateway filters narrow the list; **全选筛选结果**
+selects visible available pairs and **清除选择** clears all selections, including
+hidden ones. Disabled nodes and Gateways without public addresses cannot be
+selected. **开启所选连接** creates or re-enables the selected pairs in one atomic
+transaction, preserving existing targets and Link settings. Missing targets
+require manual entry. Refresh preserves pending selections; submission leaves
+the tab open and removes enabled pairs from the list. User grants are separate.
 
 For an external exit, use **外部出口** on the network page.
 Paste a single `vmess://` or `vless://` link, or a subscription URL. A subscription with several
@@ -148,7 +175,75 @@ nodes and a fixed release version to create a serial batch. The Controller
 prepares and checks each release archive before a helper can claim its task.
 Pending tasks may be cancelled; a claimed task completes or rolls back.
 
+## Per-user audit
+
+Open **用户与订阅 → 用户审计 → 查看与设置审计** to enable auditing for
+one user. It is off by default and applies to that user's Agent grants across
+all Gateways, Agents and Links. Settings apply through the existing node polling
+without disconnecting traffic. Only new events are recorded; disabling retains
+history. Clearing invalidates queued events before removing only that user's logs.
+
+Records include UTC time, trusted User/Grant identity, original target host and
+port, actual connected IP, exit/Link, result or failure reason, connection duration
+and payload upload/download bytes. Agent DNS resolution records include returned
+IPs and resolution duration. TCP records distinguish attempts, successful connects,
+failures/denials and closed connections. Duration and final byte totals are written
+when a connection closes. Existing connections are not backfilled. TCP targets
+blocked at Xray ingress are not visible to the Agent audit collector.
+
+Logs are stored separately from Controller state, under `audit/<UserID>/` beside
+the state file; `audit_dir` can override this root. The default per-user limit is
+20 MB (20,000,000 bytes), shared by current JSONL logs and all gzip archives across
+that user's exits. The admin can set 1–1024 MB. Segments rotate at approximately
+1 MiB, compress automatically, and oldest archives are removed to enforce the
+quota; at most 64 archives are retained. View the latest 200 matching records,
+filter by target/port/result, download all retained records as gzip, or clear them.
+All endpoints require administrator authentication; changes require CSRF tokens.
+
+The last 60 seconds of received events are combined by user. Alerts indicate
+120 connection attempts, 30 failures/denials, 30 distinct targets or 20 distinct
+ports. Counts are bounded at 128 distinct targets/ports and reset with the
+Controller. Closed events and DNS records do not inflate TCP attempt counts.
+These are indicators, not proof of an attack, and never automatically block users.
+
+Agent collection uses a bounded 2,048-event memory queue, with batches of up to
+256 events each second. Overflow and failed reports are counted as lost events;
+there is no disk spool or event retry. Loss counts are reported when connectivity
+returns and retained in Controller memory until restart/clear. Logging failures
+do not block proxy traffic. Audit history and lost-event counts can be incomplete
+after process crashes or outages.
+
+External exits' final DNS and TCP connections, client-local DNS, encrypted DNS
+query contents and UDP traffic are not covered. DNS lookups do not prove access.
+The page warns when the user has external exit grants. Gateway Xray access logging
+is explicitly disabled; regular operational warning/error logs remain separate.
+Upgrade Controller and Agent to use the audit feature; upgrade Gateway to apply
+the access-log setting. No existing users are enabled automatically.
+
+Browser checks: start `TestUserAuditBrowserFixture` with
+`XMESH_AUDIT_BROWSER_ADDR=127.0.0.1:18093`, then run
+`node tests/audit.browser.cjs` with Playwright on `NODE_PATH`.
+
 ## Verification
+
+External routes have a **测试连接** button on the external-exit page and route
+cards. The corresponding Gateway uses an authenticated loopback SOCKS listener
+in its running Xray process to select that exact upstream, independently of user
+grants. It requests IP.SB's HTTPS IP API and Microsoft's HTTPS homepage, verifies
+TLS, and shows each site's status, HTTP request time, error, and the exit IP.
+The route is verified only when both checks succeed.
+
+Tests run once after the Gateway applies a configuration and then every five
+minutes by default. Set the Gateway's local `upstream_probe_interval` (for
+example `"5m"`) to change this interval. `upstream_probe_listen` defaults to
+`127.0.0.1:18083` and must remain on loopback. Manual requests do not restart
+Xray. Results from older configurations or superseded requests are ignored.
+Probe traffic is excluded from user usage counters. Upgrade both Controller and
+Gateway to enable the feature; older Gateways show an upgrade hint.
+
+For external routes, the public monitor's latency and history measure the
+Gateway-to-IP.SB HTTPS request through the selected upstream, rather than ICMP
+RTT. Microsoft's separate result and timing remain visible in the admin panel.
 
 ```sh
 go test ./...

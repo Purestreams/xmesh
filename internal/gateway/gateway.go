@@ -26,6 +26,9 @@ import (
 )
 
 type Runtime struct {
+	probeMu             sync.Mutex
+	probeResults        map[string]model.UpstreamProbeStatus
+	probeJobs           map[string]upstreamProbeJob
 	local               runtimecfg.Config
 	client              *nodeclient.Client
 	logger              *slog.Logger
@@ -74,6 +77,9 @@ type authorizedConnection struct {
 const pendingStatsLifetime = 7 * 24 * time.Hour
 
 func New(local runtimecfg.Config, logger *slog.Logger) *Runtime {
+	if local.Gateway.UpstreamProbeListen == "" {
+		local.Gateway.UpstreamProbeListen = "127.0.0.1:18083"
+	}
 	return &Runtime{local: local, client: nodeclient.New(local.ControllerURL, local.Credential), logger: logger, pool: scheduler.New(), started: time.Now(), xrayApply: make(chan struct{}, 1), grantStats: map[string]*grantCounters{}, grantLinks: map[string]map[string]*grantCounters{}, pendingStats: map[uint64]pendingStatsConfig{}, authorizationUntil: time.Now().Add(nodeclient.ConfigLease), activeConnections: map[net.Conn]authorizedConnection{}}
 }
 
@@ -82,6 +88,7 @@ func (r *Runtime) Run(ctx context.Context) error {
 		return fmt.Errorf("initial controller config: %w", err)
 	}
 	go r.watchAuthorization(ctx)
+	go r.upstreamProbeLoop(ctx)
 	errCh := make(chan error, 4)
 	go func() { errCh <- r.runTunnelServer(ctx) }()
 	go func() { errCh <- r.runSOCKS(ctx) }()
@@ -401,8 +408,10 @@ func (r *Runtime) report(ctx context.Context) error {
 	}
 	nodeStatus := model.NodeStatus{NodeID: r.local.NodeID, Role: model.RoleGateway, BinaryVersion: r.local.BinaryVersion, InstanceID: r.local.InstanceID, Online: true, Ready: ready, DesiredVersion: config.Revision, AppliedVersion: r.xrayAppliedRevision.Load(), XrayReady: r.xrayReady.Load(), XrayError: xrayError, ExternalUpstreams: true, LastSeen: time.Now().UTC(), TunnelConnections: tunnelCount, TCPConnections: int(r.tcpConnections.Load()), UDPAssociations: int(r.udpAssociations.Load()), UploadBytes: upload, DownloadBytes: download, LastError: lastError, FailureCounters: map[string]uint64{"udp_queue_drops": r.udpQueueDrops.Load()}}
 	nodeStatus.IngressControls = true
+	nodeStatus.UpstreamProbes = true
+	nodeStatus.UpstreamProbeIntervalSeconds = int64(r.local.Gateway.UpstreamProbeInterval.Value(5*time.Minute) / time.Second)
 	nodeStatus.HY2Ready = nodeStatus.XrayReady && activeXrayConfig.Gateway.HY2Enabled() && nodeStatus.AppliedVersion == config.Revision
-	if err := r.client.Report(ctx, nodeStatus, linkList, grantList); err != nil {
+	if err := r.client.Report(ctx, nodeStatus, linkList, grantList, r.upstreamProbeSnapshot(config)); err != nil {
 		if nodeclient.AuthorizationRejected(err) {
 			r.invalidateAuthorization()
 		}

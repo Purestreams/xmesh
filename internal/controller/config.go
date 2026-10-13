@@ -13,6 +13,7 @@ import (
 )
 
 type Config struct {
+	AuditDir                    string `json:"audit_dir,omitempty"`
 	Listen                      string `json:"listen"`
 	PublicURL                   string `json:"public_url"`
 	StatePath                   string `json:"state_path"`

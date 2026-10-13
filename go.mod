@@ -1,16 +1,14 @@
 module xmesh
 
-go 1.27.0
-
-toolchain go1.27.1
+go 1.27.2
 
 require (
 	github.com/apernet/quic-go v0.61.1-0.20260806010916-184d081eef3e
 	github.com/coder/websocket v1.8.15
 	github.com/xtaci/smux v1.5.57
 	github.com/xtls/xray-core v1.260327.1-0.20260908222543-52a412d9e2f5
-	golang.org/x/crypto v0.55.0
-	golang.org/x/sys v0.47.0
+	golang.org/x/crypto v0.57.0
+	golang.org/x/sys v0.48.0
 	google.golang.org/grpc v1.83.2
 )
 
@@ -49,9 +47,9 @@ require (
 	github.com/xtls/reality v0.0.0-20260908062103-8cdf7bf9c7f0 // indirect
 	go4.org/netipx v0.0.0-20231129151722-fdeea329fbba // indirect
 	golang.org/x/exp v0.0.0-20240506185415-9bf2ced13842 // indirect
-	golang.org/x/net v0.58.0 // indirect
-	golang.org/x/sync v0.22.0 // indirect
-	golang.org/x/text v0.41.0 // indirect
+	golang.org/x/net v0.60.0 // indirect
+	golang.org/x/sync v0.23.0 // indirect
+	golang.org/x/text v0.42.0 // indirect
 	golang.org/x/time v0.14.0 // indirect
 	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2 // indirect
 	golang.zx2c4.com/wireguard v0.0.0-20250521234502-f333402bd9cb // indirect

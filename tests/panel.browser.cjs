@@ -11,7 +11,7 @@ const fs = require("node:fs");
   });
   try {
     const page = await browser.newPage({
-        viewport: { width: 1440, height: 1100 },
+        locale: "zh-CN", viewport: { width: 1440, height: 1100 },
       }),
       errors = [];
     let expectedInvalid = false;
@@ -26,15 +26,15 @@ const fs = require("node:fs");
     });
     const base = process.env.XMESH_PANEL_TEST_URL || "http://127.0.0.1:18088";
     await page.goto(base + "/login");
-    await page.getByLabel("Username").fill("admin");
-    await page.getByLabel("Password").fill("a-strong-test-password");
-    await page.getByRole("button", { name: "Sign in", exact: true }).click();
+    await page.getByLabel("用户名").fill("admin");
+    await page.getByLabel("密码").fill("a-strong-test-password");
+    await page.getByRole("button", { name: "登录", exact: true }).click();
     await page.waitForFunction(() =>
       document.querySelector("#refresh-note").textContent.startsWith("已更新"),
     );
     await page.locator("#metrics .metric").first().waitFor();
     assert.equal(await page.locator("section[data-page]:visible").count(), 4);
-    assert.equal(await page.locator("#topology svg .node").count(), 5);
+    assert.equal(await page.locator("#topology svg .node").count(), 4);
     assert.equal(await page.locator("#topology svg .route-label").count(), 0);
     assert.equal(await page.locator("#topology .topology-routes tbody tr").count(), 2);
     assert.match(await page.locator("#topology .topology-routes tbody tr").first().textContent(), /35\.0 ms/);
@@ -80,7 +80,7 @@ const fs = require("node:fs");
       await page.locator("#assign input[type=checkbox]:checked").count(),
       0,
     );
-    assert.ok(await page.locator("#assign button[type=submit]").isDisabled());
+    assert.ok(await page.locator("#assign-agent-panel button[type=submit]").isDisabled());
     await page.goto(base + "/#subscribe");
     await page.locator("#subscribe .selection-summary").waitFor();
     await page.locator("#subscribe select[name=user_id]").selectOption("u2");
@@ -91,7 +91,7 @@ const fs = require("node:fs");
     assert.equal(await page.locator("#subscribe input:checked").count(), 2);
     await page.locator("#subscribe button[type=submit]").click();
     await page.waitForFunction(() =>
-      document.querySelector("#notice").textContent.includes("2 created"),
+      document.querySelector("#notice").textContent.includes("新增 2"),
     );
     assert.equal(await page.locator("#grants tbody tr").count(), 3);
     await page
@@ -100,7 +100,7 @@ const fs = require("node:fs");
       .click();
     await page.locator("#subscribe button[type=submit]").click();
     await page.waitForFunction(() =>
-      document.querySelector("#notice").textContent.includes("already active"),
+      document.querySelector("#notice").textContent.includes("已开启"),
     );
     assert.equal(await page.locator("#grants tbody tr").count(), 3);
     await page.goto(base + "/#users");

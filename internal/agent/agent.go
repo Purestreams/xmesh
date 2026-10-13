@@ -7,8 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net"
 	"net/http"
+	"net/netip"
 	"sort"
 	"strconv"
 	"strings"
@@ -19,6 +21,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/xtaci/smux"
 
+	"xmesh/internal/audit"
 	"xmesh/internal/controller"
 	"xmesh/internal/model"
 	"xmesh/internal/nodeclient"
@@ -28,6 +31,9 @@ import (
 )
 
 type Runtime struct {
+	auditQueue         chan audit.Event
+	auditMu            sync.Mutex
+	auditDrops         map[auditDropKey]uint64
 	local              runtimecfg.Config
 	client             *nodeclient.Client
 	logger             *slog.Logger
@@ -63,7 +69,7 @@ func New(local runtimecfg.Config, logger *slog.Logger) *Runtime {
 	if limit <= 0 {
 		limit = 1024
 	}
-	return &Runtime{local: local, client: nodeclient.New(local.ControllerURL, local.Credential), logger: logger, workers: map[string]context.CancelFunc{}, activeStreams: map[*smux.Stream]*streamAuthorization{}, statuses: map[string]*linkRuntimeStatus{}, realities: map[string]*realityCore{}, streamSlots: make(chan struct{}, limit), authorizationUntil: time.Now().Add(nodeclient.ConfigLease)}
+	return &Runtime{local: local, client: nodeclient.New(local.ControllerURL, local.Credential), logger: logger, workers: map[string]context.CancelFunc{}, activeStreams: map[*smux.Stream]*streamAuthorization{}, statuses: map[string]*linkRuntimeStatus{}, realities: map[string]*realityCore{}, streamSlots: make(chan struct{}, limit), authorizationUntil: time.Now().Add(nodeclient.ConfigLease), auditQueue: make(chan audit.Event, audit.QueueSize), auditDrops: map[auditDropKey]uint64{}}
 }
 
 func (r *Runtime) Run(ctx context.Context) error {
@@ -71,6 +77,7 @@ func (r *Runtime) Run(ctx context.Context) error {
 		return fmt.Errorf("initial controller config: %w", err)
 	}
 	r.reconcile(ctx)
+	go r.auditLoop(ctx)
 	go r.watchAuthorization(ctx)
 	poll := time.NewTicker(r.local.PollInterval.Value(15 * time.Second))
 	defer poll.Stop()
@@ -133,6 +140,7 @@ func (r *Runtime) applyConfig(config controller.AgentConfig, epoch uint64) error
 	config.Agent.AllowedCIDRs = append([]string(nil), config.Agent.AllowedCIDRs...)
 	config.Agent.DeniedCIDRs = append([]string(nil), config.Agent.DeniedCIDRs...)
 	config.Agent.AllowedPorts = append([]int(nil), config.Agent.AllowedPorts...)
+	config.AuditGrants = maps.Clone(config.AuditGrants)
 	config.Links = append([]controller.AgentLinkConfig(nil), config.Links...)
 	for i := range config.Links {
 		config.Links[i].GrantIDs = append([]string(nil), config.Links[i].GrantIDs...)
@@ -420,10 +428,18 @@ func (r *Runtime) handleStream(ctx context.Context, linkID string, stream *smux.
 }
 
 func (r *Runtime) handleTCP(ctx context.Context, linkID string, stream *smux.Stream, policy accessPolicy, request protocol.Message) {
+	trace := r.newAuditTrace(linkID, request)
+	started := time.Now()
+	trace.emit(audit.Event{Kind: "tcp", Result: "attempt"})
 	dialCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	target, err := policy.dialTCP(dialCtx, request.Host, request.Port)
+	target, err := policy.dialTCPObserved(dialCtx, request.Host, request.Port, trace.observeDNS)
 	if err != nil {
+		result := "failed"
+		if strings.Contains(err.Error(), "denied") || strings.Contains(err.Error(), "not allowed") {
+			result = "denied"
+		}
+		trace.emit(audit.Event{Kind: "tcp", Result: result, Reason: err.Error(), ConnectMS: time.Since(started).Milliseconds()})
 		_ = protocol.WriteMessage(stream, protocol.Message{Type: protocol.TypeResponse, Version: protocol.Version, ErrorCode: classifyTargetError(err), Error: err.Error()})
 		return
 	}
@@ -440,8 +456,20 @@ func (r *Runtime) handleTCP(ctx context.Context, linkID string, stream *smux.Str
 	}
 	r.mu.Unlock()
 	if !valid {
+		trace.emit(audit.Event{Kind: "tcp", Result: "denied", Reason: "authorization or target policy changed", ConnectMS: time.Since(started).Milliseconds()})
 		return
 	}
+	connected := time.Now()
+	ip := address.IP.String()
+	trace.emit(audit.Event{Kind: "tcp", Result: "connected", IP: ip, ConnectMS: connected.Sub(started).Milliseconds()})
+	var up, down uint64
+	defer func() {
+		reason := ""
+		if ctx.Err() != nil {
+			reason = ctx.Err().Error()
+		}
+		trace.emit(audit.Event{Kind: "tcp", Result: "closed", IP: ip, Reason: reason, ConnectMS: connected.Sub(started).Milliseconds(), DurationMS: time.Since(connected).Milliseconds(), UploadBytes: up, DownloadBytes: down})
+	}()
 	stopCancellation := context.AfterFunc(ctx, func() {
 		_ = target.Close()
 		_ = stream.Close()
@@ -454,7 +482,7 @@ func (r *Runtime) handleTCP(ctx context.Context, linkID string, stream *smux.Str
 		return
 	}
 	_ = stream.SetDeadline(time.Time{})
-	relay.Bidirectional(stream, target, func(n int) { r.addTraffic(linkID, uint64(n), 0) }, func(n int) { r.addTraffic(linkID, 0, uint64(n)) }, relay.Options{WriteStallTimeout: r.local.WriteStallTimeout.Value(30 * time.Second)})
+	relay.Bidirectional(stream, target, func(n int) { up += uint64(n); r.addTraffic(linkID, uint64(n), 0) }, func(n int) { down += uint64(n); r.addTraffic(linkID, 0, uint64(n)) }, relay.Options{WriteStallTimeout: r.local.WriteStallTimeout.Value(30 * time.Second)})
 }
 
 func (r *Runtime) handleUDP(ctx context.Context, linkID string, stream *smux.Stream, policy accessPolicy, request protocol.Message) {
@@ -483,11 +511,15 @@ func (r *Runtime) handleUDP(ctx context.Context, linkID string, stream *smux.Str
 			if !r.grantAllowed(linkID, request.GrantID) {
 				return
 			}
-			target, err := policy.udpAddress(ctx, datagram.Host, datagram.Port)
+			dnsRequest := request
+			dnsRequest.Host, dnsRequest.Port = datagram.Host, datagram.Port
+			trace := r.newAuditTrace(linkID, dnsRequest)
+			addresses, err := policy.resolveObserved(ctx, datagram.Host, datagram.Port, trace.observeDNS)
 			if err != nil {
 				r.logger.Warn("agent UDP target denied", "link", linkID, "target", net.JoinHostPort(datagram.Host, fmt.Sprint(datagram.Port)), "error", err)
 				continue
 			}
+			target := net.UDPAddrFromAddrPort(netip.AddrPortFrom(addresses[0], uint16(datagram.Port)))
 			if _, err = socket.WriteToUDP(datagram.Payload, target); err != nil {
 				r.logger.Warn("agent UDP target write failed", "link", linkID, "bytes", len(datagram.Payload), "error", err)
 				return

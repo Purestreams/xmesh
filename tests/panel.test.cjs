@@ -6,6 +6,7 @@ const {
   formatBytes,
   formatRate,
   defaultRealityTarget,
+  pendingConnectionCandidates,
 } = require("../internal/controller/panel.js");
 
 test("REALITY defaults follow the explicitly selected Gateway region", () => {
@@ -79,6 +80,41 @@ test("traffic uses explicit binary units and missing values stay unknown", () =>
   assert.equal(formatBytes(null), "—");
   assert.equal(formatBytes(0), "0 B");
   assert.equal(formatRate(0.25), "0.25 B/s");
+});
+test("pending connections span all agents and exclude active pairs regardless of reachability", () => {
+  const data = {
+    nodes: [
+      { id: "g1", role: "Gateway", host: "cn.example", enabled: true, region: "cn" },
+      { id: "g2", role: "Gateway", host: "overseas.example", enabled: true, region: "overseas", target: "custom.example:443" },
+      { id: "off", role: "Gateway", enabled: false },
+      { id: "a1", role: "Agent", enabled: true },
+      { id: "a2", role: "Agent", enabled: true },
+      { id: "exit", role: "External exit", enabled: true },
+    ],
+    routes: [
+      { id: "active", agent_id: "a1", gateway_id: "g1", assignment_enabled: true, enabled: true, state: "offline" },
+      { id: "disabled", agent_id: "a1", gateway_id: "g2", assignment_enabled: false, enabled: false },
+      { id: "node-off", agent_id: "a1", gateway_id: "off", assignment_enabled: true, enabled: false },
+      { id: "external", upstream_id: "exit", gateway_id: "g1", enabled: false },
+    ],
+    links: [
+      { route_id: "active", enabled: true },
+      { route_id: "disabled", enabled: false },
+      { route_id: "node-off", enabled: true },
+    ],
+  };
+  const candidates = pendingConnectionCandidates(data);
+  assert.equal(candidates.length, 4);
+  assert.equal(candidates.filter((c) => c.available).length, 3);
+  assert.ok(candidates.every((c) => c.agent.role === "Agent"));
+  assert.equal(candidates.find((c) => c.gateway.id === "g1").target, "api.bilibili.com:443");
+  const disabled = candidates.find((c) => c.agent.id === "a1" && c.gateway.id === "g2");
+  assert.equal(disabled.action, "reenabled");
+  assert.equal(disabled.target, "custom.example:443");
+  assert.deepEqual(JSON.parse(disabled.value), ["a1", "g2"]);
+  assert.ok(!candidates.some((c) => c.agent.id === "a1" && ["g1", "off"].includes(c.gateway.id)));
+  data.nodes[0].region = "";
+  assert.ok(pendingConnectionCandidates(data).find((c) => c.gateway.id === "g1").needsTarget);
 });
 test("link rate survives tunnel generation changes but not process restarts", () => {
   const points = [sample(0, 100, 1), sample(5, 700, 2), sample(10, 50, 1)];

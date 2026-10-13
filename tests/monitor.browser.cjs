@@ -11,7 +11,7 @@ const fs = require("node:fs");
   const secrets = ["private-", "192.0.2.42", "203.0.113.5", "192.168.0.0", "123456789"];
   const errors = [];
   try {
-    const context = await browser.newContext({viewport: {width: 1440, height: 1050}});
+    const context = await browser.newContext({locale: "zh-CN", viewport: {width: 1440, height: 1050}});
     const page = await context.newPage();
     page.on("pageerror", (error) => errors.push(error.message));
     const responses = [];
@@ -67,12 +67,12 @@ const fs = require("node:fs");
     await context.close();
 
     // A separate admin context is the only one that receives operational names.
-    const admin = await browser.newPage({viewport: {width: 1440, height: 1050}});
+    const admin = await browser.newPage({locale: "zh-CN", viewport: {width: 1440, height: 1050}});
     await admin.goto(base + "/admin/monitor");
     assert.match(admin.url(), /\/login$/);
-    await admin.getByLabel("Username").fill("admin");
-    await admin.getByLabel("Password").fill("a-strong-test-password");
-    await admin.getByRole("button", {name: "Sign in", exact: true}).click();
+    await admin.getByLabel("用户名").fill("admin");
+    await admin.getByLabel("密码").fill("a-strong-test-password");
+    await admin.getByRole("button", {name: "登录", exact: true}).click();
     await admin.goto(base + "/admin/monitor");
     await admin.getByRole("heading", {name: "公开监控设置", exact: true}).waitFor();
     assert.match(await admin.locator("body").textContent(), /192\.0\.2\.42/);
@@ -87,7 +87,7 @@ const fs = require("node:fs");
     assert.equal(await admin.locator('input[name="show_link_private-link"]').isChecked(), true);
     assert.equal(await admin.locator('input[name="link_private-link"]').inputValue(), "");
     await admin.screenshot({path: out + "/settings.png", fullPage: true});
-    const anonymous = await browser.newPage();
+    const anonymous = await browser.newPage({locale: "zh-CN"});
     await anonymous.goto(base + "/monitor");
     await anonymous.getByText("香港入口 A", {exact: true}).first().waitFor();
     await anonymous.getByText("香港入口 A → 东京出口", {exact: true}).first().waitFor();

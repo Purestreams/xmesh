@@ -29,7 +29,12 @@ func sampleLinkHistory(state *model.State, status model.LinkStatus, now time.Tim
 
 func pruneLinkHistory(state *model.State, now time.Time) {
 	for id, samples := range state.LinkHistory {
-		if _, exists := state.Links[id]; !exists {
+		_, exists := state.Links[id]
+		if strings.HasPrefix(id, "external:") {
+			attachment, ok := state.Attachments[strings.TrimPrefix(id, "external:")]
+			exists = ok && attachment.UpstreamID != ""
+		}
+		if !exists {
 			delete(state.LinkHistory, id)
 			continue
 		}
@@ -58,13 +63,18 @@ type dashboardNode struct {
 	Next          string           `json:"next"`
 }
 type dashboardRoute struct {
-	ID         string `json:"id"`
-	GatewayID  string `json:"gateway_id"`
-	AgentID    string `json:"agent_id"`
-	UpstreamID string `json:"upstream_id,omitempty"`
-	Enabled    bool   `json:"enabled"`
-	Selectable bool   `json:"selectable"`
-	State      string `json:"state"`
+	Probe                *model.UpstreamProbeStatus `json:"probe,omitempty"`
+	ProbeSupported       bool                       `json:"probe_supported,omitempty"`
+	CanProbe             bool                       `json:"can_probe,omitempty"`
+	ProbeIntervalSeconds int64                      `json:"probe_interval_seconds,omitempty"`
+	ID                   string                     `json:"id"`
+	GatewayID            string                     `json:"gateway_id"`
+	AgentID              string                     `json:"agent_id"`
+	UpstreamID           string                     `json:"upstream_id,omitempty"`
+	Enabled              bool                       `json:"enabled"`
+	AssignmentEnabled    bool                       `json:"assignment_enabled"`
+	Selectable           bool                       `json:"selectable"`
+	State                string                     `json:"state"`
 }
 type dashboardLink struct {
 	ID      string           `json:"id"`
@@ -149,8 +159,20 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 				stage = "pending"
 			case upstream.Endpoint.UUID != "" && status.AppliedVersion >= gateway.DesiredVersion && status.Ready && status.XrayReady && status.XrayError == "":
 				stage = "configured"
+				if probe := currentUpstreamProbe(&state, route); probe != nil {
+					switch {
+					case probe.CompletedAt.IsZero():
+						stage = "testing"
+					case s.now().Sub(probe.CompletedAt) > upstreamProbeFreshness(status):
+						stage = "configured"
+					case probe.Successful():
+						stage = "ready"
+					default:
+						stage = "probe_failed"
+					}
+				}
 			}
-			data.Routes = append(data.Routes, dashboardRoute{ID: route.ID, GatewayID: route.GatewayID, UpstreamID: route.UpstreamID, Enabled: route.Enabled && upstream.Enabled && gateway.Enabled, Selectable: routeAvailable(&state, route), State: stage})
+			data.Routes = append(data.Routes, dashboardRoute{ID: route.ID, GatewayID: route.GatewayID, UpstreamID: route.UpstreamID, Enabled: route.Enabled && upstream.Enabled && gateway.Enabled, AssignmentEnabled: route.Enabled, Selectable: routeAvailable(&state, route), State: stage, Probe: currentUpstreamProbe(&state, route), ProbeSupported: status.UpstreamProbes, ProbeIntervalSeconds: status.UpstreamProbeIntervalSeconds, CanProbe: status.UpstreamProbes && status.Online && route.Enabled && gateway.Enabled && upstreamAvailable(&state, route)})
 			continue
 		}
 		enabled := route.Enabled && state.Gateways[route.GatewayID].Enabled && state.Agents[route.AgentID].Enabled
@@ -176,7 +198,7 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
-		data.Routes = append(data.Routes, dashboardRoute{ID: route.ID, GatewayID: route.GatewayID, AgentID: route.AgentID, Enabled: enabled, Selectable: selectable, State: stage})
+		data.Routes = append(data.Routes, dashboardRoute{ID: route.ID, GatewayID: route.GatewayID, AgentID: route.AgentID, Enabled: enabled, AssignmentEnabled: route.Enabled, Selectable: selectable, State: stage})
 	}
 	summaries := summarizeLinks(state)
 	for _, link := range sortedLinks(state) {

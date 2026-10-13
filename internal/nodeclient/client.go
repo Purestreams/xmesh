@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"xmesh/internal/audit"
 	"xmesh/internal/controller"
 	"xmesh/internal/model"
 )
@@ -52,8 +53,16 @@ func FetchAgent(ctx context.Context, client *Client) (controller.AgentConfig, er
 	return result, err
 }
 
-func (c *Client) Report(ctx context.Context, status model.NodeStatus, links []model.LinkStatus, grants []model.GrantStatus) error {
-	return c.postJSON(ctx, "/api/v1/status", controller.StatusReport{Status: status, Links: links, Grants: grants}, nil)
+func (c *Client) Report(ctx context.Context, status model.NodeStatus, links []model.LinkStatus, grants []model.GrantStatus, probes ...[]model.UpstreamProbeStatus) error {
+	report := controller.StatusReport{Status: status, Links: links, Grants: grants}
+	if len(probes) > 0 {
+		report.UpstreamProbes = probes[0]
+	}
+	return c.postJSON(ctx, "/api/v1/status", report, nil)
+}
+
+func (c *Client) ReportAudit(ctx context.Context, batch audit.Batch) error {
+	return c.postJSON(ctx, "/api/v1/audit", batch, nil)
 }
 
 func (c *Client) getJSON(ctx context.Context, path string, target any, ingressControls ...bool) error {

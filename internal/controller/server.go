@@ -11,12 +11,14 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"xmesh/internal/audit"
 	"xmesh/internal/auth"
 	"xmesh/internal/identity"
 	"xmesh/internal/model"
@@ -25,10 +27,21 @@ import (
 
 const sessionCookie = "xmesh_admin"
 
+const (
+	maxLoginBody        = 8 << 10
+	maxLoginAttempts    = 5
+	loginFailureWindow  = 15 * time.Minute
+	maxLoginSources     = 1024
+	maxConcurrentLogins = 4
+	loginBurst          = 20
+)
+
 //go:embed panel.js
 var panelJS string
 
 type Server struct {
+	auditMu           sync.Mutex
+	audits            *audit.Store
 	cfg               Config
 	store             *store.Store
 	logger            *slog.Logger
@@ -39,6 +52,9 @@ type Server struct {
 	releaseHTTPClient *http.Client
 	loginMu           sync.Mutex
 	loginFailures     map[string]loginFailure
+	loginActive       int
+	loginBudget       float64
+	loginBudgetAt     time.Time
 	monitor           monitorRuntime
 }
 
@@ -67,12 +83,18 @@ func New(cfg Config, state *store.Store, logger *slog.Logger) (*Server, error) {
 			}
 			return "applied"
 		},
-		"join": func(values []string) string { return strings.Join(values, ", ") },
-	}).Parse(strings.Replace(panelTemplate, "</div></main>", upstreamPanelSection+monitorPanelSection+"</div></main>", 1))
+		"join":             func(values []string) string { return strings.Join(values, ", ") },
+		"canResumeUpgrade": canResumeUpgrade,
+	}).Parse(strings.Replace(panelTemplate, "</div></main>", upstreamPanelSection+monitorPanelSection+auditPanelSection+"</div></main>", 1))
 	if err != nil {
 		return nil, fmt.Errorf("parse panel template: %w", err)
 	}
 	s := &Server{cfg: cfg, store: state, logger: logger, templates: t, now: time.Now, releaseMu: &sync.Mutex{}, releaseCache: &sync.Map{}}
+	dir := cfg.AuditDir
+	if dir == "" {
+		dir = filepath.Join(filepath.Dir(state.Path()), "audit")
+	}
+	s.audits = audit.NewStore(dir)
 	for id, batch := range state.Snapshot().UpgradeBatches {
 		if batch.Stage == "preparing" {
 			go s.prepareUpgradeBatch(id)
@@ -86,6 +108,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /healthz", s.health)
 	mux.HandleFunc("GET /monitor", s.monitorPage)
 	mux.HandleFunc("GET /api/public/monitor", s.monitorData)
+	mux.HandleFunc("GET /assets/i18n.js", languageScript)
+	mux.HandleFunc("GET /assets/i18n.css", languageStyles)
 	mux.HandleFunc("GET /assets/monitor.js", monitorScript)
 	mux.HandleFunc("GET /assets/monitor.css", monitorStyles)
 	mux.HandleFunc("GET /admin/monitor", s.requireAdmin(s.monitorSettingsPage))
@@ -101,6 +125,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /", s.requireAdmin(s.panel))
 	mux.HandleFunc("GET /admin/dashboard", s.requireAdmin(s.dashboard))
 	mux.HandleFunc("POST /admin/users", s.requireAdmin(s.csrf(s.createUser)))
+	mux.HandleFunc("GET /admin/users/{id}/audit", s.requireAdmin(s.userAuditPage))
+	mux.HandleFunc("GET /admin/users/{id}/audit/data", s.requireAdmin(s.userAuditData))
+	mux.HandleFunc("GET /admin/users/{id}/audit/download", s.requireAdmin(s.downloadUserAudit))
+	mux.HandleFunc("POST /admin/users/{id}/audit", s.requireAdmin(s.csrf(s.saveUserAudit)))
+	mux.HandleFunc("POST /admin/users/{id}/audit/clear", s.requireAdmin(s.csrf(s.clearUserAudit)))
 	mux.HandleFunc("POST /admin/users/{id}/toggle", s.requireAdmin(s.csrf(s.toggleUser)))
 	mux.HandleFunc("POST /admin/users/{id}/reset-subscription", s.requireAdmin(s.csrf(s.resetSubscription)))
 	mux.HandleFunc("POST /admin/gateways", s.requireAdmin(s.csrf(s.createGateway)))
@@ -120,8 +149,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /admin/upstreams/{id}/toggle", s.requireAdmin(s.csrf(s.toggleUpstream)))
 	mux.HandleFunc("POST /admin/upstreams/{id}/delete", s.requireAdmin(s.csrf(s.deleteUpstream)))
 	mux.HandleFunc("POST /admin/upstream-attachments", s.requireAdmin(s.csrf(s.attachUpstream)))
+	mux.HandleFunc("POST /admin/attachments/{id}/probe", s.requireAdmin(s.csrf(s.requestUpstreamProbe)))
 	mux.HandleFunc("POST /admin/agents/{id}/assign-gateways", s.requireAdmin(s.csrf(s.assignGateways)))
 	mux.HandleFunc("POST /admin/assign-gateways", s.requireAdmin(s.csrf(s.assignGateways)))
+	mux.HandleFunc("POST /admin/assign-connections", s.requireAdmin(s.csrf(s.assignConnections)))
 	mux.HandleFunc("POST /admin/attachments", s.requireAdmin(s.csrf(s.createAttachment)))
 	mux.HandleFunc("POST /admin/attachments/{id}/toggle", s.requireAdmin(s.csrf(s.toggleAttachment)))
 	mux.HandleFunc("POST /admin/attachments/{id}/delete", s.requireAdmin(s.csrf(s.deleteAttachment)))
@@ -141,6 +172,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /admin/updaters/{role}/{id}/pair", s.requireAdmin(s.csrf(s.pairUpdater)))
 	mux.HandleFunc("POST /admin/upgrades", s.requireAdmin(s.csrf(s.createUpgrade)))
 	mux.HandleFunc("POST /admin/upgrades/{id}/cancel", s.requireAdmin(s.csrf(s.cancelUpgrade)))
+	mux.HandleFunc("POST /admin/upgrades/{id}/resume", s.requireAdmin(s.csrf(s.resumeUpgrade)))
 	mux.HandleFunc("GET /admin/upgrades", s.requireAdmin(s.listUpgrades))
 	mux.HandleFunc("POST /api/v1/updater/pair", s.updaterPair)
 	mux.HandleFunc("POST /api/v1/updater/heartbeat", s.updaterHeartbeat)
@@ -154,8 +186,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v1/enroll", s.enroll)
 	mux.HandleFunc("GET /api/v1/config", s.nodeConfig)
 	mux.HandleFunc("POST /api/v1/status", s.nodeStatus)
+	mux.HandleFunc("POST /api/v1/audit", s.receiveAudit)
 	mux.HandleFunc("GET /api/v1/self/status", s.selfStatus)
-	return s.securityHeaders(s.accessLog(mux))
+	return s.securityHeaders(s.accessLog(http.NewCrossOriginProtection().Handler(mux)))
 }
 
 func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
@@ -164,6 +197,7 @@ func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *Server) loginPage(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	if s.isAdmin(r) {
 		http.Redirect(w, r, "/", http.StatusSeeOther)
 		return
@@ -172,34 +206,48 @@ func (s *Server) loginPage(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) login(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	r.Body = http.MaxBytesReader(w, r.Body, maxLoginBody)
 	if err := r.ParseForm(); err != nil {
-		http.Error(w, "invalid form", http.StatusBadRequest)
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			http.Error(w, "login form too large", http.StatusRequestEntityTooLarge)
+		} else {
+			http.Error(w, "invalid form", http.StatusBadRequest)
+		}
 		return
 	}
-	username := r.FormValue("username")
-	password := r.FormValue("password")
+	// Credentials belong in the request body, never in logged/cacheable URLs.
+	username, password := r.PostForm.Get("username"), r.PostForm.Get("password")
+	if len(r.PostForm["username"]) != 1 || len(r.PostForm["password"]) != 1 || len(username) == 0 || len(username) > 256 || len(password) == 0 || len(password) > 72 {
+		http.Error(w, "invalid login credentials", http.StatusBadRequest)
+		return
+	}
 	clientIP, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		clientIP = r.RemoteAddr
 	}
-	if s.loginLimited(clientIP) {
+	if !s.beginLoginAttempt(clientIP) {
+		w.Header().Set("Retry-After", "60")
 		http.Error(w, "too many login attempts; try again later", http.StatusTooManyRequests)
 		return
 	}
+	success := false
+	defer func() { s.finishLoginAttempt(clientIP, success) }()
 	usernameOK := subtle.ConstantTimeCompare([]byte(username), []byte(s.cfg.AdminUsername)) == 1
-	if !usernameOK || !auth.CheckPassword(s.cfg.AdminPasswordHash, password) {
-		s.recordLoginFailure(clientIP)
-		time.Sleep(150 * time.Millisecond)
+	// Always do the same password work; a wrong username must not take a fast path.
+	passwordOK := auth.CheckPassword(s.cfg.AdminPasswordHash, password)
+	if !usernameOK || !passwordOK {
 		s.renderLogin(w, "Invalid credentials")
 		return
 	}
-	s.clearLoginFailures(clientIP)
 	expires := s.now().Add(12 * time.Hour)
 	session := auth.SignSession(s.cfg.adminSessionKey(), username, expires)
 	if session == "" {
 		http.Error(w, "session generation failed", http.StatusInternalServerError)
 		return
 	}
+	success = true
 	http.SetCookie(w, &http.Cookie{
 		Name: sessionCookie, Value: session,
 		Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode,
@@ -208,39 +256,56 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
-func (s *Server) loginLimited(clientIP string) bool {
-	s.loginMu.Lock()
-	defer s.loginMu.Unlock()
-	failure := s.loginFailures[clientIP]
-	return failure.count >= 5 && s.now().Before(failure.until)
-}
-
-func (s *Server) recordLoginFailure(clientIP string) {
+// Reserve the attempt before bcrypt, atomically with the limits. In-flight
+// attempts count as failures until successful, so parallel guesses cannot race
+// a check made before earlier guesses finish. Bound work across source IPs too.
+func (s *Server) beginLoginAttempt(clientIP string) bool {
 	s.loginMu.Lock()
 	defer s.loginMu.Unlock()
 	if s.loginFailures == nil {
 		s.loginFailures = map[string]loginFailure{}
 	}
 	now := s.now()
-	if len(s.loginFailures) > 1024 {
+	if len(s.loginFailures) >= maxLoginSources {
 		for ip, failure := range s.loginFailures {
 			if !now.Before(failure.until) {
 				delete(s.loginFailures, ip)
 			}
 		}
 	}
-	failure := s.loginFailures[clientIP]
-	if !now.Before(failure.until) {
-		failure = loginFailure{until: now.Add(15 * time.Minute)}
+	failure, exists := s.loginFailures[clientIP]
+	if !exists && len(s.loginFailures) >= maxLoginSources {
+		return false
 	}
+	if !now.Before(failure.until) {
+		failure = loginFailure{until: now.Add(loginFailureWindow)}
+	}
+	if failure.count >= maxLoginAttempts || s.loginActive >= maxConcurrentLogins {
+		return false
+	}
+	if s.loginBudgetAt.IsZero() {
+		s.loginBudget = loginBurst
+	} else if now.After(s.loginBudgetAt) {
+		s.loginBudget = min(float64(loginBurst), s.loginBudget+now.Sub(s.loginBudgetAt).Seconds()*loginBurst/60)
+	}
+	s.loginBudgetAt = now
+	if s.loginBudget < 1 {
+		return false
+	}
+	s.loginBudget--
+	s.loginActive++
 	failure.count++
 	s.loginFailures[clientIP] = failure
+	return true
 }
 
-func (s *Server) clearLoginFailures(clientIP string) {
+func (s *Server) finishLoginAttempt(clientIP string, success bool) {
 	s.loginMu.Lock()
-	delete(s.loginFailures, clientIP)
-	s.loginMu.Unlock()
+	defer s.loginMu.Unlock()
+	s.loginActive--
+	if success {
+		delete(s.loginFailures, clientIP)
+	}
 }
 
 func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
@@ -298,8 +363,13 @@ func (s *Server) isAdmin(r *http.Request) bool {
 
 func (s *Server) csrf(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+		if err := r.ParseForm(); err != nil {
+			http.Error(w, "invalid form", http.StatusBadRequest)
+			return
+		}
 		cookie, err := r.Cookie(sessionCookie)
-		if err != nil || r.FormValue("csrf") != auth.Derive(s.cfg.sessionKey(), "csrf", cookie.Value) {
+		if err != nil || len(r.PostForm["csrf"]) != 1 || subtle.ConstantTimeCompare([]byte(r.PostForm.Get("csrf")), []byte(auth.Derive(s.cfg.sessionKey(), "csrf", cookie.Value))) != 1 {
 			http.Error(w, "invalid CSRF token", http.StatusForbidden)
 			return
 		}
@@ -327,6 +397,7 @@ func (s *Server) panel(w http.ResponseWriter, r *http.Request) {
 		ControllerUpgrade:  s.controllerUpgradeStatus(),
 		UpgraderViews:      updaterViews(state, s.now()),
 		UpgradeTaskList:    sortedUpgradeTasks(state),
+		PendingConnections: pendingConnections(state),
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := s.templates.ExecuteTemplate(w, "panel", data); err != nil {
@@ -373,9 +444,9 @@ func (s *Server) renderLogin(w http.ResponseWriter, message string) {
 	w.WriteHeader(http.StatusOK)
 	warning := ""
 	if strings.HasPrefix(strings.ToLower(s.cfg.PublicURL), "http://") {
-		warning = `<p class="warning" role="alert">警告：Controller 的 public_url 使用 HTTP，登录信息在公网传输时可能泄露。请启用 HTTPS。</p>`
+		warning = `<p class="warning" role="alert" data-i18n>警告：Controller 的 public_url 使用 HTTP，登录信息在公网传输时可能泄露。请启用 HTTPS。</p>`
 	}
-	_, _ = fmt.Fprintf(w, `<!doctype html><html><head><meta charset="utf-8"><title>xmesh login</title><style>%s</style></head><body><main class="login"><h1>xmesh</h1>%s<p class="error">%s</p><form method="post" action="/login"><label>Username<input name="username" autocomplete="username" required></label><label>Password<input type="password" name="password" autocomplete="current-password" required></label><button>Sign in</button></form></main></body></html>`, panelCSS, warning, template.HTMLEscapeString(message))
+	_, _ = fmt.Fprintf(w, `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title data-i18n>xmesh login</title><style>%s</style><link rel="stylesheet" href="/assets/i18n.css"><script src="/assets/i18n.js"></script></head><body><main class="login"><div class="login-heading"><h1>XMesh</h1>%s</div>%s<p class="error" data-i18n>%s</p><form method="post" action="/login"><label><span data-i18n>Username</span><input name="username" autocomplete="username" required></label><label><span data-i18n>Password</span><input type="password" name="password" autocomplete="current-password" required></label><button data-i18n>Sign in</button></form></main></body></html>`, panelCSS, languageSelect, warning, template.HTMLEscapeString(message))
 }
 
 func (s *Server) securityHeaders(next http.Handler) http.Handler {
@@ -383,7 +454,7 @@ func (s *Server) securityHeaders(next http.Handler) http.Handler {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Referrer-Policy", "no-referrer")
-		w.Header().Set("Content-Security-Policy", "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; frame-ancestors 'none'")
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
 		next.ServeHTTP(w, r)
 	})
 }
@@ -470,6 +541,7 @@ type panelData struct {
 	ControllerUpgrade      controllerUpgradeView
 	UpgraderViews          map[string]updaterView
 	UpgradeTaskList        []model.UpgradeTask
+	PendingConnections     []pendingConnection
 }
 
 func subscriptionCounts(state model.State) map[string]string {

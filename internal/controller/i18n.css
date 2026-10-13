@@ -1,0 +1,21 @@
+.i18n-loading body { visibility: hidden; }
+.header-actions { display: flex; align-items: center; gap: 12px; }
+.language-select {
+  font: inherit;
+  font-size: 13px;
+  border: 1px solid #b9c3cc;
+  border-radius: 7px;
+  padding: 7px 9px;
+  background: #fff;
+  color: #25334a;
+  cursor: pointer;
+  max-width: 140px;
+}
+.language-select:focus-visible { outline: 3px solid #31a8af; outline-offset: 3px; }
+.login-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
+.login-heading h1 { margin: 0; }
+@media (max-width: 650px) {
+  .header-actions { gap: 8px; }
+  .header-actions a { font-size: 12px; }
+  .language-select { font-size: 12px; padding: 6px; }
+}

@@ -153,7 +153,10 @@ type journal struct {
 	SwitchAt    time.Time         `json:"switch_at,omitempty"`
 }
 
-var errStatusUnavailable = errors.New("controller status temporarily unavailable")
+var (
+	errStatusUnavailable = errors.New("controller status temporarily unavailable")
+	errUpgradeRolledBack = errors.New("upgrade rolled back")
+)
 
 func Run(ctx context.Context, cfg Config, version string) error {
 	if err := validateConfig(cfg); err != nil {
@@ -502,7 +505,7 @@ func recoverJobs(ctx context.Context, c client) error {
 			recoveryCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 			err := rollback(recoveryCtx, c, dir, &j)
 			cancel()
-			if err != nil && j.Result == "manual_intervention" {
+			if !errors.Is(err, errUpgradeRolledBack) {
 				return err
 			}
 		}
@@ -654,7 +657,7 @@ func rollback(ctx context.Context, c client, dir string, j *journal) error {
 	if err != nil {
 		return err
 	}
-	return fmt.Errorf("upgrade rolled back: %s", j.Error)
+	return fmt.Errorf("%w: %s", errUpgradeRolledBack, j.Error)
 }
 
 func verify(ctx context.Context, c client, j journal) error {

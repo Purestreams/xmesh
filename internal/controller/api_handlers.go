@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"xmesh/internal/audit"
 	"xmesh/internal/auth"
 	"xmesh/internal/identity"
 	"xmesh/internal/model"
@@ -17,9 +18,10 @@ import (
 var errEnrollmentUpgradeActive = errors.New("node has an active upgrade; retry credential rotation after it finishes")
 
 type StatusReport struct {
-	Status model.NodeStatus    `json:"status"`
-	Links  []model.LinkStatus  `json:"links"`
-	Grants []model.GrantStatus `json:"grants,omitempty"`
+	UpstreamProbes []model.UpstreamProbeStatus `json:"upstream_probes,omitempty"`
+	Status         model.NodeStatus            `json:"status"`
+	Links          []model.LinkStatus          `json:"links"`
+	Grants         []model.GrantStatus         `json:"grants,omitempty"`
 }
 
 func (s *Server) selfStatus(w http.ResponseWriter, r *http.Request) {
@@ -156,7 +158,7 @@ func (s *Server) nodeConfig(w http.ResponseWriter, r *http.Request) {
 			if attachment.UpstreamID != "" {
 				if upstreamAvailable(&state, attachment) {
 					upstream := state.Upstreams[attachment.UpstreamID]
-					response.Upstreams = append(response.Upstreams, GatewayUpstreamConfig{AttachmentID: attachment.ID, UpstreamID: upstream.ID, Endpoint: upstream.Endpoint})
+					response.Upstreams = append(response.Upstreams, GatewayUpstreamConfig{AttachmentID: attachment.ID, UpstreamID: upstream.ID, Endpoint: upstream.Endpoint, ProbeRequestID: attachment.ProbeRequestID})
 				}
 			} else {
 				for _, link := range state.Links {
@@ -187,7 +189,7 @@ func (s *Server) nodeConfig(w http.ResponseWriter, r *http.Request) {
 		agent.CredentialHash = ""
 		agent.PreviousCredentialHash = ""
 		agent.PreviousCredentialExpiresAt = time.Time{}
-		response := AgentConfig{Revision: agent.DesiredVersion, Agent: agent}
+		response := AgentConfig{Revision: agent.DesiredVersion, Agent: agent, AuditGrants: map[string]audit.Policy{}}
 		for _, attachment := range state.Attachments {
 			if attachment.AgentID != nodeID || !routeAvailable(&state, attachment) {
 				continue
@@ -211,6 +213,9 @@ func (s *Server) nodeConfig(w http.ResponseWriter, r *http.Request) {
 				user := state.Users[grant.UserID]
 				if grant.AttachmentID == attachment.ID && grant.Enabled && user.Enabled {
 					response.GrantIDs = append(response.GrantIDs, grant.ID)
+					if user.AuditEnabled {
+						response.AuditGrants[grant.ID] = audit.Policy{Generation: user.AuditGeneration}
+					}
 				}
 			}
 		}
@@ -243,6 +248,9 @@ func (s *Server) nodeStatus(w http.ResponseWriter, r *http.Request) {
 		report.Status.NodeID, report.Status.Role, report.Status.LastSeen = nodeID, role, now
 		externalChanged := role == model.RoleGateway && state.NodeStatus[nodeID].ExternalUpstreams != report.Status.ExternalUpstreams
 		state.NodeStatus[nodeID] = report.Status
+		if err := s.acceptUpstreamProbes(state, role, nodeID, report, now); err != nil {
+			return err
+		}
 		// Capability changes alter the users included in Gateway config. Require
 		// an acknowledgement of that new config before publishing its grants.
 		if externalChanged {
@@ -353,6 +361,7 @@ func (s *Server) nodeStatus(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		pruneRetiredUsage(state, now)
+		reconcileUpgradeRecovery(state, now)
 		return nil
 	})
 	if err != nil {

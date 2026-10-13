@@ -34,7 +34,7 @@ var monitorAdminTemplate = template.Must(template.New("monitor-settings").Parse(
 
 const monitorCacheTTL = 10 * time.Second
 
-const monitorPanelSection = `<section id="public-monitor" data-page="maintenance"><h2>公开监控</h2><p class="muted">配置访客可见的节点与链路别名，提供免登录的只读状态和延迟页面。</p><p><a href="/admin/monitor">设置公开范围与别名</a> · <a href="/monitor" target="_blank" rel="noopener noreferrer">打开 Monitor ↗</a></p></section>`
+const monitorPanelSection = `<section id="public-monitor" data-page="maintenance"><h2 data-i18n>公开监控</h2><p class="muted" data-i18n>配置访客可见的节点与链路别名，提供免登录的只读状态和延迟页面。</p><p><a href="/admin/monitor" data-i18n>设置公开范围与别名</a> · <a href="/monitor" target="_blank" rel="noopener noreferrer" data-i18n>打开 Monitor ↗</a></p></section>`
 
 type monitorRuntime struct {
 	mu       sync.Mutex
@@ -317,6 +317,21 @@ func (s *Server) publicMonitor(state *model.State, now time.Time) monitorPayload
 			out.State = "pending"
 		case external:
 			out.State = "unprobed"
+			if probe := currentUpstreamProbe(state, route); probe != nil {
+				switch {
+				case probe.CompletedAt.IsZero():
+					out.State = "pending"
+				case now.Sub(probe.CompletedAt) > upstreamProbeFreshness(state.NodeStatus[route.GatewayID]):
+					out.State = "stale"
+				case !probe.Successful():
+					out.State = "pending"
+				default:
+					out.State = "ready"
+					out.RTTMillis = monitorRTT(float64(probe.Targets[0].DurationMillis))
+					at := probe.CompletedAt.UTC()
+					out.Measured = &at
+				}
+			}
 		case gs.LastSeen.IsZero() || as.LastSeen.IsZero():
 			out.State = "unknown"
 		case !s.monitorFresh(gs.LastSeen, now) || !s.monitorFresh(as.LastSeen, now):
@@ -337,7 +352,7 @@ func (s *Server) publicMonitor(state *model.State, now time.Time) monitorPayload
 				out.Measured = &at
 			}
 		}
-		if !external {
+		{
 			for _, sample := range state.LinkHistory[id] {
 				if sample.At.Before(now.Add(-historyRetention)) || sample.At.After(now) {
 					continue

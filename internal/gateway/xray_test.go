@@ -97,7 +97,7 @@ func TestBuildXrayConfigUsesOneVMessInboundAndPerGrantRoutes(t *testing.T) {
 	if len(decoded.Inbounds) != 1 || decoded.Inbounds[0].Port != 8080 || decoded.Inbounds[0].StreamSettings.Security != "none" || decoded.Inbounds[0].StreamSettings.Network != "ws" {
 		t.Fatalf("unexpected inbound %#v", decoded.Inbounds)
 	}
-	if len(decoded.Inbounds[0].Settings.Clients) != 2 || len(decoded.Outbounds) != 2 || len(decoded.Routing.Rules) != 2 {
+	if len(decoded.Inbounds[0].Settings.Clients) != 2 || len(decoded.Outbounds) != 3 || len(decoded.Routing.Rules) != 3 {
 		t.Fatalf("incomplete Xray config: %s", b)
 	}
 	if decoded.Inbounds[0].Settings.Clients[0].Email != "grant-a" {

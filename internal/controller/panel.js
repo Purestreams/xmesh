@@ -1,5 +1,8 @@
 "use strict";
 
+const i18n = typeof window !== "undefined" ? window.XMeshI18n : require("./i18n.js");
+const t = i18n.t;
+
 function defaultRealityTarget(region) {
   if (region === "cn") return "api.bilibili.com:443";
   if (region === "overseas") return "www.swift.com:443";
@@ -52,6 +55,31 @@ function selectionPlan(kind, owner, ids, data) {
   }
   return result;
 }
+function pendingConnectionCandidates(data) {
+  const routes = new Map(
+    data.routes.filter((r) => r.agent_id && !r.upstream_id)
+      .map((r) => [JSON.stringify([r.agent_id, r.gateway_id]), r]),
+  );
+  const linked = new Set(data.links.map((l) => l.route_id));
+  const activeLinks = new Set(data.links.filter((l) => l.enabled).map((l) => l.route_id));
+  const candidates = [];
+  for (const agent of data.nodes.filter((n) => n.role === "Agent")) {
+    for (const gateway of data.nodes.filter((n) => n.role === "Gateway")) {
+      const value = JSON.stringify([agent.id, gateway.id]);
+      const route = routes.get(value);
+      if ((route?.assignment_enabled ?? route?.enabled) && activeLinks.has(route.id)) continue;
+      const target = gateway.target || defaultRealityTarget(gateway.region);
+      candidates.push({
+        value, agent, gateway, target,
+        available: !!(agent.enabled && gateway.enabled && gateway.host),
+        needsTarget: !linked.has(route?.id) && !target,
+        action: !linked.has(route?.id) ? "created" : "reenabled",
+        state: !route ? t("未建立") : !linked.has(route.id) ? t("待补建 Link") : t("已停用"),
+      });
+    }
+  }
+  return candidates;
+}
 function formatBytes(value) {
   if (value == null || !Number.isFinite(value)) return "—";
   const units = ["B", "KiB", "MiB", "GiB", "TiB"];
@@ -73,6 +101,7 @@ if (typeof module !== "undefined")
     formatBytes,
     formatRate,
     defaultRealityTarget,
+    pendingConnectionCandidates,
   };
 
 if (typeof document !== "undefined")
@@ -96,18 +125,20 @@ if (typeof document !== "undefined")
       return node;
     };
     const names = {
-      overview: ["总览", "查看网络健康状况与需要处理的事项。"],
-      network: ["节点与线路", "管理入口、出口和连接策略。"],
-      users: ["用户与订阅", "选择授权线路，跟踪配置发布并复制订阅。"],
-      deploy: ["部署向导", "新建或复用节点，跟踪从安装到可用的每一步。"],
-      maintenance: ["系统维护", "版本升级、发布源、安装令牌与操作记录。"],
+      overview: [t("总览"), t("查看网络健康状况与需要处理的事项。")],
+      network: [t("节点与线路"), t("管理入口、出口和连接策略。")],
+      users: [t("用户与订阅"), t("选择授权线路，跟踪配置发布并复制订阅。")],
+      deploy: [t("部署向导"), t("新建或复用节点，跟踪从安装到可用的每一步。")],
+      maintenance: [t("系统维护"), t("版本升级、发布源、安装令牌与操作记录。")],
     };
     const stages = {
-      ready: "可用",
-      pending: "待就绪",
-      offline: "离线",
-      disabled: "停用",
-      configured: "已配置，待实际流量验证",
+      ready: t("可用"),
+      pending: t("待就绪"),
+      offline: t("离线"),
+      disabled: t("停用"),
+      configured: t("已配置，待自动测试"),
+      testing: t("测试中"),
+      probe_failed: t("测试失败"),
     };
     let data = null,
       refreshBusy = false,
@@ -119,7 +150,7 @@ if (typeof document !== "undefined")
     const routeName = (route) =>
       `${nodeName(route.gateway_id)} / ${nodeName(exitID(route))}`;
     function notice(text, error = false) {
-      $("#notice").textContent = text;
+      $("#notice").textContent = t(text);
       $("#notice").classList.toggle("error", error);
     }
     function clearFormError(form) {
@@ -171,32 +202,32 @@ if (typeof document !== "undefined")
       const body = el("div"),
         dl = el("dl", null, "detail-grid");
       const values = node.role === "External exit" ? {
-        角色: node.role,
-        地址: node.host || "尚未选择节点",
-        状态: !node.enabled ? "停用" : node.status.online ? "已选择（未探测）" : "待选择",
-        最近错误: node.next || "无",
+        [t("角色")]: t(node.role),
+        [t("地址")]: node.host || t("尚未选择节点"),
+        [t("状态")]: !node.enabled ? t("停用") : node.status.online ? t("已选择（未探测）") : t("待选择"),
+        [t("最近错误")]: t(node.next) || t("无"),
       } : {
-        角色: node.role,
-        地址: node.host || "主动连接 Gateway",
-        状态: !node.enabled ? "停用" : node.status.online ? "在线" : "离线",
-        配置版本: `${node.status.applied_version} / ${node.desired}`,
-        软件版本: node.status.binary_version || "尚未上报",
-        最后上报:
+        [t("角色")]: t(node.role),
+        [t("地址")]: node.host || t("主动连接 Gateway"),
+        [t("状态")]: !node.enabled ? t("停用") : node.status.online ? t("在线") : t("离线"),
+        [t("配置版本")]: `${node.status.applied_version} / ${node.desired}`,
+        [t("软件版本")]: node.status.binary_version || t("尚未上报"),
+        [t("最后上报")]:
           node.status.last_seen && !node.status.last_seen.startsWith("0001")
-            ? new Date(node.status.last_seen).toLocaleString()
-            : "尚未上报",
-        下一步: node.next,
-        最近错误:
+            ? new Date(node.status.last_seen).toLocaleString(i18n.locale())
+            : t("尚未上报"),
+        [t("下一步")]: t(node.next),
+        [t("最近错误")]:
           node.status.apply_error ||
           node.status.last_error ||
           node.status.xray_error ||
-          "无",
+          t("无"),
       };
       Object.entries(values).forEach(([k, v]) =>
         dl.append(el("dt", k), el("dd", v)),
       );
       body.append(dl);
-      const link = el("a", "打开节点管理");
+      const link = el("a", t("打开节点管理"));
       link.href = node.role === "Gateway" ? "#gateways" : node.role === "Agent" ? "#agents" : "#upstreams";
       link.addEventListener("click", () => $("#detail-dialog").close());
       body.append(link);
@@ -207,8 +238,9 @@ if (typeof document !== "undefined")
       if (!route) return;
       const body = el("div");
       body.append(badge(route.state));
-      if (route.upstream_id)
-        body.append(el("p", "外部出口的连通性需通过实际流量确认。"));
+      if (route.upstream_id) {
+        body.append(upstreamProbeSummary(route), upstreamProbeForm(route));
+      }
       data.links
         .filter((l) => l.route_id === id)
         .forEach((link) => {
@@ -217,19 +249,19 @@ if (typeof document !== "undefined")
             el("strong", `Link：${link.name}`),
             el(
               "small",
-              `RTT ${link.status.rtt_millis ? link.status.rtt_millis.toFixed(1) : "—"} ms · ${link.status.active_streams || 0} streams · 累计 ↑ ${formatBytes(link.status.upload_bytes)} ↓ ${formatBytes(link.status.download_bytes)}`,
+              t("RTT {0} ms · {1} streams · 累计 ↑ {2} ↓ {3}", link.status.rtt_millis ? link.status.rtt_millis.toFixed(1) : "—", link.status.active_streams || 0, formatBytes(link.status.upload_bytes), formatBytes(link.status.download_bytes)),
             ),
           );
           if (link.status.last_error)
             p.append(el("small", link.status.last_error, "error"));
           body.append(p);
         });
-      const a = el("a", "查看链路配置");
+      const a = el("a", t("查看链路配置"));
       a.href = route.upstream_id ? "#upstreams" : "#links";
-      a.textContent = route.upstream_id ? "查看外部出口" : "查看链路配置";
+      a.textContent = route.upstream_id ? t("查看外部出口") : t("查看链路配置");
       a.addEventListener("click", () => $("#detail-dialog").close());
       body.append(a);
-      showDetail(`节点组合：${routeName(route)}`, body);
+      showDetail(t("节点组合：{0}", routeName(route)), body);
     }
     function renderMetrics() {
       const runtimeNodes = data.nodes.filter((n) => n.role !== "External exit");
@@ -245,25 +277,25 @@ if (typeof document !== "undefined")
       ).length;
       const items = [
         [
-          "已确认可用线路",
+          t("已确认可用线路"),
           `${ready} / ${data.routes.length}`,
-          configured ? `另有 ${configured} 条外部线路已配置，待实际流量验证` : "两端配置与链路均已就绪",
+          configured ? t("另有 {0} 条外部线路已配置，待自动测试", configured) : t("两端配置与链路均已就绪"),
           "good",
         ],
         [
-          "在线节点",
+          t("在线节点"),
           `${online} / ${runtimeNodes.length}`,
-          "Gateway 与 Agent 实时心跳",
+          t("Gateway 与 Agent 实时心跳"),
           "",
         ],
         [
-          "待完成配置",
+          t("待完成配置"),
           pending,
-          "未安装、待应用或应用失败",
+          t("未安装、待应用或应用失败"),
           pending ? "warn" : "good",
         ],
         [
-          "已发布授权",
+          t("已发布授权"),
           data.grants.filter(
             (g) =>
               g.enabled &&
@@ -271,7 +303,7 @@ if (typeof document !== "undefined")
               data.users.some((u) => u.id === g.user_id && u.enabled) &&
               data.routes.some((r) => r.id === g.route_id && r.selectable),
           ).length,
-          "线路可用状态请查看拓扑",
+          t("线路可用状态请查看拓扑"),
           "",
         ],
       ];
@@ -287,11 +319,56 @@ if (typeof document !== "undefined")
         }),
       );
     }
+    function upstreamProbeForm(route) {
+      const form = el("form", null, "inline");
+      form.method = "post";
+      form.action = "/admin/attachments/" + encodeURIComponent(route.id) + "/probe";
+      const csrf = el("input");
+      csrf.type = "hidden";
+      csrf.name = "csrf";
+      csrf.value = $('input[name="csrf"]')?.value || "";
+      const button = el("button", t("测试连接"));
+      button.disabled = !route.can_probe || route.state === "testing";
+      form.append(csrf, button);
+      return form;
+    }
+    function upstreamProbeSummary(route) {
+      const body = el("div", null, "upstream-probe");
+      const probe = route.probe;
+      if (route.probe_supported) body.append(el("p", t("定时测试间隔：{0} 秒", route.probe_interval_seconds || 300), "muted"));
+      if (!route.probe_supported) {
+        body.append(el("p", t("升级 Gateway 后可使用出口连通性测试。"), "muted"));
+      } else if (!probe) {
+        body.append(el("p", t("配置应用后将自动测试 ip.sb 和 microsoft.com；也可手动测试。"), "muted"));
+      } else if (!probe.completed_at || probe.completed_at.startsWith("0001")) {
+        body.append(el("p", t("Gateway 正在经此上游测试 ip.sb 和 microsoft.com…")));
+      } else {
+        body.append(el("p", t("最近测试：{0}", new Date(probe.completed_at).toLocaleString(i18n.locale())), "muted"));
+        for (const target of probe.targets || []) {
+          const name = target.url === "https://api.ip.sb/ip" ? "ip.sb" : "microsoft.com";
+          const row = el("p", t("{0}：{1} · HTTP {2} · {3} ms", name, target.success ? t("成功") : t("失败"), target.http_status || "—", target.duration_millis), target.success ? "good" : "error");
+          body.append(row);
+          if (target.exit_ip) body.append(el("p", t("出口 IP：{0}", target.exit_ip)));
+          if (target.error) body.append(el("p", target.error, "error"));
+        }
+      }
+      return body;
+    }
+    function renderUpstreamProbes() {
+      for (const root of $$("[data-upstream-probe]")) {
+        const route = data.routes.find((r) => r.id === root.dataset.upstreamProbe);
+        if (route) root.replaceChildren(upstreamProbeSummary(route));
+      }
+      for (const button of $$("[data-upstream-probe-button]")) {
+        const route = data.routes.find((r) => r.id === button.dataset.upstreamProbeButton);
+        button.disabled = !route?.can_probe || route.state === "testing";
+      }
+    }
     function renderRouteOverview() {
       const root = $("#route-overview");
       if (!root || !data) return;
       if (!data.routes.length) {
-        root.replaceChildren(el("p", "尚无线路。先从部署向导创建或绑定节点。", "empty"));
+        root.replaceChildren(el("p", t("尚无线路。先从部署向导创建或绑定节点。"), "empty"));
         return;
       }
       const query = $("#route-search").value.trim().toLowerCase(),
@@ -300,7 +377,7 @@ if (typeof document !== "undefined")
           (!query || routeName(route).toLowerCase().includes(query)) &&
           (state === "all" || route.state === state));
       if (!visible.length) {
-        root.replaceChildren(el("p", "没有匹配的线路。", "empty"));
+        root.replaceChildren(el("p", t("没有匹配的线路。"), "empty"));
         return;
       }
       const list = el("div", null, "route-cards");
@@ -308,21 +385,23 @@ if (typeof document !== "undefined")
         const card = el("article", null, "route-card"),
           heading = el("div", null, "route-card-heading"),
           title = el("strong", routeName(route)),
-          kind = route.upstream_id ? "外部出口" : "Agent 出口",
+          kind = route.upstream_id ? t("外部出口") : t("Agent 出口"),
           grantCount = data.grants.filter((grant) => grant.route_id === route.id && grant.enabled && grant.published).length,
           actions = el("div", null, "route-card-actions"),
-          detail = el("button", "查看状态");
+          detail = el("button", t("查看状态"));
         detail.type = "button";
         detail.className = "secondary";
         detail.addEventListener("click", () => showRoute(route.id));
         heading.append(title, badge(route.state));
-        card.append(heading, el("small", `${kind} · ${grantCount} 个已发布授权`));
-        if (route.state === "configured")
-          card.append(el("p", "Gateway 配置已应用；外部上游尚未探测，请用实际流量验证。", "muted"));
+        card.append(heading, el("small", t("{0} · {1} 个已发布授权", kind, grantCount)));
+        if (route.upstream_id) {
+          card.append(upstreamProbeSummary(route));
+          actions.append(upstreamProbeForm(route));
+        }
         actions.append(detail);
-        const config = el("a", "管理配置");
+        const config = el("a", t("管理配置"));
         config.href = route.upstream_id ? "#upstreams" : "#links";
-        const grant = el("a", "授权用户");
+        const grant = el("a", t("授权用户"));
         grant.href = "#subscribe";
         actions.append(config, grant);
         card.append(actions);
@@ -335,9 +414,12 @@ if (typeof document !== "undefined")
         state = $("#map-state").value;
       const matches = (n) =>
         `${n.name} ${n.host}`.toLowerCase().includes(query);
-      const ids = new Set(data.nodes.filter(matches).map((n) => n.id));
+      const enabledNodes = data.nodes.filter((n) => n.enabled),
+        enabledIDs = new Set(enabledNodes.map((n) => n.id)),
+        ids = new Set(enabledNodes.filter(matches).map((n) => n.id));
       const routes = data.routes.filter(
         (r) =>
+          enabledIDs.has(r.gateway_id) && enabledIDs.has(exitID(r)) &&
           (!query || ids.has(r.gateway_id) || ids.has(exitID(r))) &&
           (state === "all" || r.state === state),
       );
@@ -346,7 +428,7 @@ if (typeof document !== "undefined")
       );
       return {
         routes,
-        nodes: data.nodes.filter(
+        nodes: enabledNodes.filter(
           (n) => connected.has(n.id) || (state === "all" && matches(n)),
         ),
       };
@@ -361,9 +443,9 @@ if (typeof document !== "undefined")
       $("#matrix").hidden = mapView !== "matrix";
       if (!nodes.length) {
         $("#topology").replaceChildren(
-          el("p", "没有匹配的节点。前往部署向导创建第一条线路。", "empty"),
+          el("p", t("没有匹配的节点。前往部署向导创建第一条线路。"), "empty"),
         );
-        $("#matrix").replaceChildren(el("p", "没有匹配的节点。", "empty"));
+        $("#matrix").replaceChildren(el("p", t("没有匹配的节点。"), "empty"));
         return;
       }
       const height = Math.max(
@@ -374,15 +456,15 @@ if (typeof document !== "undefined")
           viewBox: `0 0 900 ${height}`,
           class: "network",
           role: "img",
-          "aria-label": "Gateway 与出口网络拓扑",
+          "aria-label": t("Gateway 与出口网络拓扑"),
         });
       svg.append(
         svgEl(
           "text",
           { x: 80, y: 30, class: "subtext" },
-          "GATEWAYS / 公网入口",
+          t("GATEWAYS / 公网入口"),
         ),
-        svgEl("text", { x: 620, y: 30, class: "subtext" }, "AGENT / 外部出口"),
+        svgEl("text", { x: 620, y: 30, class: "subtext" }, t("AGENT / 外部出口")),
       );
       const positions = new Map();
       gateways.forEach((n, i) =>
@@ -447,8 +529,8 @@ if (typeof document !== "undefined")
         routeTable = el("table"),
         routeHead = el("tr"),
         routeBody = el("tbody");
-      routeList.append(el("h3", "线路延迟 · Gateway 上报"));
-      ["节点组合", "Link", "状态", "RTT", "详情"].forEach((name) =>
+      routeList.append(el("h3", t("线路延迟 · Gateway 上报")));
+      [t("节点组合"), "Link", t("状态"), "RTT", t("详情")].forEach((name) =>
         routeHead.append(el("th", name)),
       );
       const routeThead = el("thead");
@@ -458,12 +540,12 @@ if (typeof document !== "undefined")
         const links = data.links.filter((link) => link.route_id === route.id && link.enabled);
         (links.length ? links : [null]).forEach((link) => {
           const row = el("tr"),
-            detail = el("button", "查看");
+            detail = el("button", t("查看"));
           detail.type = "button";
           detail.addEventListener("click", () => showRoute(route.id));
           [
             routeName(route),
-            link?.name || (route.upstream_id ? nodeName(route.upstream_id) : "无启用 Link"),
+            link?.name || (route.upstream_id ? nodeName(route.upstream_id) : t("无启用 Link")),
             stages[route.state],
             link?.status.online && link.status.ready && link.status.rtt_millis > 0
               ? `${link.status.rtt_millis.toFixed(1)} ms`
@@ -497,7 +579,7 @@ if (typeof document !== "undefined")
             visible = route && routes.some((r) => r.id === route.id),
             button = el(
               "button",
-              route ? (visible ? `${stages[route.state]} · ${data.links.filter((l) => l.route_id === route.id).length} Link` : "已筛除") : "+ 绑定",
+              route ? (visible ? `${stages[route.state]} · ${data.links.filter((l) => l.route_id === route.id).length} Link` : t("已筛除")) : t("+ 绑定"),
               `matrix-cell ${route?.state || "unassigned"}`,
             );
           button.type = "button";
@@ -506,6 +588,7 @@ if (typeof document !== "undefined")
             if (route) showRoute(route.id);
             else {
               location.hash = "assign";
+              setAssignmentTab("agent");
               const f = $("#assign form");
               f.elements.agent_id.value = a.id;
               $$("[name=gateway_id]", f).forEach(
@@ -544,29 +627,29 @@ if (typeof document !== "undefined")
               r.state === "ready",
           );
         [
-          ["已创建", true],
-          ["已安装", n.enrolled],
-          ["在线", online],
-          ["配置应用", applied],
-          ["运行就绪", ready],
-          ["线路可用", linked],
+          [t("已创建"), true],
+          [t("已安装"), n.enrolled],
+          [t("在线"), online],
+          [t("配置应用"), applied],
+          [t("运行就绪"), ready],
+          [t("线路可用"), linked],
         ].forEach(([label, done]) =>
           steps.append(
             el("li", `${done ? "✓ " : ""}${label}`, done ? "done" : ""),
           ),
         );
         c.append(steps, el("p", !n.enabled
-          ? "节点已停用。启用后继续部署。"
+          ? t("节点已停用。启用后继续部署。")
           : !hasRoute && !n.enrolled
-            ? "节点已创建，尚无可用线路。先安装节点，再连接已有节点。"
-            : n.next));
+            ? t("节点已创建，尚无可用线路。先安装节点，再连接已有节点。")
+            : t(n.next)));
         if (n.enabled && !hasRoute) {
           if (!n.enrolled) {
-            const install = el("a", "生成安装命令 →");
+            const install = el("a", t("生成安装命令 →"));
             install.href = "#quick-install";
             c.append(install);
           }
-          const next = el("a", "连接已有节点 →");
+          const next = el("a", t("连接已有节点 →"));
           next.href = "#assign";
           c.append(next);
         }
@@ -575,7 +658,7 @@ if (typeof document !== "undefined")
       $("#deployment-progress").replaceChildren(
         ...(cards.length
           ? cards
-          : [el("p", "先创建线路或节点，再按照下方步骤完成安装。", "empty")]),
+          : [el("p", t("先创建线路或节点，再按照下方步骤完成安装。"), "empty")]),
       );
       const todos = data.nodes.filter((n) => n.role !== "External exit")
         .filter(
@@ -590,7 +673,7 @@ if (typeof document !== "undefined")
         )
         .map((n) => ({
           title: `${n.role} · ${n.name}`,
-          text: n.next,
+          text: t(n.next),
           target: !n.enrolled ? "quick-install" : "readiness",
         }));
       data.routes
@@ -598,7 +681,7 @@ if (typeof document !== "undefined")
         .forEach((r) =>
           todos.push({
             title: routeName(r),
-            text: r.upstream_id ? `线路${stages[r.state]}：检查 Gateway 配置与上游节点。` : `线路${stages[r.state]}：检查两端配置、Link 与 REALITY 连接。`,
+            text: r.upstream_id ? t("线路{0}：检查 Gateway 配置与上游节点。", stages[r.state]) : t("线路{0}：检查两端配置、Link 与 REALITY 连接。", stages[r.state]),
             target: r.upstream_id ? "upstreams" : "links",
           }),
         );
@@ -613,18 +696,18 @@ if (typeof document !== "undefined")
         .forEach((u) =>
           todos.push({
             title: u.name,
-            text: `${u.publication} · 等待 Gateway 应用配置后发布。`,
+            text: t("{0} · 等待 Gateway 应用配置后发布。", t(u.publication)),
             target: "subscribe",
           }),
         );
       $("#todo-list").replaceChildren(
         ...(todos.length
-          ? todos.map((t) => {
+          ? todos.map((todo) => {
               const row = el("div", null, "todo"),
                 text = el("div"),
-                a = el("a", "查看 →");
-              a.href = `#${t.target}`;
-              text.append(el("strong", t.title), el("p", t.text));
+                a = el("a", t("查看 →"));
+              a.href = `#${todo.target}`;
+              text.append(el("strong", todo.title), el("p", todo.text));
               row.append(text, a);
               return row;
             })
@@ -632,8 +715,8 @@ if (typeof document !== "undefined")
               el(
                 "p",
                 data.nodes.length
-                  ? "当前没有待处理异常。"
-                  : "创建第一条线路，开始连接你的网络。",
+                  ? t("当前没有待处理异常。")
+                  : t("创建第一条线路，开始连接你的网络。"),
                 "empty",
               ),
             ]),
@@ -647,7 +730,7 @@ if (typeof document !== "undefined")
         .filter((v) => v != null && Number.isFinite(v));
       if (!valid.length) {
         box.append(
-          el("p", "尚无足够样本；不会填补缺失或重启期间的数据。", "empty"),
+          el("p", t("尚无足够样本；不会填补缺失或重启期间的数据。"), "empty"),
         );
         return box;
       }
@@ -656,7 +739,7 @@ if (typeof document !== "undefined")
         svg = svgEl("svg", {
           viewBox: "0 0 500 160",
           role: "img",
-          "aria-label": `${title}，最高 ${format(actualMax)}`,
+          "aria-label": t("{0}，最高 {1}", title, format(actualMax)),
         }),
         from = Date.parse(samples[0].at),
         to = Date.parse(samples.at(-1).at),
@@ -705,9 +788,9 @@ if (typeof document !== "undefined")
       box.append(svg);
       const caption = el("p");
       caption.append(
-        el("span", new Date(from).toLocaleTimeString()),
-        el("span", `最高 ${format(actualMax)}`),
-        el("span", new Date(to).toLocaleTimeString()),
+        el("span", new Date(from).toLocaleTimeString(i18n.locale())),
+        el("span", t("最高 {0}", format(actualMax))),
+        el("span", new Date(to).toLocaleTimeString(i18n.locale())),
       );
       box.append(caption);
       return box;
@@ -738,12 +821,12 @@ if (typeof document !== "undefined")
       const grid = el("div", null, "chart-grid");
       grid.append(
         chart(
-          "吞吐速率 · 蓝色上传 / 绿色下载",
+          t("吞吐速率 · 蓝色上传 / 绿色下载"),
           samples,
           ["uploadRate", "downloadRate"],
           formatRate,
         ),
-        chart("往返延迟 RTT", samples, ["rtt"], (v) => v.toFixed(1) + " ms"),
+        chart(t("往返延迟 RTT"), samples, ["rtt"], (v) => v.toFixed(1) + " ms"),
       );
       $("#history-chart").replaceChildren(grid);
       const ranking = el("div", null, "ranking"),
@@ -758,7 +841,7 @@ if (typeof document !== "undefined")
           .sort((a, b) => b.status.rtt_millis - a.status.rtt_millis)
           .slice(0, 5),
         max = Math.max(...links.map((l) => l.status.rtt_millis), 1);
-      ranking.append(el("h3", "实时 RTT · 最高 5 条链路"));
+      ranking.append(el("h3", t("实时 RTT · 最高 5 条链路")));
       links.forEach((l) => {
         const row = el("div", null, "rank-row"),
           track = el("div", null, "rank-track"),
@@ -782,15 +865,15 @@ if (typeof document !== "undefined")
       );
       const users = data.usage || [];
       if (!users.length) {
-        root.replaceChildren(el("p", "暂无用户。", "empty"));
+        root.replaceChildren(el("p", t("暂无用户。"), "empty"));
         return;
       }
-      const periods = [["5h", "近 5 小时"], ["1d", "近 1 天"], ["7d", "近 7 天"], ["30d", "近 30 天"]];
+      const periods = [["5h", t("近 5 小时")], ["1d", t("近 1 天")], ["7d", t("近 7 天")], ["30d", t("近 30 天")]];
       const traffic = (bytes) =>
         `↑ ${formatBytes(bytes?.upload || 0)} · ↓ ${formatBytes(bytes?.download || 0)}`;
       const table = el("table");
       const head = el("tr");
-      ["用户", ...periods.map(([, label]) => label), "链路明细"].forEach((label) =>
+      [t("用户"), ...periods.map(([, label]) => label), t("链路明细")].forEach((label) =>
         head.append(el("th", label)),
       );
       const thead = el("thead");
@@ -806,7 +889,7 @@ if (typeof document !== "undefined")
         const details = el("details");
         details.dataset.userId = usage.user_id;
         details.open = expanded.has(usage.user_id);
-        details.append(el("summary", `${usage.links.length} 条 Link`));
+        details.append(el("summary", t("{0} 条 Link", usage.links.length)));
         if (usage.links.length) {
           const links = el("table");
           const linkHead = el("tr");
@@ -828,7 +911,7 @@ if (typeof document !== "undefined")
           links.append(linkBody);
           details.append(links);
         } else {
-          details.append(el("p", "尚未分配 Link。", "empty"));
+          details.append(el("p", t("尚未分配 Link。"), "empty"));
         }
         cell.append(details);
         row.append(cell);
@@ -840,13 +923,13 @@ if (typeof document !== "undefined")
     function renderOperations() {
       const upgrade = data.upgrade || {};
       $("#upgrade-progress").textContent =
-        `Controller ${upgrade.Version || "—"} · ${upgrade.State || "暂无升级任务"}${upgrade.At ? " · " + upgrade.At : ""}`;
+        `Controller ${upgrade.Version || "—"} · ${t(upgrade.State) || t("暂无升级任务")}${upgrade.At ? " · " + upgrade.At : ""}`;
       const upgradeButton = $("#upgrade form button");
       if (upgradeButton)
         upgradeButton.disabled = ["queued", "running"].includes(upgrade.State);
       const table = el("table"),
         head = el("tr");
-      ["时间", "操作人", "操作", "请求结果"].forEach((v) =>
+      [t("时间"), t("操作人"), t("操作"), t("请求结果")].forEach((v) =>
         head.append(el("th", v)),
       );
       const thead = el("thead");
@@ -856,16 +939,16 @@ if (typeof document !== "undefined")
       [...(data.operations || [])].reverse().forEach((o) => {
         const tr = el("tr");
         [
-          new Date(o.at).toLocaleString(),
+          new Date(o.at).toLocaleString(i18n.locale()),
           o.actor,
           o.action,
-          o.status < 400 ? "成功 / 已接受" : `失败 (${o.status})`,
+          o.status < 400 ? t("成功 / 已接受") : t("失败 ({0})", o.status),
         ].forEach((v) => tr.append(el("td", v)));
         body.append(tr);
       });
       table.append(body);
       $("#operation-list").replaceChildren(
-        data.operations?.length ? table : el("p", "暂无操作记录。", "empty"),
+        data.operations?.length ? table : el("p", t("暂无操作记录。"), "empty"),
       );
     }
     function updateLiveTables() {
@@ -896,34 +979,34 @@ if (typeof document !== "undefined")
                     ? "pending"
                     : "ready",
               !node.enabled
-                ? "停用"
+                ? t("停用")
                 : node.status.apply_error
-                  ? "应用失败"
+                  ? t("应用失败")
                   : node.status.applied_version < node.desired
-                    ? "待应用"
-                    : "已应用",
+                    ? t("待应用")
+                    : t("已应用"),
             ),
             el(
               "small",
-              `配置 ${node.status.applied_version} / ${node.desired}`,
+              t("配置 {0} / {1}", node.status.applied_version, node.desired),
             ),
           );
           runtime.replaceChildren(
             badge(
               node.status.online ? "ready" : "offline",
-              node.status.online ? "在线" : "离线",
+              node.status.online ? t("在线") : t("离线"),
             ),
             el(
               "small",
-              `${node.status.online ? "当前" : "上次上报"}：隧道 ${node.status.tunnel_connections} · TCP ${node.status.tcp_connections} · UDP ${node.status.udp_associations}`,
+              t("{0}：隧道 {1} · TCP {2} · UDP {3}", node.status.online ? t("当前") : t("上次上报"), node.status.tunnel_connections, node.status.tcp_connections, node.status.udp_associations),
             ),
           );
           if (role === "Gateway") {
-            runtime.append(el("small", `VMess/WS ${node.vmess_disabled ? "已关闭" : "已开启"}`));
-            runtime.append(el("small", `HY2 ${node.hy2_disabled || !node.hy2_port ? "已关闭" : `UDP ${node.hy2_port} · ${node.status.hy2_ready ? "就绪" : "待应用"}`}`));
+            runtime.append(el("small", `VMess/WS ${node.vmess_disabled ? t("已关闭") : t("已开启")}`));
+            runtime.append(el("small", `HY2 ${node.hy2_disabled || !node.hy2_port ? t("已关闭") : `UDP ${node.hy2_port} · ${node.status.hy2_ready ? t("就绪") : t("待应用")}`}`));
           }
           if (!node.status.online && node.status.last_seen && !node.status.last_seen.startsWith("0001"))
-            runtime.append(el("small", `最后上报 ${new Date(node.status.last_seen).toLocaleString()}`));
+            runtime.append(el("small", t("最后上报 {0}", new Date(node.status.last_seen).toLocaleString(i18n.locale()))));
           if (node.status.last_error)
             runtime.append(el("small", node.status.last_error, "error"));
         });
@@ -947,16 +1030,16 @@ if (typeof document !== "undefined")
                   : "pending"
                 : "offline",
             !link.enabled
-              ? "停用"
+              ? t("停用")
               : st.online
                 ? st.ready
-                  ? "上报就绪"
-                  : "待就绪"
-                : "离线",
+                  ? t("上报就绪")
+                  : t("待就绪")
+                : t("离线"),
           ),
           el(
             "small",
-            `${st.online ? "当前" : "上次上报"}：${st.connections || 0} 条连接 · ${st.active_streams || 0} 个流 · RTT ${st.online ? st.rtt_millis || "—" : "—"} ms`,
+            t("{0}：{1} 条连接 · {2} 个流 · RTT {3} ms", st.online ? t("当前") : t("上次上报"), st.connections || 0, st.active_streams || 0, st.online ? st.rtt_millis || "—" : "—"),
           ),
           el(
             "small",
@@ -964,12 +1047,12 @@ if (typeof document !== "undefined")
           ),
           el(
             "small",
-            `写阻塞 ${st.write_stalls || 0} 次 / ${st.write_blocked_millis || 0} ms · 丢弃 ${st.queue_drops || 0}`,
+            t("写阻塞 {0} 次 / {1} ms · 丢弃 {2}", st.write_stalls || 0, st.write_blocked_millis || 0, st.queue_drops || 0),
           ),
           el("small", st.last_error || "", "error"),
         );
         if (!st.online && st.last_seen && !st.last_seen.startsWith("0001"))
-          row.cells[3].append(el("small", `最后上报 ${new Date(st.last_seen).toLocaleString()}`));
+          row.cells[3].append(el("small", t("最后上报 {0}", new Date(st.last_seen).toLocaleString(i18n.locale()))));
       });
       $$("#grant-table tbody tr").forEach((row) => {
         const action = $('form[action$="/toggle"]', row)?.getAttribute(
@@ -986,7 +1069,7 @@ if (typeof document !== "undefined")
           : "disabled";
         row.cells[3].replaceChildren(
           badge(state),
-          el("small", grant.published ? "已发布" : "尚未发布"),
+          el("small", grant.published ? t("已发布") : t("尚未发布")),
         );
         row.cells[4].replaceChildren(
           el(
@@ -1007,21 +1090,21 @@ if (typeof document !== "undefined")
             [
               n.role + " " + n.name,
               n.status.binary_version || "—",
-              n.enrolled ? "已安装" : "待安装",
-              n.enabled && n.status.online ? "在线" : "离线",
+              n.enrolled ? t("已安装") : t("待安装"),
+              n.enabled && n.status.online ? t("在线") : t("离线"),
               n.status.apply_error ||
-                (n.status.applied_version >= n.desired ? "已应用" : "待应用"),
+                (n.status.applied_version >= n.desired ? t("已应用") : t("待应用")),
               n.status.ready && (n.role !== "Gateway" || n.status.xray_ready)
-                ? "就绪"
-                : "待就绪",
-              n.next,
+                ? t("就绪")
+                : t("待就绪"),
+              t(n.next),
             ].forEach((v) => row.append(el("td", v)));
             return row;
           }),
         );
       $$("#subscribe .subscription-row").forEach((row) => {
         const user = data.users.find((u) => u.id === row.dataset.userId);
-        if (user) $(".publication", row).textContent = `${user.name}（${user.publication}）`;
+        if (user) $(".publication", row).textContent = `${user.name}（${t(user.publication)}）`;
       });
     }
     function renderNodeUpgrades() {
@@ -1032,9 +1115,8 @@ if (typeof document !== "undefined")
         const node = data.nodes.find((item) => item.id === input?.value);
         if (!node) return;
         const up = data.updaters?.[node.id];
-        const textNode = [...label.childNodes].find((child) => child.nodeType === Node.TEXT_NODE);
-        if (textNode)
-          textNode.textContent = `${node.role} ${node.name} · ${up?.State || "未配对"} · ${node.status.binary_version || "—"} · ${label.dataset.links} Links / ${label.dataset.users} users`;
+        const text = `${node.role} ${node.name} · ${t(up?.State) || t("未配对")} · ${node.status.binary_version || "—"} · ${label.dataset.links} Links / ${label.dataset.users} users`;
+        label.replaceChildren(input, document.createTextNode(text));
       });
       const csrf = section.querySelector('form[action="/admin/upgrades"] input[name="csrf"]')?.value;
       const tables = section.querySelectorAll("table");
@@ -1047,20 +1129,45 @@ if (typeof document !== "undefined")
           if (!match) continue;
           const up = data.updaters?.[match[1]];
           const node = data.nodes.find((n) => n.id === match[1]);
-          row.cells[1].textContent = `${up?.State || "未配对"} · ${up?.Mode || "—"}/${up?.Arch || "—"} · 节点 ${node?.status.binary_version || "—"} · 升级助手 ${up?.Version || "—"}`;
+          row.cells[1].textContent = t("{0} · {1}/{2} · 节点 {3} · 升级助手 {4}", t(up?.State) || t("未配对"), up?.Mode || "—", up?.Arch || "—", node?.status.binary_version || "—", up?.Version || "—");
         }
       }
       if (!tasksBody) return;
       tasksBody.replaceChildren();
+      const tasks = new Map((data.upgrade_tasks || []).map((task) => [task.id, task]));
+      const resumeTasks = new Set();
+      for (const batch of Object.values(data.upgrade_batches || {})) {
+        if (batch.stage !== "paused" || !batch.error?.startsWith("previously healthy Link ")) continue;
+        let lastCompleted = "", pending = false, valid = true;
+        for (const id of batch.task_ids || []) {
+          const task = tasks.get(id);
+          if (!task || task.batch_id !== batch.id) { valid = false; break; }
+          if (task.stage === "succeeded" && !pending) lastCompleted = id;
+          else if (task.stage === "pending") pending = true;
+          else { valid = false; break; }
+        }
+        if (valid && lastCompleted) resumeTasks.add(lastCompleted);
+      }
       for (const task of data.upgrade_tasks || []) {
         const row = document.createElement("tr");
         for (const value of [
           `${task.role} ${task.node_id}`,
           `${task.from_version || "—"} → ${task.target_version}`,
-          `${task.stage} · batch ${data.upgrade_batches?.[task.batch_id]?.stage || "—"}${data.upgrade_batches?.[task.batch_id]?.error ? ": " + data.upgrade_batches[task.batch_id].error : ""} · ${task.updated_at}`,
+          `${t(task.stage)} · ${t("批次")} ${t(data.upgrade_batches?.[task.batch_id]?.stage) || "—"}${data.upgrade_batches?.[task.batch_id]?.error ? ": " + data.upgrade_batches[task.batch_id].error : ""} · ${task.updated_at}`,
           task.error || "",
         ]) row.append(el("td", value));
         const action = el("td");
+        if (resumeTasks.has(task.id)) {
+          const form = document.createElement("form");
+          form.method = "post";
+          form.action = `/admin/upgrades/${encodeURIComponent(task.id)}/resume`;
+          const hidden = document.createElement("input");
+          hidden.type = "hidden";
+          hidden.name = "csrf";
+          hidden.value = csrf || "";
+          form.append(hidden, el("button", t("重新检查并继续")));
+          action.append(form);
+        }
         if (["pending", "preparing"].includes(task.stage)) {
           const form = document.createElement("form");
           form.method = "post";
@@ -1069,7 +1176,7 @@ if (typeof document !== "undefined")
           hidden.type = "hidden";
           hidden.name = "csrf";
           hidden.value = csrf || "";
-          const button = el("button", "取消");
+          const button = el("button", t("取消"));
           form.append(hidden, button);
           action.append(form);
         }
@@ -1078,7 +1185,7 @@ if (typeof document !== "undefined")
       }
       if (!tasksBody.children.length) {
         const row = document.createElement("tr");
-        const cell = el("td", "暂无升级任务");
+        const cell = el("td", t("暂无升级任务"));
         cell.colSpan = 5;
         row.append(cell);
         tasksBody.append(row);
@@ -1086,7 +1193,7 @@ if (typeof document !== "undefined")
     }
     function labelResponsiveTables(root = document) {
       $$("table", root).forEach((table) => {
-        const labels = [...(table.tHead?.rows[0]?.cells || [])].map((cell) => cell.textContent.trim());
+        const labels = [...(table.tHead?.rows[0]?.cells || [])].map((cell) => t(cell.textContent.trim()));
         for (const body of table.tBodies)
           for (const row of body.rows)
             [...row.cells].forEach((cell, index) => {
@@ -1094,8 +1201,114 @@ if (typeof document !== "undefined")
             });
       });
     }
+    function setAssignmentTab(tab) {
+      const section = $("#assign");
+      section.dataset.assignmentTab = tab;
+      $$("[data-assignment-tab]", section).forEach((button) => {
+        const selected = button.dataset.assignmentTab === tab;
+        button.setAttribute("aria-selected", String(selected));
+        button.tabIndex = selected ? 0 : -1;
+        document.getElementById(button.getAttribute("aria-controls")).hidden = !selected;
+      });
+    }
+    function enhanceAssignmentTabs(section) {
+      const tabs = $(".assignment-tabs", section);
+      if (!tabs || tabs.dataset.enhanced) return;
+      tabs.dataset.enhanced = "true";
+      tabs.hidden = false;
+      const buttons = $$("[data-assignment-tab]", tabs);
+      buttons.forEach((button, index) => {
+        button.addEventListener("click", () => setAssignmentTab(button.dataset.assignmentTab));
+        button.addEventListener("keydown", (event) => {
+          let next;
+          if (event.key === "ArrowRight") next = buttons[(index + 1) % buttons.length];
+          else if (event.key === "ArrowLeft") next = buttons[(index + buttons.length - 1) % buttons.length];
+          else if (event.key === "Home") next = buttons[0];
+          else if (event.key === "End") next = buttons[buttons.length - 1];
+          if (next) {
+            event.preventDefault();
+            setAssignmentTab(next.dataset.assignmentTab);
+            next.focus();
+          }
+        });
+      });
+      setAssignmentTab(section.dataset.assignmentTab || "agent");
+    }
+    function updatePendingChooser(form) {
+      if (!data) return;
+      const candidates = pendingConnectionCandidates(data);
+      const field = $("fieldset", form);
+      const rows = new Map($$(".pending-choice", form).map((row) => [$("input", row).value, row]));
+      const query = $(".pending-search", form).value.trim().toLowerCase();
+      const agentFilter = $(".pending-agent", form).value;
+      const gatewayFilter = $(".pending-gateway", form).value;
+      const manualTarget = form.elements.reality_target.value.trim();
+      const plan = { created: 0, reenabled: 0 };
+      let selected = 0, visible = 0, available = 0, needsTarget = false;
+      for (const candidate of candidates) {
+        let row = rows.get(candidate.value);
+        if (!row) {
+          row = el("label", null, "pending-choice");
+          const checkbox = el("input");
+          checkbox.type = "checkbox";
+          checkbox.name = "connection";
+          checkbox.value = candidate.value;
+          row.append(checkbox, el("span"), el("small", "", "choice-state"));
+        }
+        rows.delete(candidate.value);
+        row.dataset.agentId = candidate.agent.id;
+        row.dataset.gatewayId = candidate.gateway.id;
+        const title = `${candidate.gateway.name} → ${candidate.agent.name} (${candidate.gateway.host || t("无公网地址")})`;
+        $("span", row).textContent = title;
+        const target = candidate.gateway.target || manualTarget || defaultRealityTarget(candidate.gateway.region);
+        $(".choice-state", row).textContent = `${t(candidate.state)} · ${target || t("需设置所在地或填写 target")}${candidate.available ? "" : t(" · 节点停用或缺少公网地址")}`;
+        const checkbox = $("input", row);
+        checkbox.disabled = !candidate.available;
+        if (checkbox.disabled) checkbox.checked = false;
+        row.hidden = !title.toLowerCase().includes(query) ||
+          (agentFilter && candidate.agent.id !== agentFilter) ||
+          (gatewayFilter && candidate.gateway.id !== gatewayFilter);
+        if (!row.hidden) visible++;
+        if (!row.hidden && candidate.available) available++;
+        if (checkbox.checked) {
+          selected++;
+          plan[candidate.action]++;
+          needsTarget ||= candidate.needsTarget;
+        }
+        if (!row.isConnected) field.append(row);
+      }
+      rows.forEach((row) => row.remove());
+      const empty = $(".pending-empty", form);
+      empty.hidden = visible > 0;
+      empty.textContent = candidates.length ? t("当前筛选下没有未开启连接。") : t("所有连接均已开启，或尚未添加 Gateway / Agent。");
+      $(".selection-summary", form).textContent = t("未开启 {0} · 筛选结果 {1} / 可选 {2} · 已选 {3} · 新增 {4} · 重新启用 {5}。清除选择仅影响本次提交。", candidates.length, visible, available, selected, plan.created, plan.reenabled);
+      form.elements.reality_target.required = needsTarget;
+      $("button[type=submit]", form).disabled = !selected || submitting;
+      $("[data-pending-select]", form).disabled = !available || submitting;
+      $("[data-pending-clear]", form).disabled = !selected || submitting;
+    }
+    function enhancePendingChooser(form) {
+      $(".pending-tools", form).hidden = false;
+      $("button[type=submit]", form).disabled = true;
+      $("[data-pending-select]", form).addEventListener("click", () => {
+        $$(".pending-choice:not([hidden]) input:not(:disabled)", form).forEach((c) => (c.checked = true));
+        form.dataset.dirty = "true";
+        updatePendingChooser(form);
+      });
+      $("[data-pending-clear]", form).addEventListener("click", () => {
+        $$(".pending-choice input", form).forEach((c) => (c.checked = false));
+        form.dataset.dirty = "true";
+        updatePendingChooser(form);
+      });
+      form.addEventListener("input", () => updatePendingChooser(form));
+      form.addEventListener("change", () => updatePendingChooser(form));
+    }
     function updateChooser(form) {
       if (!data) return;
+      if (form.classList.contains("pending-chooser")) {
+        updatePendingChooser(form);
+        return;
+      }
       const kind = form.closest("section").id,
         owner = form.elements[kind === "assign" ? "agent_id" : "user_id"].value,
         query = $(".selection-search", form).value.toLowerCase(),
@@ -1135,12 +1348,12 @@ if (typeof document !== "undefined")
               data.links.some((l) => l.route_id === existing.id && l.enabled)
             : existing?.enabled;
         const label = !selectable
-          ? "不可用"
+          ? t("不可用")
           : existing
             ? active
-              ? "已存在"
-              : "将重新启用"
-            : "可新增";
+              ? t("已存在")
+              : t("将重新启用")
+            : t("可新增");
         const target =
           kind === "assign"
             ? node?.target ||
@@ -1149,7 +1362,7 @@ if (typeof document !== "undefined")
             : "";
         $(".choice-state", row).textContent =
           kind === "assign"
-            ? `${label} · ${target || "需设置所在地或填写 target"}`
+            ? `${label} · ${target || t("需设置所在地或填写 target")}`
             : label;
         row.hidden =
           !row.dataset.search.includes(query) ||
@@ -1163,7 +1376,7 @@ if (typeof document !== "undefined")
           .map((c) => c.value),
         plan = selectionPlan(kind, owner, selected, data);
       $(".selection-summary", form).textContent =
-        `已选 ${selected.length} / 可选 ${checkboxes.filter((c) => !c.disabled).length} · 新增 ${plan.created} · 重新启用 ${plan.reenabled} · 已存在 ${plan.unchanged}。清除选择仅影响本次提交。`;
+        t("已选 {0} / 可选 {1} · 新增 {2} · 重新启用 {3} · 已存在 {4}。清除选择仅影响本次提交。", selected.length, checkboxes.filter((c) => !c.disabled).length, plan.created, plan.reenabled, plan.unchanged);
       $("button[type=submit]", form).disabled = !selected.length || submitting;
       if (kind === "assign") {
         const targets = new Set(
@@ -1174,45 +1387,49 @@ if (typeof document !== "undefined")
         );
         form.elements.reality_target.placeholder =
           targets.size === 1 && !targets.has("")
-            ? `默认：${[...targets][0]}`
-            : "留空：按各 Gateway 所在地使用默认值";
+            ? t("默认：{0}", [...targets][0])
+            : t("留空：按各 Gateway 所在地使用默认值");
       }
     }
     function enhance(root = document) {
       $$("time[datetime]", root).forEach((time) => {
         const value = new Date(time.dateTime);
         if (!Number.isNaN(value.getTime())) {
-          time.textContent = value.toLocaleString();
-          time.title = "浏览器本地时间";
+          time.textContent = value.toLocaleString(i18n.locale());
+          time.title = t("浏览器本地时间");
         }
       });
-      $$("section[data-page] > form.stack", root).forEach((form) => {
+      const assign = root.id === "assign" ? root : $("#assign", root);
+      if (assign) enhanceAssignmentTabs(assign);
+      $$("section[data-page] > form.stack, section[data-page] > .assignment-panel > form.stack", root).forEach((form) => {
         const section = form.closest("section");
         if (form.dataset.enhanced) return;
         form.dataset.enhanced = "true";
-        if (["assign", "subscribe"].includes(section.id)) {
+        if (form.classList.contains("pending-chooser")) {
+          enhancePendingChooser(form);
+        } else if (["assign", "subscribe"].includes(section.id)) {
           form.classList.add("chooser");
           const field = $("fieldset", form),
             tools = el("div", null, "selection-tools"),
             search = el("input", null, "selection-search");
           search.type = "search";
-          search.placeholder = "搜索名称或地址";
-          search.setAttribute("aria-label", "搜索可选项");
+          search.placeholder = t("搜索名称或地址");
+          search.setAttribute("aria-label", t("搜索可选项"));
           const filter = el("select", null, "selection-filter");
-          filter.setAttribute("aria-label", "选择状态筛选");
+          filter.setAttribute("aria-label", t("选择状态筛选"));
           [
-            ["all", "全部"],
-            ["available", "可选"],
-            ["new", "未配置"],
-            ["active", "已存在"],
+            ["all", t("全部")],
+            ["available", t("可选")],
+            ["new", t("未配置")],
+            ["active", t("已存在")],
           ].forEach(([v, t]) => {
             const o = el("option", t);
             o.value = v;
             filter.append(o);
           });
           const group = el("select", null, "selection-group");
-          group.setAttribute("aria-label", "按 Gateway 分组");
-          const all = el("option", "所有 Gateway");
+          group.setAttribute("aria-label", t("按 Gateway 分组"));
+          const all = el("option", t("所有 Gateway"));
           all.value = "";
           group.append(all);
           if (section.id === "subscribe") {
@@ -1224,8 +1441,8 @@ if (typeof document !== "undefined")
                 group.append(o);
               });
           } else group.hidden = true;
-          const select = el("button", "全选筛选结果"),
-            clear = el("button", "清除选择");
+          const select = el("button", t("全选筛选结果")),
+            clear = el("button", t("清除选择"));
           select.type = clear.type = "button";
           tools.append(search, filter, group, select, clear);
           field.prepend(tools);
@@ -1259,7 +1476,7 @@ if (typeof document !== "undefined")
           const details = el("details", null, "create-details"),
             summary = el(
               "summary",
-              `＋ ${$("button", form)?.textContent || "创建"}`,
+              `＋ ${$("button", form)?.textContent || t("创建")}`,
             );
           form.before(details);
           details.append(summary, form);
@@ -1284,7 +1501,7 @@ if (typeof document !== "undefined")
         ) {
           const advanced = el("details", null, "advanced"),
             inner = el("div");
-          advanced.append(el("summary", "高级设置"), inner);
+          advanced.append(el("summary", t("高级设置")), inner);
           $$(":scope > label", form)
             .filter((l) => advancedNames.includes($("input", l)?.name))
             .forEach((l) => inner.append(l));
@@ -1298,10 +1515,10 @@ if (typeof document !== "undefined")
         if (table.closest("section").id === "readiness") return;
         const search = el("input", null, "table-search");
         search.type = "search";
-        search.placeholder = "搜索此列表";
+        search.placeholder = t("搜索此列表");
         search.setAttribute(
           "aria-label",
-          `${$("h2", table.closest("section")).textContent} 搜索`,
+          t("{0} 搜索", $("h2", table.closest("section")).textContent),
         );
         table.before(search);
         search.addEventListener("input", () =>
@@ -1326,7 +1543,7 @@ if (typeof document !== "undefined")
           if (!target.value.trim() || target.value === previousDefault)
             target.value = nextDefault;
           previousDefault = nextDefault;
-          target.placeholder = nextDefault || "手动填写 REALITY target";
+          target.placeholder = nextDefault || t("手动填写 REALITY target");
         });
         const host = quick.elements.public_host,
           url = quick.elements.link_url;
@@ -1391,11 +1608,12 @@ if (typeof document !== "undefined")
           !response.ok ||
           !response.headers.get("content-type")?.includes("application/json")
         )
-          throw new Error("会话已过期或服务不可用，请重新登录后刷新。");
+          throw new Error(t("会话已过期或服务不可用，请重新登录后刷新。"));
         data = await response.json();
         renderMetrics();
         renderMap();
         renderRouteOverview();
+        renderUpstreamProbes();
         renderProgress();
         renderHistory();
         renderUsage();
@@ -1404,13 +1622,17 @@ if (typeof document !== "undefined")
         renderNodeUpgrades();
         labelResponsiveTables();
         $$(".chooser").forEach((f) => {
+          if (f.classList.contains("pending-chooser")) {
+            updatePendingChooser(f);
+            return;
+          }
           const group = $(".selection-group", f),
             old = group.value;
           if (f.closest("section").id === "subscribe") {
             const desired = data.nodes.filter((n) => n.role === "Gateway");
             if (group.options.length !== desired.length + 1) {
               group.replaceChildren(
-                new Option("所有 Gateway", ""),
+                new Option(t("所有 Gateway"), ""),
                 ...desired.map((n) => new Option(n.name, n.id)),
               );
               group.value = old;
@@ -1420,14 +1642,14 @@ if (typeof document !== "undefined")
         });
         lastSuccessfulRefresh = new Date(data.at);
         $("#refresh-note").textContent =
-          `已更新 ${lastSuccessfulRefresh.toLocaleTimeString()} · 每 15 秒自动刷新`;
+          t("已更新 {0} · 每 15 秒自动刷新", lastSuccessfulRefresh.toLocaleTimeString(i18n.locale()));
         $("#refresh-note").classList.remove("error");
         $("#stale-banner").hidden = true;
       } catch (error) {
         $("#refresh-note").textContent =
-          `刷新失败 · 上次成功 ${lastSuccessfulRefresh ? lastSuccessfulRefresh.toLocaleTimeString() : "无"}`;
+          t("刷新失败 · 上次成功 {0}", lastSuccessfulRefresh ? lastSuccessfulRefresh.toLocaleTimeString(i18n.locale()) : t("无"));
         $("#refresh-note").classList.add("error");
-        $("#stale-banner").textContent = `状态数据可能已过期：${error.message}。上次成功刷新：${lastSuccessfulRefresh ? lastSuccessfulRefresh.toLocaleString() : "无"}。`;
+        $("#stale-banner").textContent = t("状态数据可能已过期：{0}。上次成功刷新：{1}。", error.message, lastSuccessfulRefresh ? lastSuccessfulRefresh.toLocaleString(i18n.locale()) : t("无"));
         $("#stale-banner").hidden = false;
       } finally {
         refreshBusy = false;
@@ -1435,7 +1657,7 @@ if (typeof document !== "undefined")
     }
     async function replaceSections(html, submittedForm) {
       const doc = new DOMParser().parseFromString(html, "text/html");
-      if (!$("#page-title", doc)) throw new Error("会话已过期，请重新登录。");
+      if (!$("#page-title", doc)) throw new Error(t("会话已过期，请重新登录。"));
       const originID = submittedForm.closest("section")?.id;
       delete submittedForm.dataset.dirty;
       clearFormError(submittedForm);
@@ -1478,6 +1700,7 @@ if (typeof document !== "undefined")
               document.importNode(n, true),
             ),
           );
+          i18n.apply(section);
           enhance(section);
           labelResponsiveTables(section);
           $$(".table-search", section).forEach((s, i) => {
@@ -1485,8 +1708,9 @@ if (typeof document !== "undefined")
             s.dispatchEvent(new Event("input"));
           });
         });
-      const message = $("#notice", doc)?.textContent.trim() ||
-        "操作成功。正在跟踪配置与运行状态。";
+      const message = submittedForm.action.endsWith("/probe")
+        ? t("测试请求已提交；请等待 Gateway 回传结果。")
+        : t($("#notice", doc)?.textContent.trim()) || t("操作成功。正在跟踪配置与运行状态。");
       notice(message);
       const section = originID && document.getElementById(originID);
       if (section) {
@@ -1500,7 +1724,7 @@ if (typeof document !== "undefined")
     document.addEventListener("input", (event) => {
       if (
         event.target.matches(
-          "input[type=search],.selection-filter,.selection-group",
+          "input[type=search],.selection-filter,.selection-group,.pending-agent,.pending-gateway",
         )
       )
         return;
@@ -1509,7 +1733,7 @@ if (typeof document !== "undefined")
     document.addEventListener("change", (event) => {
       if (
         event.target.closest("form") &&
-        !event.target.matches(".selection-filter,.selection-group")
+        !event.target.matches(".selection-filter,.selection-group,.pending-agent,.pending-gateway")
       )
         event.target.closest("form").dataset.dirty = "true";
     });
@@ -1530,24 +1754,24 @@ if (typeof document !== "undefined")
             headers: { Accept: "text/html, text/plain" },
           }),
           text = await response.text();
-        if (!response.ok) throw new Error(text.slice(0, 700));
+        if (!response.ok) throw new Error(t(text.slice(0, 700).trim()));
         if (response.headers.get("content-type")?.includes("text/plain")) {
           const content = el("div"),
             pre = el("pre", text),
-            copy = el("button", "复制安装说明");
+            copy = el("button", t("复制安装说明"));
           copy.type = "button";
           copy.dataset.copy = text;
           content.append(
-            el("p", "在对应主机执行安装命令；完成后面板自动跟踪上线状态。"),
+            el("p", t("在对应主机执行安装命令；完成后面板自动跟踪上线状态。")),
             copy,
             pre,
           );
-          showDetail("安装选项 · 一次性令牌", content);
+          showDetail(t("安装选项 · 一次性令牌"), content);
           delete form.dataset.dirty;
-          notice("已生成安装选项。关闭窗口前保存所需令牌。");
+          notice(t("已生成安装选项。关闭窗口前保存所需令牌。"));
         } else await replaceSections(text, form);
       } catch (error) {
-        const message = `操作未完成：${error.message}。输入已保留；网络中断时请先检查操作记录，避免重复提交。`;
+        const message = t("操作未完成：{0}。输入已保留；网络中断时请先检查操作记录，避免重复提交。", error.message);
         notice(message, true);
         showFormError(form, message);
       } finally {
@@ -1562,11 +1786,11 @@ if (typeof document !== "undefined")
       try {
         await navigator.clipboard.writeText(button.dataset.copy);
         const before = button.textContent;
-        button.textContent = "已复制";
+        button.textContent = t("已复制");
         setTimeout(() => (button.textContent = before), 2000);
       } catch {
         button.previousElementSibling?.select?.();
-        notice("无法访问剪贴板，请手动选择并复制。", true);
+        notice(t("无法访问剪贴板，请手动选择并复制。"), true);
       }
     });
     $("#close-detail").addEventListener("click", () => {
@@ -1595,6 +1819,7 @@ if (typeof document !== "undefined")
       }),
     );
     window.addEventListener("hashchange", navigate);
+    i18n.apply();
     enhance();
     navigate();
     refresh();

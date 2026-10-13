@@ -302,6 +302,8 @@ td input {
   background: #fff3d9;
   color: #ad7418;
 }
+.upstream-probe { overflow-wrap: anywhere; }
+.badge.probe_failed,
 .badge.offline {
   background: #ffe9e9;
   color: #c05454;
@@ -310,6 +312,7 @@ td input {
   background: #edf0f4;
   color: #8190a1;
 }
+.badge.testing,
 .badge.configured {
   background: #e9f0ff;
   color: #365f9b;
@@ -571,6 +574,28 @@ svg.network {
   border-radius: 8px;
   line-height: 1.7;
   font-size: 12px;
+}
+.assignment-tabs {
+  margin: 18px 0;
+  flex-wrap: wrap;
+}
+.assignment-tabs button[aria-selected="true"] {
+  background: var(--accent);
+  color: #fff;
+}
+.chooser fieldset > .pending-choice {
+  flex-wrap: wrap;
+}
+.pending-choice span {
+  flex: 1;
+  min-width: 160px;
+  overflow-wrap: anywhere;
+}
+.pending-choice .choice-state {
+  overflow-wrap: anywhere;
+}
+.pending-empty {
+  grid-column: 1/-1;
 }
 .create-details {
   margin-top: 18px;

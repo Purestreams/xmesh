@@ -1,8 +1,9 @@
 (() => {
   "use strict";
+  const i18n = window.XMeshI18n, t = i18n.t;
   const $ = (id) => document.getElementById(id);
-  const labels = {ready: "就绪", pending: "待就绪", offline: "离线", stale: "数据过期", unknown: "等待上报", disabled: "停用", unprobed: "未探测"};
-  const roles = {gateway: "Gateway · 入口", agent: "Agent · 出口", external: "外部出口"};
+  const labels = {ready: t("就绪"), pending: t("待就绪"), offline: t("离线"), stale: t("数据过期"), unknown: t("等待上报"), disabled: t("停用"), unprobed: t("未探测")};
+  const roles = {gateway: t("Gateway · 入口"), agent: t("Agent · 出口"), external: t("外部出口")};
   let data = null, selection = null, loading = false;
   const el = (tag, text, cls) => {
     const node = document.createElement(tag);
@@ -10,9 +11,9 @@
     if (cls) node.className = cls;
     return node;
   };
-  const stateLabel = (stage) => el("span", `${stage === "ready" ? "●" : "○"} ${labels[stage] || "等待上报"}`, `state ${stage}`);
+  const stateLabel = (stage) => el("span", `${stage === "ready" ? "●" : "○"} ${labels[stage] || t("等待上报")}`, `state ${stage}`);
   const rtt = (link) => link.rtt_ms === null || link.rtt_ms === undefined ? "—" : `${link.rtt_ms.toFixed(1)} ms`;
-  const time = (value) => new Date(value).toLocaleTimeString("zh-CN", {hour12: false});
+  const time = (value) => new Date(value).toLocaleTimeString(i18n.locale(), {hour12: false});
 
   function render() {
     if (!data) return;
@@ -20,9 +21,9 @@
     const online = measuredNodes.filter((n) => ["ready", "pending"].includes(n.state)).length;
     const healthy = data.links.filter((l) => l.state === "ready").length;
     $("metrics").replaceChildren(...[
-      ["在线节点", online, measuredNodes.length],
-      ["就绪链路", healthy, data.links.length],
-      ["已发布节点", data.nodes.length, null],
+      [t("在线节点"), online, measuredNodes.length],
+      [t("就绪链路"), healthy, data.links.length],
+      [t("已发布节点"), data.nodes.length, null],
     ].map(([label, count, total]) => {
       const card = el("div", undefined, "metric");
       const value = el("strong", String(count));
@@ -36,7 +37,7 @@
       card.append(name, stateLabel(node.state));
       return card;
     }));
-    if (!data.nodes.length) $("nodes").append(el("p", "暂未发布节点。", "empty"));
+    if (!data.nodes.length) $("nodes").append(el("p", t("暂未发布节点。"), "empty"));
     renderMatrix();
     renderDetail();
   }
@@ -49,11 +50,11 @@
     const gateways = data.nodes.filter((n) => n.role === "gateway" && visible(n));
     const exits = data.nodes.filter((n) => n.role !== "gateway" && visible(n));
     if (!gateways.length || !exits.length) {
-      $("matrix").replaceChildren(el("p", query ? "没有匹配的公开名称。" : "暂未发布入口与出口组合。", "empty"));
+      $("matrix").replaceChildren(el("p", query ? t("没有匹配的公开名称。") : t("暂未发布入口与出口组合。"), "empty"));
       return;
     }
     const table = el("table"), thead = el("thead"), header = el("tr");
-    header.append(el("th", "入口 ↓ / 出口 →"));
+    header.append(el("th", t("入口 ↓ / 出口 →")));
     exits.forEach((node) => header.append(el("th", node.name)));
     thead.append(header);
     const body = el("tbody");
@@ -69,9 +70,9 @@
           const representative = healthy.find((l) => l.rtt_ms !== null) || healthy[0] || pair[0];
           const button = el("button", undefined, representative.state);
           button.type = "button";
-          button.setAttribute("aria-label", `${gateway.name} → ${exit.name}，${pair.length} 条链路，查看详情`);
+          button.setAttribute("aria-label", t("{0} → {1}，{2} 条链路，查看详情", gateway.name, exit.name, pair.length));
           button.append(stateLabel(representative.state), el("span", rtt(representative), "cell-value"));
-          button.append(el("span", pair.length > 1 ? `${healthy.length}/${pair.length} 就绪 · ${pair.length} 条 Link` : representative.name, "cell-extra"));
+          button.append(el("span", pair.length > 1 ? t("{0}/{1} 就绪 · {2} 条 Link", healthy.length, pair.length, pair.length) : representative.name, "cell-extra"));
           button.addEventListener("click", () => {
             selection = {gateway: gateway.name, exit: exit.name};
             renderDetail();
@@ -100,25 +101,25 @@
       const card = el("article", undefined, "link-detail"), heading = el("div", undefined, "link-heading");
       heading.append(el("h3", link.name), stateLabel(link.state));
       card.append(heading, el("p", rtt(link), "link-value"));
-      card.append(el("p", link.measured_at ? `最近成功探测 ${time(link.measured_at)}` : "暂无当前有效延迟测量", "muted"));
+      card.append(el("p", link.measured_at ? t("最近成功探测 {0}", time(link.measured_at)) : t("暂无当前有效延迟测量"), "muted"));
       if (link.history.length) {
         const canvas = el("canvas", undefined, "history");
         canvas.setAttribute("role", "img");
-        canvas.setAttribute("aria-label", `${link.name} 近 24 小时隧道 RTT 趋势，单位毫秒`);
+        canvas.setAttribute("aria-label", t("{0} 近 24 小时隧道 RTT 趋势，单位毫秒", link.name));
         card.append(canvas);
         requestAnimationFrame(() => { if (canvas.isConnected) drawHistory(canvas, link.history); });
-        const details = el("details", undefined, "history-data"), summary = el("summary", `采样数据（${link.history.length} 点，约 5 分钟间隔）`);
+        const details = el("details", undefined, "history-data"), summary = el("summary", t("采样数据（{0} 点，约 5 分钟间隔）", link.history.length));
         const table = el("table"), head = el("tr");
-        head.append(el("th", "时间"), el("th", "RTT"));
+        head.append(el("th", t("时间")), el("th", "RTT"));
         const thead = el("thead"); thead.append(head); table.append(thead);
         const tbody = el("tbody");
         [...link.history].reverse().forEach((sample) => {
           const row = el("tr");
-          row.append(el("td", new Date(sample.at).toLocaleString("zh-CN", {hour12: false})), el("td", rtt(sample)));
+          row.append(el("td", new Date(sample.at).toLocaleString(i18n.locale(), {hour12: false})), el("td", rtt(sample)));
           tbody.append(row);
         });
         table.append(tbody); details.append(summary, table); card.append(details);
-      } else card.append(el("p", "暂无延迟历史。", "muted"));
+      } else card.append(el("p", t("暂无延迟历史。"), "muted"));
       return card;
     }));
   }
@@ -140,8 +141,9 @@
       ctx.fillText(`${(max * (1 - i / 2)).toFixed(0)}`, 5, y + 4);
     }
     ctx.fillText("ms", 5, 10);
-    ctx.fillText("24 小时前", left, height - 6);
-    ctx.fillText("现在", right - 26, height - 6);
+    ctx.fillText(t("24 小时前"), left, height - 6);
+    const now = t("现在");
+    ctx.fillText(now, right - ctx.measureText(now).width, height - 6);
     ctx.strokeStyle = "#117c79"; ctx.fillStyle = "#117c79"; ctx.lineWidth = 2;
     let previous = null;
     samples.forEach((sample) => {
@@ -167,18 +169,18 @@
           data = null; selection = null;
           ["metrics", "nodes", "matrix", "detail-body"].forEach((id) => $(id).replaceChildren());
           $("detail").hidden = true;
-          throw new Error("公开监控已关闭。");
+          throw new Error(t("公开监控已关闭。"));
         }
-        throw new Error("状态更新失败，当前数据已标记为过期。");
+        throw new Error(t("状态更新失败，当前数据已标记为过期。"));
       }
       data = await response.json();
       $("notice").hidden = true;
-      $("updated").textContent = `已更新 ${time(data.at)} · 每 15 秒刷新`;
+      $("updated").textContent = t("已更新 {0} · 每 15 秒刷新", time(data.at));
       render();
     } catch (error) {
       $("notice").hidden = false;
-      $("notice").textContent = error.name === "AbortError" ? "状态请求超时，当前数据已标记为过期。" : error.message;
-      $("updated").textContent = "等待恢复更新";
+      $("notice").textContent = error.name === "AbortError" ? t("状态请求超时，当前数据已标记为过期。") : error.message;
+      $("updated").textContent = t("等待恢复更新");
       if (data) {
         data.nodes.forEach((n) => { n.state = "stale"; });
         data.links.forEach((l) => { l.state = "stale"; l.rtt_ms = null; l.measured_at = null; });

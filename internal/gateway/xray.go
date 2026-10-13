@@ -17,6 +17,7 @@ import (
 
 	"xmesh/internal/atomicfile"
 	"xmesh/internal/controller"
+	"xmesh/internal/egress"
 	"xmesh/internal/hy2"
 	"xmesh/internal/model"
 )
@@ -46,10 +47,12 @@ type xrayInbound struct {
 	StreamSettings *xrayStreamSettings `json:"streamSettings,omitempty"`
 }
 type xrayInboundSettings struct {
-	Clients    []xrayClient `json:"clients"`
-	Version    int          `json:"version,omitempty"`
-	Decryption string       `json:"decryption,omitempty"`
-	Address    string       `json:"address,omitempty"`
+	Auth       string          `json:"auth,omitempty"`
+	Accounts   []xraySOCKSUser `json:"accounts,omitempty"`
+	Clients    []xrayClient    `json:"clients"`
+	Version    int             `json:"version,omitempty"`
+	Decryption string          `json:"decryption,omitempty"`
+	Address    string          `json:"address,omitempty"`
 }
 type xrayClient struct {
 	ID      string `json:"id,omitempty"`
@@ -151,6 +154,8 @@ type xrayRule struct {
 	Type        string   `json:"type"`
 	InboundTag  []string `json:"inboundTag"`
 	User        []string `json:"user"`
+	Network     string   `json:"network,omitempty"`
+	Port        string   `json:"port,omitempty"`
 	OutboundTag string   `json:"outboundTag"`
 }
 
@@ -179,12 +184,11 @@ func buildXrayConfigWithStats(config controller.GatewayConfig, socksAddress, rea
 	if err != nil {
 		return nil, err
 	}
-	result := xrayConfig{Log: map[string]string{"loglevel": "warning"}, Routing: xrayRouting{DomainStrategy: "AsIs"}}
+	result := xrayConfig{Log: map[string]string{"loglevel": "warning", "access": "none"}, Routing: xrayRouting{DomainStrategy: "AsIs"}}
 	upstreams := make(map[string]controller.GatewayUpstreamConfig, len(config.Upstreams))
-	if len(config.Upstreams) > 0 || config.Gateway.HY2Enabled() || !config.Gateway.VMessEnabled() {
-		// Xray defaults to the first outbound when no rule matches.
-		result.Outbounds = append(result.Outbounds, xrayOutbound{Protocol: "blackhole", Tag: "xmesh-deny", Settings: xrayOutboundSettings{}})
-	}
+	// Xray defaults to the first outbound when no rule matches. This outbound
+	// also serves the default client egress restrictions for every exit type.
+	result.Outbounds = append(result.Outbounds, xrayOutbound{Protocol: "blackhole", Tag: "xmesh-deny", Settings: xrayOutboundSettings{}})
 	for _, upstream := range config.Upstreams {
 		if upstream.AttachmentID == "" || upstream.Endpoint.UUID == "" {
 			return nil, errors.New("invalid external upstream")
@@ -226,6 +230,18 @@ func buildXrayConfigWithStats(config controller.GatewayConfig, socksAddress, rea
 			return nil, err
 		}
 		hy2Inbound = &xrayInbound{Listen: "0.0.0.0", Port: gateway.HY2Port, Protocol: "hysteria", Tag: "xmesh-hy2", Settings: xrayInboundSettings{Version: 2}, StreamSettings: &xrayStreamSettings{Network: "hysteria", Security: "tls", HysteriaSettings: &xrayHysteriaSettings{Version: 2, Masquerade: xrayHY2Masquerade{Type: "string", Content: "Not Found", StatusCode: 404}}, TLSSettings: &xrayTLSSettings{ALPN: []string{"h3"}, MinVersion: "1.3", Certificates: []xrayTLSCertificate{{Certificate: strings.Split(strings.TrimSpace(gateway.HY2Certificate), "\n"), Key: strings.Split(strings.TrimSpace(gateway.HY2PrivateKey), "\n")}}}}}
+	}
+	clientInboundTags := []string{}
+	if config.Gateway.VMessEnabled() {
+		clientInboundTags = append(clientInboundTags, "xmesh-vmess")
+	}
+	if hy2Inbound != nil {
+		clientInboundTags = append(clientInboundTags, "xmesh-hy2")
+	}
+	if len(clientInboundTags) > 0 {
+		// Match client destinations before per-Grant routes, including external
+		// upstreams. Do not filter REALITY tunnels or the local stats API.
+		result.Routing.Rules = append(result.Routing.Rules, xrayRule{Type: "field", InboundTag: clientInboundTags, Network: "tcp", Port: egress.BlockedTCPPorts(), OutboundTag: "xmesh-deny"})
 	}
 	seenHY2Auth := map[string]bool{}
 	for _, grant := range config.Grants {
@@ -334,13 +350,17 @@ func buildXrayConfigWithStats(config controller.GatewayConfig, socksAddress, rea
 var errXrayReload = errors.New("xray reload requested")
 
 func (r *Runtime) xrayPayload(config controller.GatewayConfig) ([]byte, error) {
-	return buildXrayConfigWithStats(config, r.local.Gateway.SOCKSListen, r.local.Gateway.RealityListen, r.local.Gateway.TunnelListen, r.local.Gateway.StatsListen)
+	payload, err := buildXrayConfigWithStats(config, r.local.Gateway.SOCKSListen, r.local.Gateway.RealityListen, r.local.Gateway.TunnelListen, r.local.Gateway.StatsListen)
+	if err != nil {
+		return nil, err
+	}
+	return addUpstreamProbeInbound(payload, config, r.local.Gateway.UpstreamProbeListen, r.local.Credential)
 }
 
 // Validate the next config while the current Xray process is still serving.
 // A rejected revision must not trigger xrayApply and stop the working process.
 func (r *Runtime) validateXrayCandidate(ctx context.Context, config controller.GatewayConfig) error {
-	payload, err := buildXrayConfigWithStats(config, r.local.Gateway.SOCKSListen, r.local.Gateway.RealityListen, r.local.Gateway.TunnelListen, r.local.Gateway.StatsListen)
+	payload, err := r.xrayPayload(config)
 	if err != nil {
 		return fmt.Errorf("build Xray config: %w", err)
 	}

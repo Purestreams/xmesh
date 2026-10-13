@@ -10,6 +10,9 @@ const (
 )
 
 type User struct {
+	AuditEnabled      bool      `json:"audit_enabled,omitempty"`
+	AuditGeneration   uint64    `json:"audit_generation,omitempty"`
+	AuditLimitMB      int       `json:"audit_limit_mb,omitempty"`
 	ID                string    `json:"id"`
 	Name              string    `json:"name"`
 	Enabled           bool      `json:"enabled"`
@@ -62,16 +65,46 @@ type Agent struct {
 }
 
 type Attachment struct {
-	ID         string    `json:"id"`
-	GatewayID  string    `json:"gateway_id"`
-	AgentID    string    `json:"agent_id"`
-	UpstreamID string    `json:"upstream_id,omitempty"`
-	Enabled    bool      `json:"enabled"`
-	CreatedAt  time.Time `json:"created_at"`
+	ProbeRequestID   string               `json:"probe_request_id,omitempty"`
+	ProbeRequestedAt time.Time            `json:"probe_requested_at,omitempty"`
+	UpstreamProbe    *UpstreamProbeStatus `json:"upstream_probe,omitempty"`
+	ID               string               `json:"id"`
+	GatewayID        string               `json:"gateway_id"`
+	AgentID          string               `json:"agent_id"`
+	UpstreamID       string               `json:"upstream_id,omitempty"`
+	Enabled          bool                 `json:"enabled"`
+	CreatedAt        time.Time            `json:"created_at"`
 }
 
-// VMessEndpoint is the persisted external outbound configuration. The name is
-// retained for state compatibility; Protocol selects VMess or VLESS Reality.
+type UpstreamProbeTarget struct {
+	URL            string `json:"url"`
+	Success        bool   `json:"success"`
+	HTTPStatus     int    `json:"http_status,omitempty"`
+	DurationMillis int64  `json:"duration_millis"`
+	ExitIP         string `json:"exit_ip,omitempty"`
+	Error          string `json:"error,omitempty"`
+}
+
+// A probe describes one Gateway's actual outbound, independently of user grants.
+type UpstreamProbeStatus struct {
+	AttachmentID string                `json:"attachment_id"`
+	Revision     uint64                `json:"revision"`
+	RequestID    string                `json:"request_id,omitempty"`
+	StartedAt    time.Time             `json:"started_at"`
+	CompletedAt  time.Time             `json:"completed_at,omitempty"`
+	Targets      []UpstreamProbeTarget `json:"targets"`
+}
+
+const UpstreamIPProbeURL = "https://api.ip.sb/ip"
+const UpstreamMicrosoftProbeURL = "https://www.microsoft.com/"
+
+func (p UpstreamProbeStatus) Successful() bool {
+	return !p.CompletedAt.IsZero() && len(p.Targets) == 2 &&
+		p.Targets[0].URL == UpstreamIPProbeURL && p.Targets[1].URL == UpstreamMicrosoftProbeURL &&
+		p.Targets[0].Success && p.Targets[1].Success
+}
+
+// VMessEndpoint retains its name for state compatibility; Protocol selects VMess or VLESS.
 type VMessEndpoint struct {
 	Name        string `json:"name"`
 	Protocol    string `json:"protocol,omitempty"`
@@ -173,29 +206,31 @@ type Enrollment struct {
 }
 
 type NodeStatus struct {
-	IngressControls   bool              `json:"ingress_controls,omitempty"`
-	HY2Ready          bool              `json:"hy2_ready,omitempty"`
-	NodeID            string            `json:"node_id"`
-	Role              Role              `json:"role"`
-	BinaryVersion     string            `json:"binary_version,omitempty"`
-	InstanceID        string            `json:"instance_id,omitempty"`
-	Online            bool              `json:"online"`
-	Ready             bool              `json:"ready"`
-	DesiredVersion    uint64            `json:"desired_version"`
-	AppliedVersion    uint64            `json:"applied_version"`
-	ApplyError        string            `json:"apply_error,omitempty"`
-	XrayReady         bool              `json:"xray_ready,omitempty"`
-	XrayError         string            `json:"xray_error,omitempty"`
-	ExternalUpstreams bool              `json:"external_upstreams,omitempty"`
-	LastSuccess       time.Time         `json:"last_success,omitempty"`
-	LastSeen          time.Time         `json:"last_seen"`
-	UploadBytes       uint64            `json:"upload_bytes"`
-	DownloadBytes     uint64            `json:"download_bytes"`
-	TunnelConnections int               `json:"tunnel_connections"`
-	TCPConnections    int               `json:"tcp_connections"`
-	UDPAssociations   int               `json:"udp_associations"`
-	LastError         string            `json:"last_error,omitempty"`
-	FailureCounters   map[string]uint64 `json:"failure_counters,omitempty"`
+	UpstreamProbeIntervalSeconds int64             `json:"upstream_probe_interval_seconds,omitempty"`
+	UpstreamProbes               bool              `json:"upstream_probes,omitempty"`
+	IngressControls              bool              `json:"ingress_controls,omitempty"`
+	HY2Ready                     bool              `json:"hy2_ready,omitempty"`
+	NodeID                       string            `json:"node_id"`
+	Role                         Role              `json:"role"`
+	BinaryVersion                string            `json:"binary_version,omitempty"`
+	InstanceID                   string            `json:"instance_id,omitempty"`
+	Online                       bool              `json:"online"`
+	Ready                        bool              `json:"ready"`
+	DesiredVersion               uint64            `json:"desired_version"`
+	AppliedVersion               uint64            `json:"applied_version"`
+	ApplyError                   string            `json:"apply_error,omitempty"`
+	XrayReady                    bool              `json:"xray_ready,omitempty"`
+	XrayError                    string            `json:"xray_error,omitempty"`
+	ExternalUpstreams            bool              `json:"external_upstreams,omitempty"`
+	LastSuccess                  time.Time         `json:"last_success,omitempty"`
+	LastSeen                     time.Time         `json:"last_seen"`
+	UploadBytes                  uint64            `json:"upload_bytes"`
+	DownloadBytes                uint64            `json:"download_bytes"`
+	TunnelConnections            int               `json:"tunnel_connections"`
+	TCPConnections               int               `json:"tcp_connections"`
+	UDPAssociations              int               `json:"udp_associations"`
+	LastError                    string            `json:"last_error,omitempty"`
+	FailureCounters              map[string]uint64 `json:"failure_counters,omitempty"`
 }
 
 // Updater is the independently authenticated host process. Its secret is never
@@ -237,11 +272,13 @@ type UpgradeTask struct {
 }
 
 type UpgradeBatch struct {
-	ID        string    `json:"id"`
-	TaskIDs   []string  `json:"task_ids"`
-	Stage     string    `json:"stage"`
-	Error     string    `json:"error,omitempty"`
-	CreatedAt time.Time `json:"created_at"`
+	ID               string    `json:"id"`
+	TaskIDs          []string  `json:"task_ids"`
+	Stage            string    `json:"stage"`
+	Error            string    `json:"error,omitempty"`
+	CreatedAt        time.Time `json:"created_at"`
+	RecoveryTaskID   string    `json:"recovery_task_id,omitempty"`
+	RecoveryDeadline time.Time `json:"recovery_deadline,omitempty"`
 }
 
 type LinkStatus struct {

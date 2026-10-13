@@ -7,7 +7,9 @@ import (
 	"net"
 	"net/netip"
 	"strconv"
+	"time"
 
+	"xmesh/internal/egress"
 	"xmesh/internal/model"
 )
 
@@ -47,6 +49,12 @@ func compilePolicy(agent model.Agent) (accessPolicy, error) {
 }
 
 func (p accessPolicy) resolve(ctx context.Context, host string, port int) ([]netip.Addr, error) {
+	return p.resolveObserved(ctx, host, port, nil)
+}
+
+type resolutionObserver func([]netip.Addr, error, time.Duration)
+
+func (p accessPolicy) resolveObserved(ctx context.Context, host string, port int, observe resolutionObserver) ([]netip.Addr, error) {
 	if port < 1 || port > 65535 {
 		return nil, errors.New("invalid target port")
 	}
@@ -57,7 +65,11 @@ func (p accessPolicy) resolve(ctx context.Context, host string, port int) ([]net
 	if ip, err := netip.ParseAddr(host); err == nil {
 		candidates = []netip.Addr{ip.Unmap()}
 	} else {
+		started := time.Now()
 		ips, err := net.DefaultResolver.LookupNetIP(ctx, "ip", host)
+		if observe != nil {
+			observe(ips, err, time.Since(started))
+		}
 		if err != nil {
 			return nil, fmt.Errorf("resolve target: %w", err)
 		}
@@ -89,11 +101,19 @@ func contains(prefixes []netip.Prefix, address netip.Addr) bool {
 
 func (p accessPolicy) permitsTCP(address *net.TCPAddr) bool {
 	ip, ok := netip.AddrFromSlice(address.IP)
-	return ok && (len(p.ports) == 0 || p.ports[address.Port]) && contains(p.allow, ip.Unmap()) && !contains(p.deny, ip.Unmap())
+	return ok && !egress.BlockedTCPPort(address.Port) && (len(p.ports) == 0 || p.ports[address.Port]) && contains(p.allow, ip.Unmap()) && !contains(p.deny, ip.Unmap())
 }
 
 func (p accessPolicy) dialTCP(ctx context.Context, host string, port int) (net.Conn, error) {
-	addresses, err := p.resolve(ctx, host, port)
+	return p.dialTCPObserved(ctx, host, port, nil)
+}
+
+func (p accessPolicy) dialTCPObserved(ctx context.Context, host string, port int, observe resolutionObserver) (net.Conn, error) {
+	// Reject before DNS/dialing, including ports present in the allow list.
+	if egress.BlockedTCPPort(port) {
+		return nil, fmt.Errorf("target TCP port %d denied by default policy", port)
+	}
+	addresses, err := p.resolveObserved(ctx, host, port, observe)
 	if err != nil {
 		return nil, err
 	}

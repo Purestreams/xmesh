@@ -5,7 +5,7 @@ version=${1:?usage: scripts/package.sh VERSION}
 case "$version" in *[!a-zA-Z0-9._-]*|'') echo 'version must contain only letters, numbers, dots, underscores, or hyphens' >&2; exit 2;; esac
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 . "$root/versions.env"
-case "$(go env GOVERSION)" in go1.27.1) ;; *) echo 'packaging requires Go 1.27.1' >&2; exit 1;; esac
+case "$(go env GOVERSION)" in go1.27.2) ;; *) echo 'packaging requires Go 1.27.2' >&2; exit 1;; esac
 : "${XRAY_AMD64:?set XRAY_AMD64 to the validated linux/amd64 Xray binary}"
 : "${XRAY_ARM64:?set XRAY_ARM64 to the validated linux/arm64 Xray binary}"
 case "$(uname -m)" in x86_64|amd64) host_arch=amd64;; aarch64|arm64) host_arch=arm64;; *) host_arch=unknown;; esac

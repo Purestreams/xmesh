@@ -217,6 +217,7 @@ func (s *Server) updaterHeartbeat(w http.ResponseWriter, r *http.Request) {
 		current := state.Updaters[up.NodeID]
 		current.Mode, current.Arch, current.Version, current.Protocol, current.LastSeen = req.Mode, req.Arch, req.Version, req.Protocol, s.now().UTC()
 		state.Updaters[up.NodeID] = current
+		reconcileUpgradeRecovery(state, s.now().UTC())
 		return nil
 	})
 	if err != nil {
@@ -420,6 +421,7 @@ func (s *Server) cancelUpgrade(w http.ResponseWriter, r *http.Request) {
 			batch := state.UpgradeBatches[task.BatchID]
 			batch.Stage = "paused"
 			batch.Error = "cancelled by administrator"
+			batch.RecoveryTaskID, batch.RecoveryDeadline = "", time.Time{}
 			state.UpgradeBatches[batch.ID] = batch
 			for _, id := range batch.TaskIDs {
 				pending := state.UpgradeTasks[id]
@@ -550,6 +552,7 @@ func (s *Server) updaterTask(w http.ResponseWriter, r *http.Request) {
 		if s.now().Sub(state.Updaters[up.NodeID].LastSeen) > 45*time.Second {
 			return errors.New("updater heartbeat expired")
 		}
+		reconcileUpgradeRecovery(state, s.now().UTC())
 		for _, task := range state.UpgradeTasks {
 			if task.NodeID != up.NodeID || task.Manual || (task.Stage != "pending" && task.Stage != "running" && task.Stage != "uncertain" && task.Stage != "downloading" && task.Stage != "prepared" && task.Stage != "switching" && task.Stage != "verifying" && task.Stage != "rolling_back") {
 				continue
@@ -636,34 +639,18 @@ func (s *Server) updaterReport(w http.ResponseWriter, r *http.Request) {
 			batch := state.UpgradeBatches[task.BatchID]
 			batch.Stage = "paused"
 			batch.Error = req.Stage + ": " + req.Error
+			batch.RecoveryTaskID, batch.RecoveryDeadline = "", time.Time{}
 			state.UpgradeBatches[batch.ID] = batch
 		}
 		if task.BatchID != "" && req.Stage == "succeeded" {
 			batch := state.UpgradeBatches[task.BatchID]
-			for _, linkID := range task.BaselineLinks {
-				attachment := state.Attachments[state.Links[linkID].AttachmentID]
-				peerID := attachment.GatewayID
-				if peerID == task.NodeID {
-					peerID = attachment.AgentID
-				}
-				local, peer := state.LinkStatus[task.NodeID+"/"+linkID], state.LinkStatus[peerID+"/"+linkID]
-				if !local.Ready || !local.Online || !peer.Ready || !peer.Online || s.now().Sub(local.LastSeen) > 45*time.Second || s.now().Sub(peer.LastSeen) > 45*time.Second {
-					batch.Stage = "paused"
-					batch.Error = "previously healthy Link " + linkID + " did not recover"
-					break
-				}
+			if batch.Stage == "running" {
+				batch.Stage = "recovering"
+				batch.RecoveryTaskID = task.ID
+				batch.RecoveryDeadline = task.UpdatedAt.Add(upgradeLinkRecoveryTimeout)
+				state.UpgradeBatches[batch.ID] = batch
+				reconcileUpgradeRecovery(state, s.now().UTC())
 			}
-			allDone := true
-			for _, id := range batch.TaskIDs {
-				if state.UpgradeTasks[id].Stage != "succeeded" {
-					allDone = false
-					break
-				}
-			}
-			if allDone && batch.Stage != "paused" {
-				batch.Stage = "succeeded"
-			}
-			state.UpgradeBatches[batch.ID] = batch
 		}
 		return nil
 	})

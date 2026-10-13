@@ -1,6 +1,6 @@
 # XMesh
 
-[简体中文](README.md) · [Download releases](https://github.com/Purestreams/xmesh/releases) · [Panel guide](docs/panel.md) · [Deployment and maintenance](docs/automation.md)
+[简体中文](README.md) · [Public monitor](https://xmesh.static.win7.win/monitor) · [Download releases](https://github.com/Purestreams/xmesh/releases) · [Panel guide](docs/panel.md) · [Deployment and maintenance](docs/automation.md)
 
 **Use a machine without a public IP as your proxy exit.**
 
@@ -8,37 +8,89 @@ XMesh separates the client entry point from the actual exit. A reachable Gateway
 
 Use it when an exit machine sits behind NAT, cannot accept inbound connections, or needs to serve several Gateways. The Gateway must remain reachable by both clients and the Agent. The Agent needs neither a public IP nor inbound port forwarding.
 
+## Public monitor
+
+[Open the network monitor →](https://xmesh.static.win7.win/monitor)
+
+View published node states, the Gateway × exit matrix, individual Link RTT and 24-hour trends without signing in. The page refreshes every 15 seconds; history is sampled about every five minutes. Latency means **Gateway ↔ Agent tunnel RTT**. Client-to-Gateway latency and complete proxy request time require separate tests. External routes are tested by their corresponding Gateway through the selected upstream against ip.sb and microsoft.com. Public external latency is the IP.SB HTTPS request time; routes without completed tests remain unprobed.
+
+Public monitoring is disabled by default on a self-hosted Controller. Enable it under **系统维护 → 公开监控** (`/admin/monitor`), select nodes and Links, and assign public aliases. Visitors use `/monitor` and the dedicated read-only `/api/public/monitor` endpoint. The public response exposes only aliases, roles, coarse states and RTT history; it excludes real addresses, internal identities, credentials, users, usage and raw errors. See the [public monitor guide](docs/panel.md#anonymous-network-monitor).
+
+<details>
+<summary>Monitor preview (captured 2026-10-13; open the live page for current status)</summary>
+
+[![XMesh public monitor: node states and Link latency matrix](docs/assets/xmesh-monitor.jpg)](https://xmesh.static.win7.win/monitor)
+
+</details>
+
 ## Architecture at a glance
 
-![XMesh architecture: the Controller manages the Gateway and Agent while client traffic reaches the destination through them](docs/assets/xmesh-architecture.png)
+![XMesh architecture: VMess/WS and HY2 enter the Gateway, then use an Agent tunnel or external exit; the Controller manages monitoring and host upgrade helpers](docs/assets/xmesh-architecture.png)
 
-- **Data plane:** Clients connect to the Gateway over VMess/WebSocket. Traffic crosses the REALITY + smux v2 tunnel to the Agent, which accesses the destination.
-- **Public IP requirement:** Only the Gateway requires a public IP. The Agent initiates its connection to the Gateway and needs neither a public IP nor inbound port forwarding.
-- **Control plane:** The Gateway and Agent poll configuration from the Controller and report status over HTTPS. The Controller never forwards user traffic.
+<details>
+<summary>View the maintainable diagram source</summary>
+
+Image prompts are saved in the [architecture image generation record](docs/assets/architecture-prompts.md).
+
+```mermaid
+flowchart LR
+    subgraph data["Data plane · User traffic"]
+        direction LR
+        client["Client"] -->|"VMess/WS · TCP 8080<br/>HY2 · UDP 8080"| gateway["Gateway<br/>Public entry · Xray + scheduler"]
+        gateway <-->|"REALITY + smux v2<br/>TCP/UDP"| agent["Agent<br/>Private-network exit · Embedded Xray-core"]
+        agent -->|"Target DNS · TCP/UDP"| target["Destination"]
+        gateway -->|"VMess / VLESS"| upstream["External exit<br/>No Agent / Link"]
+        upstream --> target
+    end
+    subgraph control["Control plane · HTTPS"]
+        controller["Controller<br/>Panel · API · Subscriptions · JSON state"]
+        monitor["Visitor /monitor"] -.->|"Read-only public status & RTT"| controller
+        updater["xmesh-updater<br/>Node host upgrade helper"] -.->|"Claim tasks · Report results"| controller
+    end
+    gateway -.->|"Poll config · Report status"| controller
+    agent -.->|"Poll config · Report status"| controller
+```
+
+</details>
+
+- **Client entry:** New Gateways enable VMess/WebSocket and Hysteria 2 (HY2) by default. The same Xray process accepts both and routes traffic by Grant; each protocol has an independent switch.
+- **Agent exit:** The Agent initiates a VLESS/REALITY connection carrying WebSocket + smux v2. The Gateway schedules TCP/UDP sessions onto authorized Links; the Agent resolves destination DNS and opens outbound connections.
+- **External exit:** The Gateway can also forward authorized traffic to a selected VMess or VLESS upstream. This route requires no Agent or Link.
+- **Network requirements:** Clients and Agents must reach the Gateway; nodes and upgrade helpers must reach the Controller. Agents need neither public IPs nor inbound port forwarding. Diagram ports are defaults.
+- **Control plane:** The Controller embeds the management panel, public monitor, API, subscriptions and release cache, with JSON-file persistence and no separate frontend or database. Gateways, Agents and upgrade helpers initiate HTTPS requests; the Controller never forwards user traffic.
+
+Configuration updates follow their runtime impact: metadata changes keep connections, while priority, weight and stream limits govern new sessions. Tunnel address or credential changes rebuild the affected Agent Link. A changed generated Gateway Xray configuration can still restart Xray and interrupt connections. Node configuration leases expire after five minutes without renewal, closing user traffic. See [runtime boundaries](docs/deployment.md#runtime-boundaries) and [architecture details](docs/architecture.md).
+
+Client proxy traffic blocks destination TCP ports `25, 465, 587, 2525` by default across VMess/WS, HY2, Agent exits and external exits. An Agent port allow list cannot override this rule. UDP and the nodes' own management/tunnel connections are unaffected. This reduces common SMTP abuse; HTTPS webmail, email APIs and custom ports remain available. Existing deployments must upgrade their Gateways and Agents to apply the policy.
 
 ## Capabilities
+
+Per-user auditing is off by default. Enable it under **Users & subscriptions → User audit** to collect Agent DNS resolution and TCP connection metadata. All exits share one user log store with a default 20MB limit including gzip archives. The page shows 60-second connection, failure, target and port indicators. External exits are not covered and alerts never block users automatically. See [per-user audit](docs/panel.md#per-user-audit).
 
 | Capability | Behavior |
 | --- | --- |
 | Central management | Embedded web panel with overview, network, users and subscriptions, deployment and maintenance; no separate frontend service |
-| Multiple entries and exits | Many-to-many Gateway–Agent assignments, including assigning several Gateways to one Agent in a single operation |
-| TCP / UDP forwarding | VMess/WS client entry; destination DNS resolution and outbound connections on the Agent, with allowed and denied CIDRs |
+| Multiple entries and exits | Many-to-many Gateway–Agent assignments, bulk binding and filtering/enabling inactive connections across nodes |
+| Dual-protocol entry | Independent VMess/WS and HY2 switches; persistent self-signed HY2 certificates, SHA-256 pins and strict-verification client bundles |
+| TCP / UDP forwarding | VMess/WS or HY2 entry routes to an authorized Agent or external exit; Agent destination DNS and outbound connections obey allowed and denied CIDRs |
 | REALITY tunnels | Generated Gateway keys and Link identities; embedded Xray-core on the Agent and a bundled, supervised Xray process on the Gateway |
 | Multiple Links | Priority, weight, connection count and stream capacity; new sessions select healthy paths while existing sessions stay on their original tunnel |
-| Access and subscriptions | Per-user, per-route grants; VMess/WS subscriptions publish after Gateway configuration acknowledgement; grants can be disabled and subscription links reset |
-| Deployment and maintenance | One-time enrollment tokens, systemd / Docker Compose commands, release caching, node upgrades and credential rotation |
+| Access and subscriptions | Per-user, per-route grants; VMess / HY2 entries publish after Gateway acknowledgement and ingress readiness; disable grants or reset subscription and proxy credentials |
+| External exits | Import a `vmess://` or `vless://` link, or explicitly select one subscription node; VMess/TCP, VMess/WS with optional TLS, and VLESS/TCP + REALITY + Vision |
+| Deployment and maintenance | One-time enrollment tokens, systemd / Docker Compose commands, release caching, host upgrade helpers and credential rotation; serial upgrades wait for Link recovery |
 | Status and history | Topology, Gateway × Agent matrix, deployment progress, 15-second partial refresh, 24-hour Link history and the latest 100 management request results |
+| Public monitor | Optional anonymous read-only page with selected public aliases, node/Link states and RTT history |
 
-New routes use `reality://`. Existing `wss://` Links remain supported with external TLS termination. The generated client entry is **VMess/WS with TLS off**; REALITY encryption between Gateway and Agent does not enable TLS on the client entry. The current subscription generator has no client TLS setting, so adding an HTTPS reverse proxy alone will not make the generated subscription match it.
+New routes use `reality://`. Existing `wss://` Links remain supported with external TLS termination. VMess/WS uses **TLS off** by default; new Gateways also enable HY2 with a self-signed certificate and SHA-256 pin. REALITY encryption between Gateway and Agent does not enable TLS on the VMess entry. The current VMess subscription generator has no client TLS setting, so adding an HTTPS reverse proxy alone will not make the generated subscription match it.
 
 ## Four objects to know
 
 | Object | Meaning |
 | --- | --- |
 | Gateway / Agent | The client entry and actual exit, installed and reporting status independently |
-| Node / route association (Attachment) | One `Gateway × Agent` pair: the unit used for access grants and subscription entries |
-| Link | A transport path for that pair; adding Links does not add subscription entries |
-| Grant | One `User × Node` authorization with its own VMess UUID |
+| Node / route association (Attachment) | One `Gateway × (Agent or external exit)` pair: the unit used for access grants and subscription entries |
+| Link | A transport path for a Gateway–Agent pair; adding Links does not add subscription entries, and external exits have no Links |
+| Grant | One `User × Node` authorization with separate VMess UUID, HY2 and loopback SOCKS credentials |
 
 One Agent can initiate connections to several Gateways, and one Gateway can use several Agents through separate routes. Link scheduling applies to new TCP connections or UDP associations. It neither migrates existing sessions nor splits one session across multiple Links.
 
@@ -78,11 +130,11 @@ sudo dnf install -y ca-certificates curl tar coreutils iproute shadow-utils
 
 If firewalld is enabled on the Gateway, allow the VMess and REALITY TCP ports in the zone used by its network interface. For `--vmess-port 8086`, allow TCP 8086 and 8443; Agents need no inbound ports. The Nginx/Certbot package commands and paths below target Debian/Ubuntu. On a CentOS Controller, configure the HTTPS reverse proxy for its repositories, Nginx layout and SELinux policy.
 
-On the Controller host only, install these additional tools and obtain the source. This README describes the current code; the installation example pins release `v0.3.8`. To use another published version, set `VERSION` to its exact tag and use matching source and release assets. See [Releases](https://github.com/Purestreams/xmesh/releases) for available versions.
+On the Controller host only, install these additional tools and obtain the source. This README describes the current code; the installation example pins release `v0.4.0`. To use another published version, set `VERSION` to its exact tag and use matching source and release assets. See [Releases](https://github.com/Purestreams/xmesh/releases) for available versions.
 
 ```sh
 sudo apt install -y git nginx certbot
-VERSION=v0.3.8
+VERSION=v0.4.0
 git clone --depth 1 --branch "$VERSION" https://github.com/Purestreams/xmesh.git
 cd xmesh
 ```
@@ -185,6 +237,8 @@ Each Gateway shares one REALITY key pair and target; each Link has a separate VL
 
 You can also create nodes separately in the network section, then use **Assign multiple Gateways to an Agent**. Missing associations and Links are created together, disabled routes are re-enabled, and active routes are left unchanged. For mixed-region assignments, a blank target resolves from each Gateway's location while existing targets take precedence.
 
+Under **连接已有节点 → 全部未开启连接**, filter missing, disabled or Link-less pairs across Agents and Gateways, then enable the selected pairs in one transaction. Enabled pairs stay excluded even when offline. Existing targets and Link settings are preserved; user grants remain a separate action.
+
 ### 5. Install the Gateway and Agent
 
 Click **Install Gateway** and **Install Agent** separately, choose systemd or Docker Compose, run each generated command on its corresponding host, and enter that node's one-time token at the prompt. Node hosts do not need a repository checkout.
@@ -198,11 +252,15 @@ Follow enrollment, heartbeat, applied configuration and runtime status in the de
 
 ### 6. Grant access and import the subscription
 
-Create a User under users and subscriptions, then select that user and the permitted routes in **Open VMess/WS subscription**. This creates or re-enables Grants. Clearing the selection only clears the form; disable or delete Grants separately to revoke access.
+New Gateways enable both **VMess/WS and HY2** by default. The Gateway list and edit form provide independent switches. Disabling a protocol removes its listener and subscription entries; re-enabling preserves credentials, the certificate and pin. The Agent tunnel remains available when both protocols are off. Existing Gateways retain their settings. Multiple users and routes share one UDP listener with separate Grant credentials; VMess TCP and HY2 UDP may use the same port number. HY2 uses a persistent self-signed certificate and SHA-256 pin. Unauthenticated HTTP/3 requests always return a static 404. See [HY2 details](docs/hy2.md) for strict client verification, UDP firewall rules and acceptance checks.
 
-A Grant publishes after the Gateway reports the corresponding configuration applied and Xray ready. Copy the subscription URL into a client supporting VMess/WS subscriptions. The response is a Base64-encoded list of enabled, ready `vmess://` and `hysteria2://` entries. Clients connect to `edge.example.com:8080/proxy`; the Agent tunnel uses `8443`.
+Create a User under users and subscriptions, then select that user and the permitted routes in the subscription grant form. This creates or re-enables Grants. Clearing the selection only clears the form; disable or delete Grants separately to revoke access.
 
-**Subscription publication is separate from route health.** Before accepting the deployment, check that both nodes are online with their configuration applied, Gateway Xray is ready, and the same enabled Link reports ready at both Gateway and Agent. Then test actual destination access.
+A Grant publishes after the Gateway reports the corresponding configuration applied and the relevant ingress ready. Copy the subscription URL into a client supporting the selected protocols. The response is a Base64-encoded list of enabled, ready `vmess://` and `hysteria2://` entries. VMess clients connect to `edge.example.com:8080/proxy`, HY2 uses UDP 8080, and the Agent tunnel uses TCP 8443. For the official Hysteria client, download the strict-verification client bundle from Grant management to configure public certificate trust and the pin; see [HY2 details](docs/hy2.md).
+
+**Subscription publication is separate from route health.** For an Agent route, check that both nodes are online with their configuration applied, Gateway Xray is ready, and the same enabled Link reports ready at both Gateway and Agent. Then test actual destination access. For an external exit, confirm Gateway configuration acknowledgement and test upstream and destination connectivity.
+
+Add an external exit under **节点与线路 → 外部出口** using a VMess/TCP or VMess/WS link with optional TLS, a VLESS/TCP + REALITY + Vision link, or a subscription URL. Select one supported node explicitly, bind it to a Gateway and grant user access. The Controller refreshes subscriptions every 30 minutes, with manual refresh available. Failed fetches retain the last valid endpoint; a successful refresh that loses the selected node disables the exit. Upgrade older Gateways before using this route. After applying configuration, the Gateway automatically tests ip.sb and microsoft.com through that upstream and repeats every five minutes by default. The panel provides a Test connection button, per-site results, HTTPS timing, exit IP and errors. Tests are independent of user grants, do not count toward user usage, and do not restart Xray. Upgrade both Controller and Gateway to enable testing. User subscriptions contain neither the upstream subscription URL nor its UUID. Private subscription sources require the explicit Controller setting `allow_private_upstream_sources`.
 
 ## Operations
 
@@ -225,9 +283,10 @@ The v0.3.3 release contains `xmesh-updater` for panel-issued node upgrades. v0.3
 - **Upgrade the Controller before Gateways and Agents.** Controller installers preserve existing settings and update `release_version`. Passing `--public-url` or an administrator password again does not overwrite the existing configuration. Older configurations missing `release_dir` need that field added manually and a restart to enable caching.
 - A Docker Controller can check GitHub's latest stable release and upgrade from the panel when the host has systemd, `flock`, `sort` and the updater helper. The host helper verifies assets, backs up and performs the upgrade; the Controller container has no Docker socket mount. Older installations first need a host-side run of a Docker installer that provides the helper.
 - Upgrade a systemd Controller with the matching release's `install-controller.sh`. New Gateway / Agent installations configure an independent host `xmesh-updater` service. In **System maintenance → Node upgrades**, select a fixed version and nodes; the helper claims tasks, verifies assets, checks the new process and configuration, and restores the old version on failure. Batch tasks run serially and pause when a previously healthy Link degrades.
+- After each successful node upgrade, the batch enters `recovering` for up to two minutes. Previously healthy Links must have fresh online, ready reports from both Gateway and Agent received since upgrade completion before the next task can start. On timeout, fix the Link and use **重新检查并继续** to recheck recovery and release the remaining tasks without repeating successful upgrades.
 - For an older node, generate a one-time helper pairing token in **Node upgrades** and run the panel's verified `install-updater.sh` command on that node host. The one-time token is included in the command, so there is no second prompt; the node identity is preserved. The copied command contains a secret, so clear it from shell history after use. Manual upgrade commands on paired nodes use the same host helper executor; unpaired nodes retain the original installer path. Docker nodes require systemd on the host for the helper; the business container has no Docker socket mount.
 - Upgrade history is stored in Controller state. Keep unfinished host job records and rollback material in `/var/lib/xmesh-updater/jobs` (systemd) or `updater/jobs` under the Docker installation directory when backing up or cleaning up.
-- Rotate node credentials with a new enrollment token and the panel's **rotate** command, preserving node identity. The old credential has up to 15 minutes of grace and is revoked on the first status report using the new credential. Use **Reset link** separately for a leaked subscription URL.
+- Rotate node credentials with a new enrollment token and the panel's **rotate** command, preserving node identity. The old credential has up to 15 minutes of grace and is revoked on the first status report using the new credential. For a leaked subscription, **Reset link** immediately invalidates the URL and rotates VMess, HY2 and SOCKS credentials for all that user's routes. Gateways revoke old proxy credentials when they apply the change; clients must import the new subscription.
 - Deleting a Gateway / Agent in the panel removes related management objects but does not remotely uninstall its service. Stop or uninstall the service on the corresponding host.
 
 For a Docker Controller, run this from a matching source checkout:
@@ -246,14 +305,14 @@ The script archives configuration and any existing state file, extracts and comp
 | Installation or enrollment fails | Controller HTTPS `/healthz`, system time, expired or replaced tokens; regenerate commands for a custom Gateway port |
 | Node is online but route is pending | Desired / applied configuration on both nodes, ApplyError, Gateway Xray and both reports for the same Link |
 | REALITY Link cannot connect | Gateway TCP 8443, firewall/mapping, Link URL versus actual listener, and Gateway access to the target |
-| Empty subscription or missing new route | Enabled User / Grant / Node, an enabled Link, and Gateway acknowledgement of the new configuration and Xray readiness |
+| Empty subscription or missing new route | Enabled User / Grant / Node and ingress protocol, plus Gateway configuration acknowledgement and ingress readiness; Agent routes also need an enabled Link |
 | Subscription contains a route but access fails | Actual Link health, Agent outbound network, DNS and CIDR policy |
 | Release cache returns errors | Controller access to GitHub, `release_version` / `release_dir`, disk space and proxy timeouts; use a direct GitHub command if needed |
 | Low throughput at high RTT | Host TCP buffers and Link write stalls, capacity and rejection counters; see [high-latency links](docs/deployment.md#high-latency-links) |
 
 ## Development and verification
 
-XMesh is written in Go. `mise.toml` pins Go **1.27.1**; `versions.env` pins the external Gateway Xray version, while `go.mod` manages the Agent's embedded Xray-core dependency.
+XMesh is written in Go. `mise.toml` pins Go **1.27.2**; `versions.env` pins the external Gateway Xray version, while `go.mod` manages the Agent's embedded Xray-core dependency.
 
 ```sh
 mise install
@@ -270,24 +329,23 @@ Node.js is used for panel tests, not production. Real-browser regression tests r
 pwsh tests/reality/multicontainer.ps1
 ```
 
-It starts a Controller, two Gateways, one Agent, two clients and a destination service, and checks TCP/UDP echo through both REALITY routes. Full CI also switches real Docker Compose node containers through an upgrade and rollback, and checks installer ports, migration and the Controller updater; see the [CI configuration](.github/workflows/ci.yml).
+It starts a Controller, two Gateways, an Agent, VMess and official HY2 clients, and a destination service. It checks TCP/UDP echo through REALITY routes, strict certificate verification and usage. Full CI also switches real Docker Compose node containers through an upgrade and rollback, and checks installer ports, migration and the Controller updater; see the [CI configuration](.github/workflows/ci.yml).
 
 | Path / document | Contents |
 | --- | --- |
 | `cmd/xmesh/` | Shared entry point for Controller, Gateway, Agent, enrollment and secret utilities |
-| `internal/controller/` | Panel, management API, subscriptions, deployment orchestration and release caching |
+| `internal/controller/` | Management panel, public monitor, API, subscriptions, deployment orchestration and release caching |
 | `internal/gateway/`, `internal/agent/` | Client entry, tunnels, outbound connections and access policy |
 | `internal/protocol/`, `internal/scheduler/` | Framing, smux sessions and Link selection |
+| `cmd/xmesh-updater/`, `internal/updater/` | Host upgrade helper, task execution, verification and rollback |
+| `internal/hy2/` | HY2 certificate generation, validation and pins |
 | `configs/`, `scripts/`, `tests/` | Configuration templates, installation/packaging scripts and regression checks; replace template placeholders |
 | [Panel guide](docs/panel.md) | Wizard, bulk selection, refresh, history and browser verification |
 | [Deployment automation](docs/automation.md) | Installation, access grants, upgrades, credential rotation and backups |
 | [Deployment details](docs/deployment.md) | Manual configuration, release caching and network tuning |
 | [Architecture](docs/architecture.md) | Authorization model, scheduling and TCP/UDP transport |
+| [HY2 entry](docs/hy2.md) | Protocol switches, strict certificate verification, client bundles and UDP deployment |
 
 ## License
 
 XMesh uses the [MIT License](LICENSE). See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for third-party components used or distributed with releases.
-
-### Optional Hysteria 2 ingress
-
-New Gateways enable both VMess/WS and HY2 by default. The Gateway list and edit form provide independent switches. Disabling a protocol removes its listener and subscription entries; re-enabling preserves credentials, the certificate and pin. The Agent tunnel remains available when both protocols are off. Existing Gateways retain their settings. Set the HY2 UDP port in the panel. Multiple users and routes share one UDP listener with separate Grant credentials; VMess TCP and HY2 UDP may use the same port number. The Controller persists a self-signed ECDSA certificate and publishes its SHA-256 certificate pin. Download the strict-verification client bundle from Grant management for the official Hysteria client; it includes the public certificate for CA trust and never enables insecure. Unauthenticated HTTP/3 requests always return a static 404, with no original website proxy. See [HY2 details](docs/hy2.md).

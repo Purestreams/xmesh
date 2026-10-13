@@ -27,6 +27,14 @@ func (s State) Clone() State {
 		next.Upstreams[id] = upstream
 	}
 	next.Attachments = maps.Clone(s.Attachments)
+	for id, attachment := range next.Attachments {
+		if attachment.UpstreamProbe != nil {
+			probe := *attachment.UpstreamProbe
+			probe.Targets = slices.Clone(probe.Targets)
+			attachment.UpstreamProbe = &probe
+			next.Attachments[id] = attachment
+		}
+	}
 	next.Links = maps.Clone(s.Links)
 	next.Grants = maps.Clone(s.Grants)
 	next.RetiredGrants = maps.Clone(s.RetiredGrants)

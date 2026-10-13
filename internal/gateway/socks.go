@@ -9,6 +9,7 @@ import (
 	"net"
 	"time"
 
+	"xmesh/internal/egress"
 	"xmesh/internal/identity"
 	"xmesh/internal/protocol"
 	"xmesh/internal/relay"
@@ -90,6 +91,10 @@ func (r *Runtime) handleSOCKS(conn net.Conn, udpSem chan struct{}) {
 	}
 	switch command {
 	case socksCommandConnect:
+		if egress.BlockedTCPPort(target.Port) {
+			_ = writeSOCKSReply(conn, 2, nil) // Connection not allowed by ruleset.
+			return
+		}
 		requestID, _ := identity.Token(12)
 		stream, lease, err := r.openStream(agentID, protocol.Message{Type: protocol.TypeTCP, Version: protocol.Version, GrantID: grant.ID, RequestID: requestID, Host: target.Host, Port: target.Port})
 		if err != nil {

@@ -24,16 +24,18 @@ type Config struct {
 }
 
 type Gateway struct {
-	SOCKSListen        string   `json:"socks_listen"`
-	TunnelListen       string   `json:"tunnel_listen"`
-	TunnelPath         string   `json:"tunnel_path"`
-	XrayBinary         string   `json:"xray_binary"`
-	XrayConfigPath     string   `json:"xray_config_path"`
-	RealityListen      string   `json:"reality_listen,omitempty"`
-	StatsListen        string   `json:"stats_listen,omitempty"`
-	UDPIdleTimeout     Duration `json:"udp_idle_timeout"`
-	MaxUDPAssociations int      `json:"max_udp_associations"`
-	MaxUDPQueueBytes   int      `json:"max_udp_queue_bytes,omitempty"`
+	UpstreamProbeListen   string   `json:"upstream_probe_listen,omitempty"`
+	UpstreamProbeInterval Duration `json:"upstream_probe_interval,omitempty"`
+	SOCKSListen           string   `json:"socks_listen"`
+	TunnelListen          string   `json:"tunnel_listen"`
+	TunnelPath            string   `json:"tunnel_path"`
+	XrayBinary            string   `json:"xray_binary"`
+	XrayConfigPath        string   `json:"xray_config_path"`
+	RealityListen         string   `json:"reality_listen,omitempty"`
+	StatsListen           string   `json:"stats_listen,omitempty"`
+	UDPIdleTimeout        Duration `json:"udp_idle_timeout"`
+	MaxUDPAssociations    int      `json:"max_udp_associations"`
+	MaxUDPQueueBytes      int      `json:"max_udp_queue_bytes,omitempty"`
 }
 
 type Duration time.Duration
@@ -93,6 +95,9 @@ func Load(path string) (Config, error) {
 	}
 	if cfg.Gateway.StatsListen == "" {
 		cfg.Gateway.StatsListen = "127.0.0.1:18082"
+	}
+	if cfg.Gateway.UpstreamProbeListen == "" {
+		cfg.Gateway.UpstreamProbeListen = "127.0.0.1:18083"
 	}
 	if cfg.Gateway.MaxUDPAssociations <= 0 {
 		cfg.Gateway.MaxUDPAssociations = 1024
