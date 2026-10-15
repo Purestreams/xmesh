@@ -151,10 +151,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mise exec -- go install honnef.co/go/tools/cmd/staticcheck@v0.8.2
-          mise exec -- go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
-          "$(mise exec -- go env GOPATH)/bin/staticcheck" ./...
-          "$(mise exec -- go env GOPATH)/bin/govulncheck" ./...
+          tools_bin="$RUNNER_TEMP/analysis-tools"
+          mkdir -p "$tools_bin"
+          mise exec -- env GOBIN="$tools_bin" go install honnef.co/go/tools/cmd/staticcheck@v0.8.2
+          mise exec -- env GOBIN="$tools_bin" go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
+          "$tools_bin/staticcheck" ./...
+          "$tools_bin/govulncheck" ./...
       - name: Real Docker Compose node upgrade and rollback
         shell: bash
         run: |
