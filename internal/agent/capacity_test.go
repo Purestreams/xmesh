@@ -4,7 +4,7 @@ import (
 	"log/slog"
 	"testing"
 
-	"xmesh/internal/runtimecfg"
+	"github.com/Purestreams/xmesh/internal/runtimecfg"
 )
 
 func TestAgentStreamSlotsRejectWithoutBlocking(t *testing.T) {

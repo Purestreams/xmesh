@@ -3,6 +3,8 @@
 // Source messages are Chinese; English-only labels have explicit Chinese overrides.
 const XMeshI18n = (() => {
   const english = {
+    "关闭 WSS 的 TLS 校验会允许中间人截获 TunnelToken，请保持开启。": "Disabling WSS TLS verification allows a man-in-the-middle to steal the TunnelToken. Keep verification enabled.",
+    "警告：此 WSS 链路未校验证书，TunnelToken 可能被中间人截获。": "Warning: this WSS link does not verify certificates. A man-in-the-middle could steal the TunnelToken.",
     "Agent 延迟为隧道 RTT；外部出口为经上游访问 ip.sb 的 HTTPS 耗时。页面每 15 秒刷新。": "Agent latency is tunnel RTT; external-exit latency is the HTTPS request time to ip.sb through the upstream. The page refreshes every 15 seconds.",
     "历史保留近 24 小时，约每 5 分钟采样；未完成测试的外部线路显示“未探测”。": "History covers the last 24 hours, sampled about every five minutes. External routes without a completed test are shown as unprobed.",
     "测试请求已提交；请等待 Gateway 回传结果。": "Test requested; waiting for the Gateway to report results.",

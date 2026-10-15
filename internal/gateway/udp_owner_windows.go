@@ -25,6 +25,8 @@ func udpControlOwner(conn net.Conn) (uint32, bool) {
 	}
 	for offset := 4; offset+24 <= len(table); offset += 24 {
 		row := table[offset : offset+24]
+		// Look up the client's socket, not the accepted Gateway socket: the
+		// client's local endpoint is conn.RemoteAddr(), and vice versa.
 		if net.IP(row[4:8]).Equal(peer.IP) && int(binary.BigEndian.Uint16(row[8:10])) == peer.Port && net.IP(row[12:16]).Equal(local.IP) && int(binary.BigEndian.Uint16(row[16:18])) == local.Port {
 			pid := binary.LittleEndian.Uint32(row[20:24])
 			return pid, pid != 0

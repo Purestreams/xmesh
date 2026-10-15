@@ -9,8 +9,8 @@ import (
 	"strconv"
 	"time"
 
-	"xmesh/internal/egress"
-	"xmesh/internal/model"
+	"github.com/Purestreams/xmesh/internal/egress"
+	"github.com/Purestreams/xmesh/internal/model"
 )
 
 type accessPolicy struct {

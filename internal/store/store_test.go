@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"xmesh/internal/model"
+	"github.com/Purestreams/xmesh/internal/model"
 )
 
 func TestUpdateIsAtomicOnCallbackError(t *testing.T) {

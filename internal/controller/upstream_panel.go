@@ -1,6 +1,6 @@
 package controller
 
-import "xmesh/internal/model"
+import "github.com/Purestreams/xmesh/internal/model"
 
 func splitPanelAttachments(state model.State) (agent, external []model.Attachment) {
 	for _, attachment := range sortedAttachments(state) {

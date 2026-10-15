@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	"xmesh/internal/model"
+	"github.com/Purestreams/xmesh/internal/model"
 )
 
 const maxReleaseAsset = 256 << 20
@@ -286,8 +286,8 @@ func (s *Server) fetchReleaseAsset(ctx context.Context, name, expected string, l
 		if len(via) >= 10 {
 			return errors.New("too many release redirects")
 		}
-		if req.URL.Scheme != "https" {
-			return errors.New("release redirect must use HTTPS")
+		if !releaseRedirectAllowed(request.URL, req.URL) {
+			return errors.New("release redirect must use HTTPS and a trusted release host")
 		}
 		return nil
 	}
@@ -332,6 +332,25 @@ func (s *Server) fetchReleaseAsset(ctx context.Context, name, expected string, l
 		}
 	}
 	return os.Rename(tmp.Name(), filepath.Join(s.releaseDirectory(), name))
+}
+
+// Custom release sources may redirect within their own origin. GitHub release
+// downloads additionally need its explicit asset hosts, never arbitrary domains.
+func releaseRedirectAllowed(source, target *url.URL) bool {
+	if target.Scheme != "https" || target.User != nil || target.Fragment != "" {
+		return false
+	}
+	if strings.EqualFold(source.Host, target.Host) {
+		return true
+	}
+	if !strings.EqualFold(source.Host, "github.com") || (target.Port() != "" && target.Port() != "443") {
+		return false
+	}
+	switch strings.ToLower(target.Hostname()) {
+	case "release-assets.githubusercontent.com", "objects.githubusercontent.com", "github-releases.githubusercontent.com":
+		return true
+	}
+	return false
 }
 
 func parseReleaseManifest(version string, manifest []byte) (map[string]string, error) {

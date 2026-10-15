@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"xmesh/internal/identity"
+	"github.com/Purestreams/xmesh/internal/identity"
 
 	"golang.org/x/crypto/bcrypt"
 )

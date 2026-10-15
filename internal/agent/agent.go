@@ -21,13 +21,13 @@ import (
 	"github.com/coder/websocket"
 	"github.com/xtaci/smux"
 
-	"xmesh/internal/audit"
-	"xmesh/internal/controller"
-	"xmesh/internal/model"
-	"xmesh/internal/nodeclient"
-	"xmesh/internal/protocol"
-	"xmesh/internal/relay"
-	"xmesh/internal/runtimecfg"
+	"github.com/Purestreams/xmesh/internal/audit"
+	"github.com/Purestreams/xmesh/internal/controller"
+	"github.com/Purestreams/xmesh/internal/model"
+	"github.com/Purestreams/xmesh/internal/nodeclient"
+	"github.com/Purestreams/xmesh/internal/protocol"
+	"github.com/Purestreams/xmesh/internal/relay"
+	"github.com/Purestreams/xmesh/internal/runtimecfg"
 )
 
 type Runtime struct {
@@ -149,7 +149,10 @@ func (r *Runtime) applyConfig(config controller.AgentConfig, epoch uint64) error
 	sort.Slice(config.Links, func(i, j int) bool { return config.Links[i].ID < config.Links[j].ID })
 	config.GrantIDs = append([]string(nil), config.GrantIDs...)
 	sort.Strings(config.GrantIDs)
-	b, _ := json.Marshal(config)
+	b, err := json.Marshal(config)
+	if err != nil {
+		return fmt.Errorf("encode agent configuration fingerprint: %w", err)
+	}
 	r.mu.Lock()
 	if epoch != r.authorizationEpoch {
 		r.mu.Unlock()
@@ -158,6 +161,12 @@ func (r *Runtime) applyConfig(config controller.AgentConfig, epoch uint64) error
 	r.retireWorkersLocked(config)
 	policyChanged := !sameAccessPolicy(r.config.Agent, config.Agent)
 	r.config = config
+	links := linkConfigs(config.Links)
+	for id := range r.statuses {
+		if _, exists := links[id]; !exists {
+			delete(r.statuses, id)
+		}
+	}
 	r.authorizationUntil = time.Now().Add(nodeclient.ConfigLease)
 	r.configFingerprint = string(b)
 	r.retireStreamsLocked(policyChanged)
@@ -216,7 +225,7 @@ func (r *Runtime) RunLink(ctx context.Context, link controller.AgentLinkConfig) 
 			r.closeReality(link.ID)
 		}
 	}()
-	return r.runSession(ctx, link.ID+"#manual", link, 1)
+	return r.runSession(ctx, link.ID+"#manual", link, 1, nil)
 }
 
 func (r *Runtime) reconcile(ctx context.Context) {
@@ -268,11 +277,13 @@ func (r *Runtime) linkLoop(ctx context.Context, key string, link controller.Agen
 			return
 		}
 		generation++
-		err := r.runSession(ctx, key, link, generation)
+		var readyAt time.Time
+		err := r.runSession(ctx, key, link, generation, func() { readyAt = time.Now() })
 		if ctx.Err() != nil {
 			return
 		}
 		r.updateStatus(link.ID, func(s *model.LinkStatus) { s.Online = false; s.Ready = false; s.LastError = errString(err) })
+		backoff = reconnectDelay(backoff, readyAt, time.Now())
 		timer := time.NewTimer(backoff)
 		select {
 		case <-ctx.Done():
@@ -280,13 +291,18 @@ func (r *Runtime) linkLoop(ctx context.Context, key string, link controller.Agen
 			return
 		case <-timer.C:
 		}
-		if backoff < 30*time.Second {
-			backoff *= 2
-		}
+		backoff = min(backoff*2, 30*time.Second)
 	}
 }
 
-func (r *Runtime) runSession(ctx context.Context, key string, link controller.AgentLinkConfig, generation uint64) error {
+func reconnectDelay(previous time.Duration, readyAt, now time.Time) time.Duration {
+	if !readyAt.IsZero() && now.Sub(readyAt) >= 30*time.Second {
+		return time.Second
+	}
+	return min(previous, 30*time.Second)
+}
+
+func (r *Runtime) runSession(ctx context.Context, key string, link controller.AgentLinkConfig, generation uint64, onReady func()) error {
 	var ws *websocket.Conn
 	var err error
 	if strings.HasPrefix(link.URL, "reality://") {
@@ -298,6 +314,7 @@ func (r *Runtime) runSession(ctx context.Context, key string, link controller.Ag
 	} else {
 		tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12, ServerName: link.TLSServerName, InsecureSkipVerify: !link.TLSVerify}
 		transport := http.DefaultTransport.(*http.Transport).Clone()
+		defer transport.CloseIdleConnections()
 		transport.TLSClientConfig = tlsConfig
 		ws, _, err = websocket.Dial(ctx, link.URL, &websocket.DialOptions{HTTPClient: &http.Client{Transport: transport, Timeout: 20 * time.Second}, Host: link.HTTPHost, CompressionMode: websocket.CompressionDisabled})
 	}
@@ -355,6 +372,9 @@ func (r *Runtime) runSession(ctx context.Context, key string, link controller.Ag
 		}
 	})
 	r.logger.Info("agent tunnel ready", "link", link.ID, "worker", key, "generation", generation)
+	if onReady != nil {
+		onReady()
+	}
 	for {
 		stream, err := session.AcceptStream()
 		if err != nil {
@@ -415,6 +435,7 @@ func (r *Runtime) handleStream(ctx context.Context, linkID string, stream *smux.
 	defer stopRevocation()
 	policy, err := r.policy()
 	if err != nil {
+		_ = protocol.WriteMessage(stream, protocol.Message{Type: protocol.TypeResponse, Version: protocol.Version, ErrorCode: "policy", Error: "agent access policy is invalid"})
 		return
 	}
 	switch request.Type {
@@ -538,7 +559,7 @@ func (r *Runtime) handleUDP(ctx context.Context, linkID string, stream *smux.Str
 			return
 		}
 		reply := protocol.Datagram{Host: source.IP.String(), Port: source.Port, Payload: append([]byte(nil), buffer[:n]...)}
-		if err := protocol.WriteDatagram(stream, reply); err != nil {
+		if err := protocol.WriteDatagramWithTimeout(stream, reply, r.local.WriteStallTimeout.Value(30*time.Second)); err != nil {
 			r.logger.Warn("agent UDP tunnel write failed", "link", linkID, "bytes", n, "error", err)
 			return
 		}

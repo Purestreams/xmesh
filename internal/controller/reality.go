@@ -12,8 +12,8 @@ import (
 	"strconv"
 	"strings"
 
-	"xmesh/internal/identity"
-	"xmesh/internal/model"
+	"github.com/Purestreams/xmesh/internal/identity"
+	"github.com/Purestreams/xmesh/internal/model"
 )
 
 // Region is chosen by the administrator; hostnames do not reliably identify location.

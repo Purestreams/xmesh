@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"xmesh/internal/model"
+	"github.com/Purestreams/xmesh/internal/model"
 )
 
 func TestSubscriptionAndPanelSortByDisplayedNodeName(t *testing.T) {

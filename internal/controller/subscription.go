@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"xmesh/internal/model"
+	"github.com/Purestreams/xmesh/internal/model"
 )
 
 const upstreamSubscriptionFailureGrace = 5 * time.Minute

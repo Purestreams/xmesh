@@ -10,10 +10,12 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
-	"xmesh/internal/audit"
-	"xmesh/internal/controller"
-	"xmesh/internal/model"
+	"github.com/Purestreams/xmesh/internal/audit"
+	"github.com/Purestreams/xmesh/internal/controller"
+	"github.com/Purestreams/xmesh/internal/model"
 )
 
 // A disconnected node cannot retain a stale authorization indefinitely.
@@ -54,11 +56,39 @@ func FetchAgent(ctx context.Context, client *Client) (controller.AgentConfig, er
 }
 
 func (c *Client) Report(ctx context.Context, status model.NodeStatus, links []model.LinkStatus, grants []model.GrantStatus, probes ...[]model.UpstreamProbeStatus) error {
+	// Diagnostics can contain large subprocess output or terminal escapes. Keep
+	// normal node reports within the Controller's input limits without mutating
+	// the caller's runtime counters or status slices.
+	status.LastError = reportErrorText(status.LastError)
+	status.ApplyError = reportErrorText(status.ApplyError)
+	status.XrayError = reportErrorText(status.XrayError)
+	links = append([]model.LinkStatus(nil), links...)
+	for i := range links {
+		links[i].LastError = reportErrorText(links[i].LastError)
+	}
+	grants = append([]model.GrantStatus(nil), grants...)
+	for i := range grants {
+		grants[i].LastError = reportErrorText(grants[i].LastError)
+	}
 	report := controller.StatusReport{Status: status, Links: links, Grants: grants}
 	if len(probes) > 0 {
 		report.UpstreamProbes = probes[0]
 	}
 	return c.postJSON(ctx, "/api/v1/status", report, nil)
+}
+
+func reportErrorText(value string) string {
+	var text strings.Builder
+	for _, r := range value {
+		if (unicode.IsControl(r) && r != '\n' && r != '\t' && r != '\r') || unicode.In(r, unicode.Bidi_Control) {
+			continue
+		}
+		if text.Len()+utf8.RuneLen(r) > 1024 {
+			break
+		}
+		text.WriteRune(r)
+	}
+	return text.String()
 }
 
 func (c *Client) ReportAudit(ctx context.Context, batch audit.Batch) error {
@@ -117,5 +147,7 @@ func (c *Client) postJSON(ctx context.Context, path string, value, target any) e
 
 func responseError(resp *http.Response) error {
 	b, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	// Bound draining so a large or streaming error cannot tie up the caller.
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
 	return &ResponseError{StatusCode: resp.StatusCode, message: fmt.Sprintf("controller returned %s: %s", resp.Status, strings.TrimSpace(string(b)))}
 }

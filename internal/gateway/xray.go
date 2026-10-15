@@ -15,11 +15,11 @@ import (
 	"strings"
 	"time"
 
-	"xmesh/internal/atomicfile"
-	"xmesh/internal/controller"
-	"xmesh/internal/egress"
-	"xmesh/internal/hy2"
-	"xmesh/internal/model"
+	"github.com/Purestreams/xmesh/internal/atomicfile"
+	"github.com/Purestreams/xmesh/internal/controller"
+	"github.com/Purestreams/xmesh/internal/egress"
+	"github.com/Purestreams/xmesh/internal/hy2"
+	"github.com/Purestreams/xmesh/internal/model"
 )
 
 type xrayConfig struct {
@@ -427,7 +427,13 @@ func (r *Runtime) xrayLoop(ctx context.Context) error {
 		}
 		if err := r.writeXrayConfig(config); err != nil {
 			r.setXray(false, err.Error())
-			return err
+			select {
+			case <-ctx.Done():
+				return nil
+			case <-r.xrayApply:
+			case <-time.After(5 * time.Second):
+			}
+			continue
 		}
 		validateCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 		output, err := exec.CommandContext(validateCtx, r.local.Gateway.XrayBinary, "run", "-test", "-config", r.local.Gateway.XrayConfigPath).CombinedOutput()
@@ -471,16 +477,15 @@ func (r *Runtime) runXrayUntilChange(ctx context.Context, config controller.Gate
 	if err != nil {
 		return err
 	}
+	current, generation := r.xrayConfigSnapshot()
+	currentPayload, currentErr := r.xrayPayload(current)
 	r.mu.Lock()
-	currentPayload, currentErr := r.xrayPayload(r.config)
-	if !r.config.Gateway.Enabled || !time.Now().Before(r.authorizationUntil) || r.authorizationEpoch != epoch || currentErr != nil || string(payload) != string(currentPayload) {
+	if r.configGeneration != generation || !r.config.Gateway.Enabled || !time.Now().Before(r.authorizationUntil) || r.authorizationEpoch != epoch || currentErr != nil || string(payload) != string(currentPayload) {
 		r.mu.Unlock()
 		return errXrayReload
 	}
-	if err := cmd.Start(); err != nil {
-		r.mu.Unlock()
-		return fmt.Errorf("start xray: %w", err)
-	}
+	// Publish cancellation before starting outside the lock. A revocation can
+	// cancel CommandContext even while the OS is creating the child process.
 	r.xrayCancel = cancel
 	r.xrayStatsConfig = r.config
 	r.xrayRunningPayload = string(payload)
@@ -493,6 +498,9 @@ func (r *Runtime) runXrayUntilChange(ctx context.Context, config controller.Gate
 		r.mu.Unlock()
 		r.setXray(false, "")
 	}()
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("start xray: %w", err)
+	}
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
 	timer := time.NewTimer(750 * time.Millisecond)
@@ -504,15 +512,16 @@ func (r *Runtime) runXrayUntilChange(ctx context.Context, config controller.Gate
 	case err := <-done:
 		return fmt.Errorf("xray exited during startup: %w", err)
 	case <-timer.C:
+		current, generation := r.xrayConfigSnapshot()
+		currentPayload, currentErr := r.xrayPayload(current)
 		r.mu.Lock()
-		if childCtx.Err() != nil || !r.config.Gateway.Enabled || r.authorizationEpoch != epoch || !time.Now().Before(r.authorizationUntil) {
+		if r.configGeneration != generation || childCtx.Err() != nil || !r.config.Gateway.Enabled || r.authorizationEpoch != epoch || !time.Now().Before(r.authorizationUntil) {
 			r.mu.Unlock()
 			cancel()
 			<-done
 			return errXrayReload
 		}
 		r.setXray(true, "")
-		currentPayload, currentErr := r.xrayPayload(r.config)
 		if currentErr == nil && string(currentPayload) == string(payload) {
 			r.xrayStatsConfig = r.config
 			r.xrayAppliedRevision.Store(r.config.Revision)
@@ -527,12 +536,13 @@ func (r *Runtime) runXrayUntilChange(ctx context.Context, config controller.Gate
 			<-done
 			return errXrayReload
 		case <-r.xrayApply:
+			current, generation := r.xrayConfigSnapshot()
+			currentPayload, currentErr := r.xrayPayload(current)
 			r.mu.Lock()
 			disabled := !r.config.Gateway.Enabled
-			currentPayload, currentErr := r.xrayPayload(r.config)
 			// A newer snapshot may already have been picked up during startup.
 			// Consume stale notifications without restarting that same payload.
-			unchanged := !disabled && childCtx.Err() == nil && r.authorizationEpoch == epoch && time.Now().Before(r.authorizationUntil) && currentErr == nil && string(currentPayload) == string(payload)
+			unchanged := r.configGeneration == generation && !disabled && childCtx.Err() == nil && r.authorizationEpoch == epoch && time.Now().Before(r.authorizationUntil) && currentErr == nil && string(currentPayload) == string(payload)
 			if unchanged {
 				r.xrayStatsConfig = r.config
 				r.xrayAppliedRevision.Store(r.config.Revision)
@@ -567,6 +577,14 @@ func (r *Runtime) runXrayUntilChange(ctx context.Context, config controller.Gate
 			return fmt.Errorf("xray exited: %w", err)
 		}
 	}
+}
+
+// Accepted config snapshots are immutable; expensive rendering uses the copy
+// outside the runtime lock, then configGeneration guards the commit.
+func (r *Runtime) xrayConfigSnapshot() (controller.GatewayConfig, uint64) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.config, r.configGeneration
 }
 
 func (r *Runtime) setXray(ready bool, message string) {

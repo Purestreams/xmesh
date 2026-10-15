@@ -23,11 +23,11 @@ import (
 
 	"github.com/apernet/quic-go/http3"
 
-	agentpkg "xmesh/internal/agent"
-	"xmesh/internal/controller"
-	"xmesh/internal/hy2"
-	"xmesh/internal/model"
-	"xmesh/internal/runtimecfg"
+	agentpkg "github.com/Purestreams/xmesh/internal/agent"
+	"github.com/Purestreams/xmesh/internal/controller"
+	"github.com/Purestreams/xmesh/internal/hy2"
+	"github.com/Purestreams/xmesh/internal/model"
+	"github.com/Purestreams/xmesh/internal/runtimecfg"
 )
 
 func startHY2Client(t *testing.T, server, credential, certificate, pin, serverName string) string {

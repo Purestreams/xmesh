@@ -1,8 +1,8 @@
 package controller
 
 import (
-	"xmesh/internal/audit"
-	"xmesh/internal/model"
+	"github.com/Purestreams/xmesh/internal/audit"
+	"github.com/Purestreams/xmesh/internal/model"
 )
 
 type GatewayConfig struct {

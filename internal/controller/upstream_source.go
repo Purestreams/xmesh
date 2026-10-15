@@ -22,7 +22,7 @@ import (
 
 	xraytls "github.com/xtls/xray-core/transport/internet/tls"
 
-	"xmesh/internal/model"
+	"github.com/Purestreams/xmesh/internal/model"
 )
 
 const maxSubscriptionBytes = 1 << 20

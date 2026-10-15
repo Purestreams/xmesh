@@ -5,7 +5,7 @@ import (
 	"net/url"
 	"testing"
 
-	"xmesh/internal/model"
+	"github.com/Purestreams/xmesh/internal/model"
 )
 
 func TestEditAndDeleteLink(t *testing.T) {

@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
+	"time"
 )
 
 const (
@@ -115,6 +117,16 @@ func WriteDatagram(w io.Writer, datagram Datagram) error {
 		return err
 	}
 	return writeAll(w, datagram.Payload)
+}
+
+// WriteDatagramWithTimeout bounds the complete frame write, including smux flow
+// control. An idle association has no write deadline until it sends a frame.
+func WriteDatagramWithTimeout(conn net.Conn, datagram Datagram, timeout time.Duration) error {
+	if err := conn.SetWriteDeadline(time.Now().Add(timeout)); err != nil {
+		return err
+	}
+	defer conn.SetWriteDeadline(time.Time{})
+	return WriteDatagram(conn, datagram)
 }
 
 func ReadDatagram(r io.Reader) (Datagram, error) {

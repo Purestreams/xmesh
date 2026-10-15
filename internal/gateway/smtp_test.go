@@ -22,10 +22,10 @@ import (
 	routingsession "github.com/xtls/xray-core/features/routing/session"
 	"github.com/xtls/xray-core/infra/conf/serial"
 
-	"xmesh/internal/controller"
-	"xmesh/internal/hy2"
-	"xmesh/internal/model"
-	"xmesh/internal/runtimecfg"
+	"github.com/Purestreams/xmesh/internal/controller"
+	"github.com/Purestreams/xmesh/internal/hy2"
+	"github.com/Purestreams/xmesh/internal/model"
+	"github.com/Purestreams/xmesh/internal/runtimecfg"
 )
 
 func TestDefaultSMTPRoutesAcrossIngressesAndExits(t *testing.T) {
@@ -133,7 +133,7 @@ func TestSOCKSDefaultSMTPBlockBeforeTunnelSelection(t *testing.T) {
 			defer client.Close()
 			_ = client.SetDeadline(time.Now().Add(3 * time.Second))
 			done := make(chan struct{})
-			go func() { defer close(done); r.handleSOCKS(server, nil) }()
+			go func() { defer close(done); r.handleSOCKS(context.Background(), server, nil) }()
 			for _, handshake := range [][]byte{{5, 1, 2}, {1, 1, 'u', 1, 'p'}} {
 				if _, err := client.Write(handshake); err != nil {
 					t.Fatal(err)

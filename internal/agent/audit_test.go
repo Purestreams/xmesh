@@ -10,10 +10,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Purestreams/xmesh/internal/audit"
+	"github.com/Purestreams/xmesh/internal/protocol"
+	"github.com/Purestreams/xmesh/internal/runtimecfg"
 	"github.com/xtaci/smux"
-	"xmesh/internal/audit"
-	"xmesh/internal/protocol"
-	"xmesh/internal/runtimecfg"
 )
 
 func TestAgentAuditDefaultOffAndHotToggle(t *testing.T) {

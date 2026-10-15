@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"xmesh/internal/model"
+	"github.com/Purestreams/xmesh/internal/model"
 )
 
 func upstreamAvailable(state *model.State, attachment model.Attachment) bool {

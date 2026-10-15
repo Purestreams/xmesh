@@ -14,8 +14,8 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"xmesh/internal/auth"
-	"xmesh/internal/model"
+	"github.com/Purestreams/xmesh/internal/auth"
+	"github.com/Purestreams/xmesh/internal/model"
 )
 
 //go:embed monitor.html

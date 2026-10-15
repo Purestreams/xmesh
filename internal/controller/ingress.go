@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"net/http"
 
-	"xmesh/internal/model"
+	"github.com/Purestreams/xmesh/internal/model"
 )
 
 func applyIngressSwitches(r *http.Request, gateway *model.Gateway) {

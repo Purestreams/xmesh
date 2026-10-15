@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"xmesh/internal/controller"
-	"xmesh/internal/model"
+	"github.com/Purestreams/xmesh/internal/controller"
+	"github.com/Purestreams/xmesh/internal/model"
 )
 
 func TestEnrollReplacePreservesExistingNodeSettings(t *testing.T) {

@@ -16,7 +16,7 @@ import (
 	"syscall"
 	"time"
 
-	"xmesh/internal/updater"
+	"github.com/Purestreams/xmesh/internal/updater"
 )
 
 var version = "dev"

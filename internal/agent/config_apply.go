@@ -4,8 +4,8 @@ import (
 	"strconv"
 	"strings"
 
-	"xmesh/internal/controller"
-	"xmesh/internal/model"
+	"github.com/Purestreams/xmesh/internal/controller"
+	"github.com/Purestreams/xmesh/internal/model"
 )
 
 // Only fields used to authenticate/dial a tunnel require rebuilding it.

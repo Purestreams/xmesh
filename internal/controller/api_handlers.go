@@ -9,10 +9,10 @@ import (
 	"strings"
 	"time"
 
-	"xmesh/internal/audit"
-	"xmesh/internal/auth"
-	"xmesh/internal/identity"
-	"xmesh/internal/model"
+	"github.com/Purestreams/xmesh/internal/audit"
+	"github.com/Purestreams/xmesh/internal/auth"
+	"github.com/Purestreams/xmesh/internal/identity"
+	"github.com/Purestreams/xmesh/internal/model"
 )
 
 var errEnrollmentUpgradeActive = errors.New("node has an active upgrade; retry credential rotation after it finishes")
@@ -235,6 +235,10 @@ func (s *Server) nodeStatus(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &report) {
 		return
 	}
+	if err := validateStatusText(report); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	if report.Status.NodeID != "" && report.Status.NodeID != nodeID {
 		http.Error(w, "status node mismatch", 403)
 		return
@@ -361,7 +365,7 @@ func (s *Server) nodeStatus(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		pruneRetiredUsage(state, now)
-		reconcileUpgradeRecovery(state, now)
+		s.reconcileUpgradeRecovery(state, now)
 		return nil
 	})
 	if err != nil {

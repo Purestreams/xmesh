@@ -1,6 +1,6 @@
 package controller
 
-import "xmesh/internal/model"
+import "github.com/Purestreams/xmesh/internal/model"
 
 type deletionImpact struct {
 	Assignments int

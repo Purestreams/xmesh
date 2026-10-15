@@ -14,6 +14,24 @@ your own HTTPS reverse proxy in front of it.
 5. Configure Nginx or another reverse proxy for HTTPS. Preserve the request path and Host header.
 
 `state_path` contains credentials and must be backed up and readable only by the Controller user.
+Subscription authentication uses hashes. Their recoverable values, needed to redisplay existing
+subscription links, are stored as AES-GCM ciphertext using a key derived from `session_secret`.
+The first upgraded Controller start migrates legacy plaintext tokens without changing URLs.
+Back up `session_secret` separately and retain it when restoring state; changing it without a
+token migration makes encrypted subscriptions unreadable. Controllers predating this migration
+cannot read the encrypted subscription fields; restore the matching old backup when downgrading.
+Old backups still contain plaintext.
+VMess/HY2 authentication secrets and TLS/REALITY private keys must remain recoverable to provision
+nodes; they cannot be replaced with verification hashes. Protect state, configuration and backups
+with filesystem permissions and encrypted storage.
+
+Public node API requests are limited before authentication to 100 requests/second (burst 200)
+per TCP peer, enrollment/pairing to 1/second (burst 10), and subscriptions to 5/second (burst 20).
+There are at most 64 concurrent requests across these routes and 4096 tracked source buckets.
+Excess requests return 429 with `Retry-After`. Forwarded-IP headers are ignored. Behind a reverse
+proxy or shared NAT, these limits and the login failure bucket apply to the shared peer address.
+Five failed logins block that address for 15 minutes; configure additional per-client limiting
+and access controls at the proxy and allow only trusted administrators to reach the login page.
 The Controller does not terminate TLS and business traffic never passes through it.
 
 Set `release_base_url` to the HTTPS GitHub Release download base, `release_version` to an exact
@@ -28,6 +46,12 @@ allows these paths and large downloads; for `/releases/`, set the upstream read 
 least 10 minutes and disable proxy response buffering so the first slow GitHub fetch is not cut
 off or spooled to the proxy's temporary disk. Size the cache for both Linux architectures and
 Windows.
+Release redirects are restricted to the configured HTTPS origin. For `github.com`, the
+explicit GitHub asset hosts `release-assets.githubusercontent.com`, `objects.githubusercontent.com`
+and `github-releases.githubusercontent.com` are also allowed. Custom mirrors cannot redirect
+to another origin. `SHA256SUMS` detects corruption but is not a publisher signature: the
+configured release source and its administrators remain trusted to supply executable code.
+Protect `release_base_url` and the release account accordingly.
 The Controller host must be able to reach GitHub over HTTPS, but Gateway and Agent hosts can use
 the Controller URL when their GitHub connection is unreliable. Existing Controller installations
 must add `release_dir` to their preserved configuration and restart; the installers only set it
@@ -196,6 +220,12 @@ repeating successful upgrades. Failed, rolled-back, cancelled or expired tasks
 cannot be bypassed with this action.
 
 ## Logs and diagnosis
+
+Agent access-policy changes retire active UDP associations because each can target multiple
+destinations and must not retain an old policy. Loopback UDP ownership is rechecked for every
+datagram to prevent another process from reusing a previously authorized port. On Windows this
+queries the UDP endpoint table, not the process list; caching a successful ownership result
+would weaken that port-reuse protection.
 
 Use `systemctl status xmesh` and `journalctl -u xmesh -f`. The Panel separately shows desired and
 applied configuration versions, Xray readiness, node status, per-Link reports, traffic direction,

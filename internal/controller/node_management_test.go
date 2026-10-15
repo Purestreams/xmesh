@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"xmesh/internal/model"
+	"github.com/Purestreams/xmesh/internal/model"
 )
 
 func postNodeForm(path string, values url.Values, handler http.HandlerFunc) *httptest.ResponseRecorder {

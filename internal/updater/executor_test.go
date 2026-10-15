@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"xmesh/internal/model"
+	"github.com/Purestreams/xmesh/internal/model"
 )
 
 func TestComposeSwitchRetainsHostSettingsButDropsBuild(t *testing.T) {

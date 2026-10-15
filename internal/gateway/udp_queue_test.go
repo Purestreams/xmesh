@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"xmesh/internal/protocol"
+	"github.com/Purestreams/xmesh/internal/protocol"
 )
 
 func TestUDPQueueBoundsBytesAndReturnsCapacity(t *testing.T) {

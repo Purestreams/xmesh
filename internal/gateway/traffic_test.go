@@ -3,7 +3,7 @@ package gateway
 import (
 	"testing"
 
-	"xmesh/internal/runtimecfg"
+	"github.com/Purestreams/xmesh/internal/runtimecfg"
 )
 
 func TestTrafficSnapshotAggregatesGrantAndLinkOnce(t *testing.T) {

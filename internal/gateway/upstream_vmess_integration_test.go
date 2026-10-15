@@ -19,10 +19,10 @@ import (
 	"testing"
 	"time"
 
-	"xmesh/internal/controller"
-	"xmesh/internal/hy2"
-	"xmesh/internal/model"
-	"xmesh/internal/runtimecfg"
+	"github.com/Purestreams/xmesh/internal/controller"
+	"github.com/Purestreams/xmesh/internal/hy2"
+	"github.com/Purestreams/xmesh/internal/model"
+	"github.com/Purestreams/xmesh/internal/runtimecfg"
 )
 
 func TestFullVMessUpstreamTCPAndUDP(t *testing.T) {

@@ -8,14 +8,15 @@ import (
 	"path/filepath"
 	"sync"
 
-	"xmesh/internal/atomicfile"
-	"xmesh/internal/model"
+	"github.com/Purestreams/xmesh/internal/atomicfile"
+	"github.com/Purestreams/xmesh/internal/model"
 )
 
 type Store struct {
-	mu    sync.RWMutex
-	path  string
-	state model.State
+	mu              sync.RWMutex
+	path            string
+	state           model.State
+	subscriptionKey []byte
 }
 
 // Path is the immutable location of the persisted control-plane state.
@@ -60,7 +61,11 @@ func (s *Store) Update(fn func(*model.State) error) error {
 		return err
 	}
 	next.Revision++
-	if err := writeAtomic(s.path, next); err != nil {
+	persisted, err := protectSubscriptionTokens(&next, s.subscriptionKey)
+	if err != nil {
+		return err
+	}
+	if err := writeAtomic(s.path, persisted); err != nil {
 		return err
 	}
 	s.state = next

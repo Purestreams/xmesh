@@ -3,9 +3,9 @@ package agent
 import (
 	"testing"
 
+	"github.com/Purestreams/xmesh/internal/controller"
+	"github.com/Purestreams/xmesh/internal/model"
 	"github.com/xtls/xray-core/core"
-	"xmesh/internal/controller"
-	"xmesh/internal/model"
 )
 
 func TestRealityClientConfigStartsEmbeddedCore(t *testing.T) {

@@ -12,8 +12,8 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"xmesh/internal/auth"
-	"xmesh/internal/model"
+	"github.com/Purestreams/xmesh/internal/auth"
+	"github.com/Purestreams/xmesh/internal/model"
 )
 
 func testVMessLink(t *testing.T, name, address, uuid string) string {

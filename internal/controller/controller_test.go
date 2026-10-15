@@ -13,9 +13,9 @@ import (
 	"testing"
 	"time"
 
-	"xmesh/internal/auth"
-	"xmesh/internal/model"
-	"xmesh/internal/store"
+	"github.com/Purestreams/xmesh/internal/auth"
+	"github.com/Purestreams/xmesh/internal/model"
+	"github.com/Purestreams/xmesh/internal/store"
 )
 
 func testServer(t *testing.T, populate func(*model.State) error) (*Server, *store.Store) {
@@ -223,6 +223,58 @@ func TestPanelRendersPopulatedRelationshipTables(t *testing.T) {
 	for _, want := range []string{"Gateway", "Agent", "User", "Link"} {
 		if !strings.Contains(recorder.Body.String(), want) {
 			t.Fatalf("panel missing %q", want)
+		}
+	}
+}
+
+func TestPanelWarnsForInsecureWSSLinks(t *testing.T) {
+	for _, tc := range []struct {
+		name, url       string
+		verify, warning bool
+	}{
+		{"insecure WSS", "wss://edge.example/tunnel", false, true},
+		{"verified WSS", "wss://edge.example/tunnel", true, false},
+		{"REALITY", "reality://edge.example/tunnel", false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, _ := testServer(t, func(state *model.State) error {
+				state.Links["l"] = model.Link{ID: "l", URL: tc.url, TLSVerify: tc.verify}
+				return nil
+			})
+			r := httptest.NewRequest(http.MethodGet, "/", nil)
+			r.AddCookie(&http.Cookie{Name: sessionCookie, Value: auth.SignSession(s.cfg.adminSessionKey(), "admin", s.now().Add(time.Hour))})
+			w := httptest.NewRecorder()
+			s.Handler().ServeHTTP(w, r)
+			if w.Code != http.StatusOK {
+				t.Fatalf("panel status=%d", w.Code)
+			}
+			if got := strings.Contains(w.Body.String(), "警告：此 WSS 链路未校验证书"); got != tc.warning {
+				t.Fatalf("active link warning=%v, want %v", got, tc.warning)
+			}
+		})
+	}
+}
+
+func TestSubscriptionCountsRejectMissingRelationships(t *testing.T) {
+	state := model.NewState()
+	state.Users["u"] = model.User{ID: "u", Enabled: true}
+	state.Gateways["g"] = model.Gateway{ID: "g", Enabled: true}
+	state.Agents["a"] = model.Agent{ID: "a", Enabled: true}
+	state.Attachments["r"] = model.Attachment{ID: "r", GatewayID: "g", AgentID: "a", Enabled: true}
+	state.Links["l"] = model.Link{ID: "l", AttachmentID: "r", Enabled: true}
+	state.Grants["grant"] = model.Grant{ID: "grant", UserID: "u", AttachmentID: "r", Enabled: true, Published: true}
+	if got := subscriptionCounts(state, time.Now())["u"]; got != "已发布 1 / 已授权 1" {
+		t.Fatalf("valid relationships: %s", got)
+	}
+	for _, missing := range []string{"attachment", "gateway"} {
+		broken := state.Clone()
+		if missing == "attachment" {
+			delete(broken.Attachments, "r")
+		} else {
+			delete(broken.Gateways, "g")
+		}
+		if got := subscriptionCounts(broken, time.Now())["u"]; got != "已发布 0 / 已授权 1" {
+			t.Fatalf("missing %s inflated count: %s", missing, got)
 		}
 	}
 }

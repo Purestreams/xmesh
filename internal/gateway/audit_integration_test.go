@@ -13,14 +13,14 @@ import (
 	"testing"
 	"time"
 
-	agentpkg "xmesh/internal/agent"
-	"xmesh/internal/audit"
-	"xmesh/internal/auth"
-	"xmesh/internal/controller"
-	"xmesh/internal/model"
-	"xmesh/internal/nodeclient"
-	"xmesh/internal/runtimecfg"
-	"xmesh/internal/store"
+	agentpkg "github.com/Purestreams/xmesh/internal/agent"
+	"github.com/Purestreams/xmesh/internal/audit"
+	"github.com/Purestreams/xmesh/internal/auth"
+	"github.com/Purestreams/xmesh/internal/controller"
+	"github.com/Purestreams/xmesh/internal/model"
+	"github.com/Purestreams/xmesh/internal/nodeclient"
+	"github.com/Purestreams/xmesh/internal/runtimecfg"
+	"github.com/Purestreams/xmesh/internal/store"
 )
 
 func TestAuditTCPThroughGatewayAgentAndController(t *testing.T) {

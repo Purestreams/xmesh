@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"strings"
 
-	"xmesh/internal/model"
+	"github.com/Purestreams/xmesh/internal/model"
 )
 
 func (s *Server) editLink(w http.ResponseWriter, r *http.Request) {

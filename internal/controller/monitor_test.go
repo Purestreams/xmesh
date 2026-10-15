@@ -13,9 +13,9 @@ import (
 	"testing"
 	"time"
 
-	"xmesh/internal/auth"
-	"xmesh/internal/model"
-	"xmesh/internal/store"
+	"github.com/Purestreams/xmesh/internal/auth"
+	"github.com/Purestreams/xmesh/internal/model"
+	"github.com/Purestreams/xmesh/internal/store"
 )
 
 func monitorFixture(now time.Time) func(*model.State) error {
@@ -337,6 +337,9 @@ func TestMonitorSettingsAuthorizationValidationPersistenceAndIsolation(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := reopened.ProtectSubscriptions(server.cfg.sessionKey()); err != nil {
+		t.Fatal(err)
+	}
 	if err := reopened.Update(func(s *model.State) error { *s = after; return nil }); err != nil {
 		t.Fatal(err)
 	}
@@ -406,6 +409,9 @@ func TestMonitorOptionalLinkNamesAndPublicationPersistence(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.json")
 	persisted, err := store.Open(path)
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := persisted.ProtectSubscriptions(server.cfg.sessionKey()); err != nil {
 		t.Fatal(err)
 	}
 	if err := persisted.Update(func(s *model.State) error { *s = state.Snapshot(); return nil }); err != nil {

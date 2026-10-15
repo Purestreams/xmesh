@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"xmesh/internal/model"
+	"github.com/Purestreams/xmesh/internal/model"
 )
 
 const usageRetention = 30 * 24 * time.Hour

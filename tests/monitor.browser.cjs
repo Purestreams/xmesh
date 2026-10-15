@@ -4,7 +4,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 
 (async () => {
-  const browser = await chromium.launch({headless: true, channel: process.env.XMESH_BROWSER_CHANNEL || "msedge"});
+  const browser = await chromium.launch({headless: true, channel: process.env.XMESH_BROWSER_CHANNEL || undefined, executablePath: process.env.XMESH_BROWSER_EXECUTABLE || undefined});
   const base = process.env.XMESH_MONITOR_TEST_URL || "http://127.0.0.1:18089";
   const out = process.env.XMESH_MONITOR_SCREENSHOTS || "tmp/monitor-screenshots";
   fs.mkdirSync(out, {recursive: true});

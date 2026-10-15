@@ -14,15 +14,16 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/xtaci/smux"
+	"google.golang.org/grpc"
 
-	"xmesh/internal/auth"
-	"xmesh/internal/controller"
-	"xmesh/internal/identity"
-	"xmesh/internal/model"
-	"xmesh/internal/nodeclient"
-	"xmesh/internal/protocol"
-	"xmesh/internal/runtimecfg"
-	"xmesh/internal/scheduler"
+	"github.com/Purestreams/xmesh/internal/auth"
+	"github.com/Purestreams/xmesh/internal/controller"
+	"github.com/Purestreams/xmesh/internal/identity"
+	"github.com/Purestreams/xmesh/internal/model"
+	"github.com/Purestreams/xmesh/internal/nodeclient"
+	"github.com/Purestreams/xmesh/internal/protocol"
+	"github.com/Purestreams/xmesh/internal/runtimecfg"
+	"github.com/Purestreams/xmesh/internal/scheduler"
 )
 
 type Runtime struct {
@@ -35,6 +36,7 @@ type Runtime struct {
 	pool                *scheduler.Pool
 	mu                  sync.RWMutex
 	config              controller.GatewayConfig
+	configGeneration    uint64
 	authorizationUntil  time.Time
 	authorizationEpoch  uint64
 	activeConnections   map[net.Conn]authorizedConnection
@@ -43,6 +45,7 @@ type Runtime struct {
 	xrayRunningPayload  string
 	pendingStats        map[uint64]pendingStatsConfig
 	statsMu             sync.Mutex
+	statsConn           *grpc.ClientConn
 	started             time.Time
 	tcpConnections      atomic.Int64
 	udpAssociations     atomic.Int64
@@ -84,16 +87,21 @@ func New(local runtimecfg.Config, logger *slog.Logger) *Runtime {
 }
 
 func (r *Runtime) Run(ctx context.Context) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	if err := r.refresh(ctx); err != nil {
 		return fmt.Errorf("initial controller config: %w", err)
 	}
-	go r.watchAuthorization(ctx)
-	go r.upstreamProbeLoop(ctx)
+	var workers sync.WaitGroup
+	defer func() { cancel(); workers.Wait(); r.closeStatsConnection() }()
+	workers.Add(2)
+	go func() { defer workers.Done(); r.watchAuthorization(ctx) }()
+	go func() { defer workers.Done(); r.upstreamProbeLoop(ctx) }()
 	errCh := make(chan error, 4)
-	go func() { errCh <- r.runTunnelServer(ctx) }()
-	go func() { errCh <- r.runSOCKS(ctx) }()
-	go func() { errCh <- r.controlLoop(ctx) }()
-	go func() { errCh <- r.xrayLoop(ctx) }()
+	for _, component := range []func(context.Context) error{r.runTunnelServer, r.runSOCKS, r.controlLoop, r.xrayLoop} {
+		workers.Add(1)
+		go func() { defer workers.Done(); errCh <- component(ctx) }()
+	}
 	select {
 	case <-ctx.Done():
 		return nil
@@ -197,6 +205,7 @@ func (r *Runtime) refresh(ctx context.Context) error {
 		}
 	}
 	r.config = config
+	r.configGeneration++
 	r.authorizationUntil = time.Now().Add(nodeclient.ConfigLease)
 	if !config.Gateway.Enabled && r.xrayCancel != nil {
 		r.xrayCancel()
@@ -484,7 +493,7 @@ func (r *Runtime) runTunnelServer(ctx context.Context) error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET "+r.local.Gateway.TunnelPath, r.acceptTunnel)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(204) })
-	server := &http.Server{Addr: r.local.Gateway.TunnelListen, Handler: mux, ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 2 * time.Minute}
+	server := &http.Server{Addr: r.local.Gateway.TunnelListen, Handler: mux, ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 2 * time.Minute, BaseContext: func(net.Listener) context.Context { return ctx }}
 	go func() {
 		<-ctx.Done()
 		shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -506,6 +515,8 @@ func (r *Runtime) acceptTunnel(w http.ResponseWriter, request *http.Request) {
 	}
 	conn := websocket.NetConn(request.Context(), ws, websocket.MessageBinary)
 	defer conn.Close()
+	stop := context.AfterFunc(request.Context(), func() { _ = conn.Close() })
+	defer stop()
 	_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
 	registration, err := protocol.ReadMessage(conn)
 	if err != nil || registration.Type != protocol.TypeRegister || registration.Version != protocol.Version {
@@ -532,7 +543,12 @@ func (r *Runtime) acceptTunnel(w http.ResponseWriter, request *http.Request) {
 	}
 	clientSessionID := registration.SessionID
 	if clientSessionID == "" {
-		clientSessionID, _ = identity.Token(12)
+		clientSessionID, err = identity.Token(12)
+		if err != nil {
+			_ = session.Close()
+			r.logger.Error("generate tunnel session ID", "error", err)
+			return
+		}
 	}
 	sessionID := registration.AgentID + "/" + registration.LinkID + "/" + clientSessionID
 	entry := &scheduler.Session{ID: sessionID, AgentID: registration.AgentID, LinkID: registration.LinkID, Priority: link.Priority, Weight: link.Weight, MaxStreams: link.MaxStreams, SMux: session, Generation: registration.Generation, Ready: true, LastOK: time.Now()}
@@ -679,21 +695,6 @@ func (r *Runtime) openStream(agentID string, request protocol.Message) (net.Conn
 	}
 	_ = stream.SetDeadline(time.Time{})
 	return stream, lease, nil
-}
-
-func (r *Runtime) linkAgentForGrant(grantID string) (string, bool) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	for _, grant := range r.config.Grants {
-		if grant.ID == grantID && grant.Enabled {
-			for _, link := range r.config.Links {
-				if link.AttachmentID == grant.AttachmentID {
-					return link.AgentID, true
-				}
-			}
-		}
-	}
-	return "", false
 }
 
 var _ = net.IPv4len

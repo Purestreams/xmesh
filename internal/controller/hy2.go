@@ -12,9 +12,9 @@ import (
 	"strings"
 	"time"
 
-	"xmesh/internal/hy2"
-	"xmesh/internal/identity"
-	"xmesh/internal/model"
+	"github.com/Purestreams/xmesh/internal/hy2"
+	"github.com/Purestreams/xmesh/internal/identity"
+	"github.com/Purestreams/xmesh/internal/model"
 )
 
 func configureHY2(state *model.State, gateway *model.Gateway, port int, now time.Time) error {

@@ -15,9 +15,9 @@ import (
 	"testing"
 	"time"
 
-	"xmesh/internal/audit"
-	"xmesh/internal/auth"
-	"xmesh/internal/model"
+	"github.com/Purestreams/xmesh/internal/audit"
+	"github.com/Purestreams/xmesh/internal/auth"
+	"github.com/Purestreams/xmesh/internal/model"
 )
 
 func postAudit(t *testing.T, s *Server, credential string, batch audit.Batch) *httptest.ResponseRecorder {

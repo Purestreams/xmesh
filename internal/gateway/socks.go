@@ -9,10 +9,10 @@ import (
 	"net"
 	"time"
 
-	"xmesh/internal/egress"
-	"xmesh/internal/identity"
-	"xmesh/internal/protocol"
-	"xmesh/internal/relay"
+	"github.com/Purestreams/xmesh/internal/egress"
+	"github.com/Purestreams/xmesh/internal/identity"
+	"github.com/Purestreams/xmesh/internal/protocol"
+	"github.com/Purestreams/xmesh/internal/relay"
 )
 
 const (
@@ -28,12 +28,15 @@ type socksTarget struct {
 }
 
 func (r *Runtime) runSOCKS(ctx context.Context) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	listener, err := net.Listen("tcp", r.local.Gateway.SOCKSListen)
 	if err != nil {
 		return err
 	}
 	defer listener.Close()
-	go func() { <-ctx.Done(); _ = listener.Close() }()
+	stop := context.AfterFunc(ctx, func() { _ = listener.Close() })
+	defer stop()
 	r.logger.Info("gateway SOCKS listener started", "address", listener.Addr())
 	sem := make(chan struct{}, r.local.Gateway.MaxUDPAssociations)
 	for {
@@ -44,12 +47,14 @@ func (r *Runtime) runSOCKS(ctx context.Context) error {
 			}
 			return err
 		}
-		go r.handleSOCKS(conn, sem)
+		go r.handleSOCKS(ctx, conn, sem)
 	}
 }
 
-func (r *Runtime) handleSOCKS(conn net.Conn, udpSem chan struct{}) {
+func (r *Runtime) handleSOCKS(ctx context.Context, conn net.Conn, udpSem chan struct{}) {
 	defer conn.Close()
+	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	defer stop()
 	_ = conn.SetDeadline(time.Now().Add(20 * time.Second))
 	reader := bufio.NewReaderSize(conn, 4096)
 	username, password, err := socksAuthenticate(reader, conn)
@@ -61,7 +66,7 @@ func (r *Runtime) handleSOCKS(conn net.Conn, udpSem chan struct{}) {
 		_, _ = conn.Write([]byte{1, 1})
 		return
 	}
-	connectionCtx, cancelConnection := context.WithCancel(context.Background())
+	connectionCtx, cancelConnection := context.WithCancel(ctx)
 	defer cancelConnection()
 	r.mu.Lock()
 	current := false
@@ -95,7 +100,11 @@ func (r *Runtime) handleSOCKS(conn net.Conn, udpSem chan struct{}) {
 			_ = writeSOCKSReply(conn, 2, nil) // Connection not allowed by ruleset.
 			return
 		}
-		requestID, _ := identity.Token(12)
+		requestID, err := identity.Token(12)
+		if err != nil {
+			_ = writeSOCKSReply(conn, 1, nil)
+			return
+		}
 		stream, lease, err := r.openStream(agentID, protocol.Message{Type: protocol.TypeTCP, Version: protocol.Version, GrantID: grant.ID, RequestID: requestID, Host: target.Host, Port: target.Port})
 		if err != nil {
 			_ = writeSOCKSReply(conn, mapSOCKSError(err), nil)
@@ -133,7 +142,7 @@ func (r *Runtime) handleSOCKS(conn net.Conn, udpSem chan struct{}) {
 		defer r.udpAssociations.Add(-1)
 		stats.udp.Add(1)
 		defer stats.udp.Add(-1)
-		r.handleUDPAssociation(conn, reader, grant.ID, agentID, stats, target)
+		r.handleUDPAssociation(connectionCtx, conn, reader, grant.ID, agentID, stats, target)
 	default:
 		_ = writeSOCKSReply(conn, 7, nil)
 	}
@@ -283,7 +292,7 @@ func mapSOCKSError(err error) byte {
 	return 1
 }
 
-func (r *Runtime) handleUDPAssociation(control net.Conn, reader *bufio.Reader, grantID, agentID string, stats *grantCounters, requested socksTarget) {
+func (r *Runtime) handleUDPAssociation(parent context.Context, control net.Conn, reader *bufio.Reader, grantID, agentID string, stats *grantCounters, requested socksTarget) {
 	udp, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0})
 	if err != nil {
 		_ = writeSOCKSReply(control, 1, nil)
@@ -309,9 +318,17 @@ func (r *Runtime) handleUDPAssociation(control net.Conn, reader *bufio.Reader, g
 		return
 	}
 	_ = control.SetDeadline(time.Time{})
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
-	go func() { one := make([]byte, 1); _, _ = reader.Read(one); cancel(); _ = udp.Close() }()
+	stop := context.AfterFunc(ctx, func() { _ = udp.Close(); _ = control.Close() })
+	defer stop()
+	go func() {
+		// The TCP connection keeps the association alive until EOF or a read
+		// error. Ignore stray bytes, including any buffered by the handshake.
+		_, _ = io.Copy(io.Discard, reader)
+		cancel()
+		_ = udp.Close()
+	}()
 	queue := newUDPQueue(r.local.Gateway.MaxUDPQueueBytes)
 	var client *net.UDPAddr
 	go func() {
@@ -350,7 +367,10 @@ func (r *Runtime) handleUDPAssociation(control net.Conn, reader *bufio.Reader, g
 	if !ok {
 		return
 	}
-	requestID, _ := identity.Token(12)
+	requestID, err := identity.Token(12)
+	if err != nil {
+		return
+	}
 	stream, lease, err := r.openStream(agentID, protocol.Message{Type: protocol.TypeUDP, Version: protocol.Version, GrantID: grantID, RequestID: requestID})
 	if err != nil {
 		r.logger.Warn("gateway UDP stream open failed", "grant", grantID, "error", err)
@@ -363,7 +383,7 @@ func (r *Runtime) handleUDPAssociation(control net.Conn, reader *bufio.Reader, g
 	go func() {
 		datagram := first
 		for {
-			if err := protocol.WriteDatagram(stream, datagram); err != nil {
+			if err := protocol.WriteDatagramWithTimeout(stream, datagram, r.local.WriteStallTimeout.Value(30*time.Second)); err != nil {
 				errCh <- err
 				return
 			}

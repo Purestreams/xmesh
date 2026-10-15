@@ -11,11 +11,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Purestreams/xmesh/internal/controller"
+	"github.com/Purestreams/xmesh/internal/model"
+	"github.com/Purestreams/xmesh/internal/protocol"
+	"github.com/Purestreams/xmesh/internal/runtimecfg"
 	"github.com/xtaci/smux"
-	"xmesh/internal/controller"
-	"xmesh/internal/model"
-	"xmesh/internal/protocol"
-	"xmesh/internal/runtimecfg"
 )
 
 func securityAgentConfig() controller.AgentConfig {

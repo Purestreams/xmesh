@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"xmesh/internal/auth"
-	"xmesh/internal/model"
-	"xmesh/internal/store"
+	"github.com/Purestreams/xmesh/internal/auth"
+	"github.com/Purestreams/xmesh/internal/model"
+	"github.com/Purestreams/xmesh/internal/store"
 )
 
 func dashboardRequest(t *testing.T, server *Server) dashboardData {

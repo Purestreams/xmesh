@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"xmesh/internal/auth"
-	"xmesh/internal/model"
+	"github.com/Purestreams/xmesh/internal/auth"
+	"github.com/Purestreams/xmesh/internal/model"
 )
 
 func TestQuickSetupRealityDistributesOnlyPublicKeyToAgent(t *testing.T) {

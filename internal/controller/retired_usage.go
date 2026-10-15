@@ -4,7 +4,7 @@ import (
 	"strings"
 	"time"
 
-	"xmesh/internal/model"
+	"github.com/Purestreams/xmesh/internal/model"
 )
 
 const retiredUsageLifetime = 7 * 24 * time.Hour

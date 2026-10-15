@@ -18,8 +18,8 @@ import (
 	"strings"
 	"time"
 
-	"xmesh/internal/identity"
-	"xmesh/internal/model"
+	"github.com/Purestreams/xmesh/internal/identity"
+	"github.com/Purestreams/xmesh/internal/model"
 )
 
 type Config struct {

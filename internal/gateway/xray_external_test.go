@@ -16,9 +16,9 @@ import (
 
 	"github.com/xtls/xray-core/infra/conf/serial"
 
-	"xmesh/internal/controller"
-	"xmesh/internal/model"
-	"xmesh/internal/runtimecfg"
+	"github.com/Purestreams/xmesh/internal/controller"
+	"github.com/Purestreams/xmesh/internal/model"
+	"github.com/Purestreams/xmesh/internal/runtimecfg"
 )
 
 func TestVLESSRealityVisionOutboundConfig(t *testing.T) {

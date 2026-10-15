@@ -11,9 +11,9 @@ import (
 	"strings"
 	"time"
 
-	"xmesh/internal/audit"
-	"xmesh/internal/auth"
-	"xmesh/internal/model"
+	"github.com/Purestreams/xmesh/internal/audit"
+	"github.com/Purestreams/xmesh/internal/auth"
+	"github.com/Purestreams/xmesh/internal/model"
 )
 
 //go:embed audit.html

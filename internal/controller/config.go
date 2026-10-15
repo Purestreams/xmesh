@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"xmesh/internal/auth"
+	"github.com/Purestreams/xmesh/internal/auth"
 )
 
 type Config struct {

@@ -7,4 +7,4 @@ coverage
 *.exe
 *.test
 *.out
-.tmp-go-cache
+.tmp*

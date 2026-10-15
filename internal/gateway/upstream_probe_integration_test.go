@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"xmesh/internal/controller"
-	"xmesh/internal/model"
+	"github.com/Purestreams/xmesh/internal/controller"
+	"github.com/Purestreams/xmesh/internal/model"
 )
 
 func TestRealXrayUpstreamProbesSelectExactOutboundWithoutGrants(t *testing.T) {

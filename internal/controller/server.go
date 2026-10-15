@@ -18,11 +18,11 @@ import (
 	"sync"
 	"time"
 
-	"xmesh/internal/audit"
-	"xmesh/internal/auth"
-	"xmesh/internal/identity"
-	"xmesh/internal/model"
-	"xmesh/internal/store"
+	"github.com/Purestreams/xmesh/internal/audit"
+	"github.com/Purestreams/xmesh/internal/auth"
+	"github.com/Purestreams/xmesh/internal/identity"
+	"github.com/Purestreams/xmesh/internal/model"
+	"github.com/Purestreams/xmesh/internal/store"
 )
 
 const sessionCookie = "xmesh_admin"
@@ -56,6 +56,10 @@ type Server struct {
 	loginBudget       float64
 	loginBudgetAt     time.Time
 	monitor           monitorRuntime
+	requestMu         sync.Mutex
+	requestSources    map[string]requestBucket
+	requestActive     int
+	requestSweepAt    time.Time
 }
 
 type loginFailure struct {
@@ -85,9 +89,15 @@ func New(cfg Config, state *store.Store, logger *slog.Logger) (*Server, error) {
 		},
 		"join":             func(values []string) string { return strings.Join(values, ", ") },
 		"canResumeUpgrade": canResumeUpgrade,
+		"insecureWSS": func(link model.Link) bool {
+			return strings.HasPrefix(strings.ToLower(link.URL), "wss://") && !link.TLSVerify
+		},
 	}).Parse(strings.Replace(panelTemplate, "</div></main>", upstreamPanelSection+monitorPanelSection+auditPanelSection+"</div></main>", 1))
 	if err != nil {
 		return nil, fmt.Errorf("parse panel template: %w", err)
+	}
+	if err := state.ProtectSubscriptions(cfg.sessionKey()); err != nil {
+		return nil, fmt.Errorf("protect subscription tokens: %w", err)
 	}
 	s := &Server{cfg: cfg, store: state, logger: logger, templates: t, now: time.Now, releaseMu: &sync.Mutex{}, releaseCache: &sync.Map{}}
 	dir := cfg.AuditDir
@@ -188,7 +198,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v1/status", s.nodeStatus)
 	mux.HandleFunc("POST /api/v1/audit", s.receiveAudit)
 	mux.HandleFunc("GET /api/v1/self/status", s.selfStatus)
-	return s.securityHeaders(s.accessLog(http.NewCrossOriginProtection().Handler(mux)))
+	return s.securityHeaders(s.accessLog(s.limitPublicRequests(http.NewCrossOriginProtection().Handler(mux))))
 }
 
 func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
@@ -407,10 +417,15 @@ func (s *Server) panel(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) subscription(w http.ResponseWriter, r *http.Request) {
 	token := r.PathValue("token")
+	if token == "" || len(token) > 256 {
+		http.NotFound(w, r)
+		return
+	}
 	userID := ""
+	candidateHash := auth.SecretHash(token)
 	s.store.View(func(state *model.State) {
 		for _, user := range state.Users {
-			if subtle.ConstantTimeCompare([]byte(user.SubscriptionToken), []byte(token)) == 1 {
+			if user.SubscriptionTokenHash != "" && subtle.ConstantTimeCompare([]byte(user.SubscriptionTokenHash), []byte(candidateHash)) == 1 {
 				userID = user.ID
 				return
 			}
@@ -421,7 +436,7 @@ func (s *Server) subscription(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	state := s.store.Snapshot()
-	if state.Users[userID].SubscriptionToken != token {
+	if !auth.EqualSecretHash(state.Users[userID].SubscriptionTokenHash, token) {
 		http.NotFound(w, r)
 		return
 	}
@@ -552,7 +567,10 @@ func subscriptionCounts(state model.State, now time.Time) map[string]string {
 			if grant.UserID == user.ID && grant.Enabled {
 				total++
 				attachment, ok := state.Attachments[grant.AttachmentID]
-				gateway := state.Gateways[attachment.GatewayID]
+				if !ok {
+					continue
+				}
+				gateway, ok := state.Gateways[attachment.GatewayID]
 				if ok && grant.Published && subscriptionRouteAvailable(&state, attachment, now) && (gateway.VMessEnabled() || (gateway.HY2Enabled() && state.NodeStatus[gateway.ID].HY2Ready)) {
 					available++
 				}

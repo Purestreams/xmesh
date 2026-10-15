@@ -11,9 +11,9 @@ import (
 	"strings"
 	"time"
 
-	"xmesh/internal/auth"
-	"xmesh/internal/identity"
-	"xmesh/internal/model"
+	"github.com/Purestreams/xmesh/internal/auth"
+	"github.com/Purestreams/xmesh/internal/identity"
+	"github.com/Purestreams/xmesh/internal/model"
 )
 
 const updaterProtocol = 1
@@ -217,7 +217,7 @@ func (s *Server) updaterHeartbeat(w http.ResponseWriter, r *http.Request) {
 		current := state.Updaters[up.NodeID]
 		current.Mode, current.Arch, current.Version, current.Protocol, current.LastSeen = req.Mode, req.Arch, req.Version, req.Protocol, s.now().UTC()
 		state.Updaters[up.NodeID] = current
-		reconcileUpgradeRecovery(state, s.now().UTC())
+		s.reconcileUpgradeRecovery(state, s.now().UTC())
 		return nil
 	})
 	if err != nil {
@@ -552,7 +552,7 @@ func (s *Server) updaterTask(w http.ResponseWriter, r *http.Request) {
 		if s.now().Sub(state.Updaters[up.NodeID].LastSeen) > 45*time.Second {
 			return errors.New("updater heartbeat expired")
 		}
-		reconcileUpgradeRecovery(state, s.now().UTC())
+		s.reconcileUpgradeRecovery(state, s.now().UTC())
 		for _, task := range state.UpgradeTasks {
 			if task.NodeID != up.NodeID || task.Manual || (task.Stage != "pending" && task.Stage != "running" && task.Stage != "uncertain" && task.Stage != "downloading" && task.Stage != "prepared" && task.Stage != "switching" && task.Stage != "verifying" && task.Stage != "rolling_back") {
 				continue
@@ -649,7 +649,7 @@ func (s *Server) updaterReport(w http.ResponseWriter, r *http.Request) {
 				batch.RecoveryTaskID = task.ID
 				batch.RecoveryDeadline = task.UpdatedAt.Add(upgradeLinkRecoveryTimeout)
 				state.UpgradeBatches[batch.ID] = batch
-				reconcileUpgradeRecovery(state, s.now().UTC())
+				s.reconcileUpgradeRecovery(state, s.now().UTC())
 			}
 		}
 		return nil

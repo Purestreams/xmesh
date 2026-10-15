@@ -18,7 +18,7 @@ import (
 	"testing"
 	"time"
 
-	"xmesh/internal/model"
+	"github.com/Purestreams/xmesh/internal/model"
 )
 
 func TestDockerUpgradeAndRollback(t *testing.T) {

@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"xmesh/internal/auth"
-	"xmesh/internal/model"
+	"github.com/Purestreams/xmesh/internal/auth"
+	"github.com/Purestreams/xmesh/internal/model"
 )
 
 func TestDeletedExternalRouteAcceptsFinalUsageWithoutBlockingOtherGrants(t *testing.T) {

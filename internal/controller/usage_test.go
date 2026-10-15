@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"xmesh/internal/model"
+	"github.com/Purestreams/xmesh/internal/model"
 )
 
 func TestGrantUsageWindowsAndRestart(t *testing.T) {

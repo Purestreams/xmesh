@@ -19,10 +19,10 @@ import (
 	"testing"
 	"time"
 
-	agentpkg "xmesh/internal/agent"
-	"xmesh/internal/controller"
-	"xmesh/internal/model"
-	"xmesh/internal/runtimecfg"
+	agentpkg "github.com/Purestreams/xmesh/internal/agent"
+	"github.com/Purestreams/xmesh/internal/controller"
+	"github.com/Purestreams/xmesh/internal/model"
+	"github.com/Purestreams/xmesh/internal/runtimecfg"
 )
 
 func TestGatewayMetadataDoesNotAcknowledgePendingXrayPayload(t *testing.T) {

@@ -8,9 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"xmesh/internal/auth"
-	"xmesh/internal/identity"
-	"xmesh/internal/model"
+	"github.com/Purestreams/xmesh/internal/auth"
+	"github.com/Purestreams/xmesh/internal/identity"
+	"github.com/Purestreams/xmesh/internal/model"
 )
 
 func (s *Server) createUser(w http.ResponseWriter, r *http.Request) {

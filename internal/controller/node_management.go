@@ -7,7 +7,7 @@ import (
 	"net/netip"
 	"strings"
 
-	"xmesh/internal/model"
+	"github.com/Purestreams/xmesh/internal/model"
 )
 
 func (s *Server) editGateway(w http.ResponseWriter, r *http.Request) {

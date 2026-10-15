@@ -1,4 +1,4 @@
-module xmesh
+module github.com/Purestreams/xmesh
 
 go 1.27.2
 

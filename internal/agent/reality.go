@@ -24,7 +24,7 @@ import (
 	_ "github.com/xtls/xray-core/transport/internet/reality"
 	_ "github.com/xtls/xray-core/transport/internet/tcp"
 
-	"xmesh/internal/controller"
+	"github.com/Purestreams/xmesh/internal/controller"
 )
 
 type realityCore struct {

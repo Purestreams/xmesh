@@ -17,13 +17,13 @@ import (
 	"testing"
 	"time"
 
-	agentpkg "xmesh/internal/agent"
-	"xmesh/internal/auth"
-	"xmesh/internal/controller"
-	"xmesh/internal/hy2"
-	"xmesh/internal/model"
-	"xmesh/internal/runtimecfg"
-	"xmesh/internal/store"
+	agentpkg "github.com/Purestreams/xmesh/internal/agent"
+	"github.com/Purestreams/xmesh/internal/auth"
+	"github.com/Purestreams/xmesh/internal/controller"
+	"github.com/Purestreams/xmesh/internal/hy2"
+	"github.com/Purestreams/xmesh/internal/model"
+	"github.com/Purestreams/xmesh/internal/runtimecfg"
+	"github.com/Purestreams/xmesh/internal/store"
 )
 
 func TestWebIngressSwitchesCloseSocketsAndKeepOtherProtocol(t *testing.T) {

@@ -2,8 +2,28 @@ package protocol
 
 import (
 	"bytes"
+	"net"
 	"testing"
+	"time"
 )
+
+func TestDatagramWriteTimeoutReleasesStalledSender(t *testing.T) {
+	left, right := net.Pipe()
+	defer left.Close()
+	defer right.Close()
+	done := make(chan error, 1)
+	go func() {
+		done <- WriteDatagramWithTimeout(left, Datagram{Host: "127.0.0.1", Port: 53, Payload: []byte("data")}, 30*time.Millisecond)
+	}()
+	select {
+	case err := <-done:
+		if timeout, ok := err.(net.Error); !ok || !timeout.Timeout() {
+			t.Fatalf("want write timeout, got %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("stalled datagram write did not stop")
+	}
+}
 
 func TestMessageRoundTrip(t *testing.T) {
 	var b bytes.Buffer

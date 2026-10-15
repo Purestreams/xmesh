@@ -1,10 +1,46 @@
 package relay
 
 import (
+	"io"
 	"net"
 	"testing"
 	"time"
 )
+
+type partialErrorConn struct{ net.Conn }
+
+func (c partialErrorConn) Write(b []byte) (int, error) {
+	n, err := c.Conn.Write(b[:min(2, len(b))])
+	if err != nil {
+		return n, err
+	}
+	return n, io.ErrUnexpectedEOF
+}
+
+func TestPartialWriteIsCountedBeforeError(t *testing.T) {
+	client, left := net.Pipe()
+	right, server := net.Pipe()
+	defer client.Close()
+	defer server.Close()
+	done := make(chan struct{})
+	count := 0
+	go func() {
+		Bidirectional(left, partialErrorConn{right}, func(n int) { count += n }, nil, Options{})
+		close(done)
+	}()
+	go func() { _, _ = client.Write([]byte("hello")) }()
+	if _, err := io.ReadFull(server, make([]byte, 2)); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-done:
+		if count != 2 {
+			t.Fatalf("partial write counted %d bytes, want 2", count)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("write error did not close relay")
+	}
+}
 
 func TestStalledWriteEndsBothDirections(t *testing.T) {
 	client, left := net.Pipe()

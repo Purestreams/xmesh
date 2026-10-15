@@ -26,10 +26,10 @@ import (
 	"path/filepath"
 	"time"
 
-	"xmesh/internal/auth"
-	"xmesh/internal/hy2"
-	"xmesh/internal/identity"
-	"xmesh/internal/model"
+	"github.com/Purestreams/xmesh/internal/auth"
+	"github.com/Purestreams/xmesh/internal/hy2"
+	"github.com/Purestreams/xmesh/internal/identity"
+	"github.com/Purestreams/xmesh/internal/model"
 )
 
 const (

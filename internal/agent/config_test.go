@@ -5,9 +5,9 @@ import (
 	"log/slog"
 	"testing"
 
-	"xmesh/internal/controller"
-	"xmesh/internal/model"
-	"xmesh/internal/runtimecfg"
+	"github.com/Purestreams/xmesh/internal/controller"
+	"github.com/Purestreams/xmesh/internal/model"
+	"github.com/Purestreams/xmesh/internal/runtimecfg"
 )
 
 func TestApplyConfigPreservesWorkersAndRetiresOnlyAffectedSlots(t *testing.T) {

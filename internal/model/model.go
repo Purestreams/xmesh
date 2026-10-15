@@ -10,14 +10,16 @@ const (
 )
 
 type User struct {
-	AuditEnabled      bool      `json:"audit_enabled,omitempty"`
-	AuditGeneration   uint64    `json:"audit_generation,omitempty"`
-	AuditLimitMB      int       `json:"audit_limit_mb,omitempty"`
-	ID                string    `json:"id"`
-	Name              string    `json:"name"`
-	Enabled           bool      `json:"enabled"`
-	SubscriptionToken string    `json:"subscription_token"`
-	CreatedAt         time.Time `json:"created_at"`
+	AuditEnabled            bool      `json:"audit_enabled,omitempty"`
+	AuditGeneration         uint64    `json:"audit_generation,omitempty"`
+	AuditLimitMB            int       `json:"audit_limit_mb,omitempty"`
+	ID                      string    `json:"id"`
+	Name                    string    `json:"name"`
+	Enabled                 bool      `json:"enabled"`
+	SubscriptionToken       string    `json:"subscription_token,omitempty"`
+	SubscriptionTokenHash   string    `json:"subscription_token_hash,omitempty"`
+	SubscriptionTokenCipher string    `json:"subscription_token_cipher,omitempty"`
+	CreatedAt               time.Time `json:"created_at"`
 }
 
 type Gateway struct {

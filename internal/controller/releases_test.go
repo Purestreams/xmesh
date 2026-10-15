@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"context"
 	"crypto/sha256"
 	"fmt"
 	"net/http"
@@ -13,8 +14,58 @@ import (
 	"testing"
 	"time"
 
-	"xmesh/internal/model"
+	"github.com/Purestreams/xmesh/internal/model"
 )
+
+func TestReleaseRedirectHosts(t *testing.T) {
+	for _, tc := range []struct {
+		source, target string
+		allowed        bool
+	}{
+		{"https://github.com/org/repo/releases/download", "https://release-assets.githubusercontent.com/file?token=x", true},
+		{"https://github.com/org/repo/releases/download", "https://objects.githubusercontent.com/file", true},
+		{"https://github.com/org/repo/releases/download", "https://github-releases.githubusercontent.com/file", true},
+		{"https://mirror.example/releases", "https://mirror.example/file", true},
+		{"https://mirror.example/releases", "https://mirror.example:444/file", false},
+		{"https://mirror.example/releases", "https://release-assets.githubusercontent.com/file", false},
+		{"https://github.com/org/repo/releases/download", "https://evil.example/file", false},
+		{"https://github.com/org/repo/releases/download", "https://release-assets.githubusercontent.com.evil.example/file", false},
+		{"https://github.com/org/repo/releases/download", "https://release-assets.githubusercontent.com:444/file", false},
+		{"https://github.com/org/repo/releases/download", "https://user@github.com/file", false},
+		{"https://github.com/org/repo/releases/download", "http://github.com/file", false},
+	} {
+		t.Run(tc.target+"/from/"+tc.source, func(t *testing.T) {
+			source, _ := url.Parse(tc.source)
+			target, _ := url.Parse(tc.target)
+			if got := releaseRedirectAllowed(source, target); got != tc.allowed {
+				t.Fatalf("allowed=%v, want %v", got, tc.allowed)
+			}
+		})
+	}
+}
+
+func TestReleaseFetchRejectsCrossOriginRedirect(t *testing.T) {
+	var reached atomic.Bool
+	target := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reached.Store(true)
+		_, _ = w.Write([]byte("unexpected"))
+	}))
+	defer target.Close()
+	source := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL, http.StatusFound)
+	}))
+	defer source.Close()
+	s, _ := testServer(t, nil)
+	s.cfg.ReleaseBaseURL, s.cfg.ReleaseVersion, s.cfg.ReleaseDir = source.URL, "v1", t.TempDir()
+	s.releaseHTTPClient = source.Client()
+	err := s.fetchReleaseAsset(context.Background(), "install.sh", "", maxReleaseAsset)
+	if err == nil || !strings.Contains(err.Error(), "trusted release host") || reached.Load() {
+		t.Fatalf("redirect was not blocked before the request: reached=%v err=%v", reached.Load(), err)
+	}
+	if _, err := os.Stat(filepath.Join(s.releaseDirectory(), "install.sh")); !os.IsNotExist(err) {
+		t.Fatalf("rejected redirect left an asset: %v", err)
+	}
+}
 
 func TestReleaseAssetsAreFetchedOnceAndVerified(t *testing.T) {
 	version := "v1.2.3"

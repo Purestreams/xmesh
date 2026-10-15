@@ -4,7 +4,7 @@ import (
 	"context"
 	"sync/atomic"
 
-	"xmesh/internal/protocol"
+	"github.com/Purestreams/xmesh/internal/protocol"
 )
 
 // udpQueue bounds both packet count and payload bytes; a large datagram cannot

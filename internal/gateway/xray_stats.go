@@ -26,13 +26,15 @@ func (r *Runtime) collectXrayStats(ctx context.Context) {
 	}
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	conn, err := grpc.NewClient(r.local.Gateway.StatsListen, grpc.WithTransportCredentials(insecure.NewCredentials()))
-	if err != nil {
-		r.logger.Warn("connect Xray stats", "error", err)
-		return
+	if r.statsConn == nil {
+		conn, err := grpc.NewClient(r.local.Gateway.StatsListen, grpc.WithTransportCredentials(insecure.NewCredentials()))
+		if err != nil {
+			r.logger.Warn("connect Xray stats", "error", err)
+			return
+		}
+		r.statsConn = conn
 	}
-	defer conn.Close()
-	response, err := statscommand.NewStatsServiceClient(conn).QueryStats(ctx, &statscommand.QueryStatsRequest{Pattern: "user>>>", Reset_: true})
+	response, err := statscommand.NewStatsServiceClient(r.statsConn).QueryStats(ctx, &statscommand.QueryStatsRequest{Pattern: "user>>>", Reset_: true})
 	if err != nil {
 		r.logger.Warn("query Xray stats", "error", err)
 		return
@@ -66,5 +68,14 @@ func (r *Runtime) collectXrayStats(ctx context.Context) {
 			both.download.Add(uint64(stat.GetValue()))
 			route.download.Add(uint64(stat.GetValue()))
 		}
+	}
+}
+
+func (r *Runtime) closeStatsConnection() {
+	r.statsMu.Lock()
+	defer r.statsMu.Unlock()
+	if r.statsConn != nil {
+		_ = r.statsConn.Close()
+		r.statsConn = nil
 	}
 }

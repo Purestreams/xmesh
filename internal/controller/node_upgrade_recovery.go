@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"xmesh/internal/model"
+	"github.com/Purestreams/xmesh/internal/model"
 )
 
 const upgradeLinkRecoveryTimeout = 2 * time.Minute
@@ -16,7 +16,7 @@ const upgradeLinkRecoveryError = "previously healthy Link "
 
 // A successful process switch does not imply that both Link reports have caught
 // up. Keep the next task unclaimed until fresh reports confirm recovery.
-func upgradeRecoveryProblem(state *model.State, task model.UpgradeTask, now time.Time) string {
+func (s *Server) upgradeRecoveryProblem(state *model.State, task model.UpgradeTask, now time.Time) string {
 	for _, linkID := range task.BaselineLinks {
 		link, ok := state.Links[linkID]
 		attachment, attached := state.Attachments[link.AttachmentID]
@@ -32,8 +32,8 @@ func upgradeRecoveryProblem(state *model.State, task model.UpgradeTask, now time
 			switch {
 			case !reported:
 				problem = "has not reported"
-			case status.LastSeen.IsZero() || now.Sub(status.LastSeen) > 45*time.Second:
-				problem = "report is older than 45 seconds"
+			case status.LastSeen.IsZero() || now.Sub(status.LastSeen) > time.Duration(s.cfg.NodeOfflineAfterSeconds)*time.Second:
+				problem = fmt.Sprintf("report is older than %d seconds", s.cfg.NodeOfflineAfterSeconds)
 			case status.LastSeen.Before(task.UpdatedAt):
 				problem = "has not reported since upgrade completion"
 			case !status.Online:
@@ -70,7 +70,7 @@ func finishUpgradeRecovery(state *model.State, batch model.UpgradeBatch) {
 
 // Called by node status updates, helper heartbeats and task polls, so the deadline
 // survive Controller restarts without a detached timer or a new updater protocol.
-func reconcileUpgradeRecovery(state *model.State, now time.Time) {
+func (s *Server) reconcileUpgradeRecovery(state *model.State, now time.Time) {
 	for _, batch := range state.UpgradeBatches {
 		if batch.Stage != "recovering" {
 			continue
@@ -81,7 +81,7 @@ func reconcileUpgradeRecovery(state *model.State, now time.Time) {
 			state.UpgradeBatches[batch.ID] = batch
 			continue
 		}
-		problem := upgradeRecoveryProblem(state, task, now)
+		problem := s.upgradeRecoveryProblem(state, task, now)
 		if problem == "" {
 			finishUpgradeRecovery(state, batch)
 			continue
@@ -144,7 +144,7 @@ func (s *Server) resumeUpgrade(w http.ResponseWriter, r *http.Request) {
 				}
 				continue
 			}
-			if problem := upgradeRecoveryProblem(state, completed, now); problem != "" {
+			if problem := s.upgradeRecoveryProblem(state, completed, now); problem != "" {
 				return errors.New(problem)
 			}
 		}

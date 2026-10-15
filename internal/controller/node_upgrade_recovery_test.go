@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"xmesh/internal/auth"
-	"xmesh/internal/model"
-	"xmesh/internal/store"
+	"github.com/Purestreams/xmesh/internal/auth"
+	"github.com/Purestreams/xmesh/internal/model"
+	"github.com/Purestreams/xmesh/internal/store"
 )
 
 func upgradeRecoveryFixture(t *testing.T, now *time.Time) (*Server, *store.Store) {
@@ -239,10 +239,31 @@ func TestUpgradeRecoveryRequiresEveryBaselineLinkAndFreshPeer(t *testing.T) {
 		t.Run(scenario.name, func(t *testing.T) {
 			st := base.Clone()
 			scenario.change(&st)
-			if problem := upgradeRecoveryProblem(&st, st.UpgradeTasks["first"], now); !strings.Contains(problem, scenario.want) {
+			if problem := s.upgradeRecoveryProblem(&st, st.UpgradeTasks["first"], now); !strings.Contains(problem, scenario.want) {
 				t.Fatalf("recovery ignored %s: %q", scenario.name, problem)
 			}
 		})
+	}
+}
+
+func TestUpgradeRecoveryUsesConfiguredOfflineThreshold(t *testing.T) {
+	now := time.Now().UTC()
+	s, state := upgradeRecoveryFixture(t, &now)
+	st := state.Snapshot()
+	task := st.UpgradeTasks["first"]
+	task.UpdatedAt = now.Add(-3 * time.Minute)
+	for _, id := range []string{"g/l", "a/l"} {
+		status := st.LinkStatus[id]
+		status.LastSeen = now.Add(-time.Minute)
+		st.LinkStatus[id] = status
+	}
+	s.cfg.NodeOfflineAfterSeconds = 120
+	if problem := s.upgradeRecoveryProblem(&st, task, now); problem != "" {
+		t.Fatalf("fresh reports rejected with 120-second threshold: %s", problem)
+	}
+	s.cfg.NodeOfflineAfterSeconds = 30
+	if problem := s.upgradeRecoveryProblem(&st, task, now); !strings.Contains(problem, "older than 30 seconds") {
+		t.Fatalf("stale reports accepted with 30-second threshold: %s", problem)
 	}
 }
 

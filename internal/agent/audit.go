@@ -6,9 +6,9 @@ import (
 	"strings"
 	"time"
 
-	"xmesh/internal/audit"
-	"xmesh/internal/identity"
-	"xmesh/internal/protocol"
+	"github.com/Purestreams/xmesh/internal/audit"
+	"github.com/Purestreams/xmesh/internal/identity"
+	"github.com/Purestreams/xmesh/internal/protocol"
 )
 
 type auditDropKey struct {
@@ -33,7 +33,12 @@ func (r *Runtime) newAuditTrace(linkID string, request protocol.Message) *auditT
 	}
 	id := request.RequestID
 	if id == "" || len(id) > 128 {
-		id, _ = identity.Token(12)
+		var err error
+		id, err = identity.Token(12)
+		if err != nil {
+			r.logger.Error("generate audit connection ID", "error", err)
+			return nil
+		}
 	}
 	return &auditTrace{runtime: r, base: audit.Event{GrantID: request.GrantID, Generation: policy.Generation, ConnectionID: id, LinkID: linkID, Host: request.Host, Port: request.Port}}
 }

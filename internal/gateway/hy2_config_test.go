@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"xmesh/internal/controller"
-	"xmesh/internal/hy2"
-	"xmesh/internal/model"
+	"github.com/Purestreams/xmesh/internal/controller"
+	"github.com/Purestreams/xmesh/internal/hy2"
+	"github.com/Purestreams/xmesh/internal/model"
 )
 
 func TestHY2SharedPortConfigRejectsMissingOrDuplicateCredentials(t *testing.T) {

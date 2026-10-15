@@ -31,6 +31,9 @@ func Bidirectional(left, right net.Conn, onLeftToRight, onRightToLeft func(int),
 				for written < n {
 					m, writeErr := dst.Write(buffer[written:n])
 					written += m
+					if m > 0 && count != nil {
+						count(m)
+					}
 					if m > 0 && options.WriteStallTimeout > 0 {
 						_ = dst.SetWriteDeadline(time.Now().Add(options.WriteStallTimeout))
 					}
@@ -46,9 +49,6 @@ func Bidirectional(left, right net.Conn, onLeftToRight, onRightToLeft func(int),
 				_ = dst.SetWriteDeadline(time.Time{})
 				if observe != nil {
 					observe(time.Since(started))
-				}
-				if count != nil {
-					count(written)
 				}
 			}
 			if err != nil {

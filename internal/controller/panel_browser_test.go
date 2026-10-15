@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"xmesh/internal/model"
+	"github.com/Purestreams/xmesh/internal/model"
 )
 
 // Opt-in local fixture for tests/panel.browser.cjs. It never opens production state.

@@ -7,7 +7,7 @@ import (
 	"net/netip"
 	"time"
 
-	"xmesh/internal/model"
+	"github.com/Purestreams/xmesh/internal/model"
 )
 
 func currentUpstreamProbe(state *model.State, attachment model.Attachment) *model.UpstreamProbeStatus {

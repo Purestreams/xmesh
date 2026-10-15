@@ -15,11 +15,11 @@ import (
 	"testing"
 	"time"
 
-	agentpkg "xmesh/internal/agent"
-	"xmesh/internal/controller"
-	"xmesh/internal/model"
-	"xmesh/internal/protocol"
-	"xmesh/internal/runtimecfg"
+	agentpkg "github.com/Purestreams/xmesh/internal/agent"
+	"github.com/Purestreams/xmesh/internal/controller"
+	"github.com/Purestreams/xmesh/internal/model"
+	"github.com/Purestreams/xmesh/internal/protocol"
+	"github.com/Purestreams/xmesh/internal/runtimecfg"
 )
 
 func securityGateway(t *testing.T) (*Runtime, string) {
@@ -358,6 +358,44 @@ func TestUDPUnspecifiedPortRejectsAnotherProcess(t *testing.T) {
 	cmd.Env = append(os.Environ(), "XMESH_UDP_SECURITY_HELPER=1", "XMESH_UDP_SECURITY_RELAY="+control.(*socksTestConn).bound.String(), "XMESH_UDP_SECURITY_PACKET="+base64.StdEncoding.EncodeToString(packet), "XMESH_UDP_SECURITY_SOURCE="+sourceAddress)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("another process reused the authorized UDP port: %v\n%s", err, output)
+	}
+}
+
+func TestUDPAssociationSurvivesControlDataUntilEOF(t *testing.T) {
+	_, address := securityGateway(t)
+	control := dialSOCKS(t, address, "user", "pass", 3, "0.0.0.0:0")
+	defer control.Close()
+	client, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	target := startUDPEcho(t)
+	defer target.Close()
+	relay := control.(*socksTestConn).bound
+	assertUDPEcho(t, client, relay, target.LocalAddr().(*net.UDPAddr), []byte("before"), 3*time.Second)
+	if _, err := control.Write([]byte("stray control bytes")); err != nil {
+		t.Fatal(err)
+	}
+	assertUDPEcho(t, client, relay, target.LocalAddr().(*net.UDPAddr), []byte("after"), 3*time.Second)
+	// The server closes the TCP socket only after its association has returned.
+	if err := control.(*socksTestConn).Conn.(*net.TCPConn).CloseWrite(); err != nil {
+		t.Fatal(err)
+	}
+	_ = control.SetReadDeadline(time.Now().Add(3 * time.Second))
+	if _, err := control.Read(make([]byte, 1)); err != io.EOF {
+		t.Fatalf("association did not close after control EOF: %v", err)
+	}
+	packet, err := encodeSOCKSUDPForTest(target.LocalAddr().(*net.UDPAddr), []byte("closed"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.WriteToUDP(packet, relay); err != nil {
+		t.Fatal(err)
+	}
+	_ = client.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+	if _, _, err := client.ReadFromUDP(make([]byte, 1024)); err == nil {
+		t.Fatal("UDP relay survived control EOF")
 	}
 }
 
