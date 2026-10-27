@@ -1,4 +1,4 @@
-# Control center (v0.4.3)
+# Control center (v0.4.4)
 
 The Controller embeds its HTML, CSS and JavaScript; no frontend service, CDN or
 production Node.js runtime is required. Existing management POST endpoints and
