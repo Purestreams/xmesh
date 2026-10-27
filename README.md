@@ -314,7 +314,7 @@ sudo sh scripts/backup-controller.sh \
 
 ## 开发与验证
 
-项目使用 Go，`mise.toml` 固定 Go **1.27.2**；Gateway 外部 Xray 版本由 `versions.env` 固定，Agent 内嵌 Xray-core 依赖在 `go.mod` 中管理。
+项目使用 Go，`mise.toml` 固定 Go **1.27.3**；Gateway 外部 Xray 版本由 `versions.env` 固定，Agent 内嵌 Xray-core 依赖在 `go.mod` 中管理。
 
 ```sh
 mise install

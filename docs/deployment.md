@@ -34,6 +34,12 @@ Five failed logins block that address for 15 minutes; configure additional per-c
 and access controls at the proxy and allow only trusted administrators to reach the login page.
 The Controller does not terminate TLS and business traffic never passes through it.
 
+For CVE-2026-111943 (compromised eMudhra intermediate certificates), rebuild XMesh and
+`xmesh-updater` with the pinned Go 1.27.3 toolchain and deploy the rebuilt executables.
+Gateway packages must also use the Xray 26.10.21 security release pinned in `versions.env`,
+which was built with Go 1.27.3. Update host CA certificates as well. Changing source pins
+or the host Go installation alone does not patch previously built executables.
+
 Set `release_base_url` to the HTTPS GitHub Release download base, `release_version` to an exact
 tag, and `release_dir` to a writable cache directory (for example,
 `/var/lib/xmesh-controller/releases` for systemd or `/var/lib/xmesh/releases` for Docker).

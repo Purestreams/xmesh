@@ -312,7 +312,7 @@ The script archives configuration and any existing state file, extracts and comp
 
 ## Development and verification
 
-XMesh is written in Go. `mise.toml` pins Go **1.27.2**; `versions.env` pins the external Gateway Xray version, while `go.mod` manages the Agent's embedded Xray-core dependency.
+XMesh is written in Go. `mise.toml` pins Go **1.27.3**; `versions.env` pins the external Gateway Xray version, while `go.mod` manages the Agent's embedded Xray-core dependency.
 
 ```sh
 mise install

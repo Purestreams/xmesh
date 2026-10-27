@@ -59,11 +59,12 @@ func runVMessUpstream(t *testing.T, withTLS bool, network string, hy2Ingress ...
 	if network == "ws" {
 		upstreamStream["wsSettings"] = map[string]any{"path": "/upstream"}
 	}
+	var certificatePath string
 	if withTLS {
-		certificatePath, keyPath := writeTestTLSCert(t)
+		var keyPath string
+		certificatePath, keyPath = writeTestTLSCert(t)
 		upstreamStream["security"] = "tls"
 		upstreamStream["tlsSettings"] = map[string]any{"certificates": []any{map[string]any{"certificateFile": certificatePath, "keyFile": keyPath}}}
-		t.Setenv("SSL_CERT_FILE", certificatePath)
 	}
 	upstreamConfig := map[string]any{
 		"log":       map[string]string{"loglevel": "warning"},
@@ -89,6 +90,25 @@ func runVMessUpstream(t *testing.T, withTLS bool, network string, hy2Ingress ...
 	gatewayJSON, err := buildXrayConfigWithStats(config, localSOCKS, "", "", statsAddress)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if withTLS {
+		// Xray uses bundled public roots by default. Trust only this fixture's
+		// private CA explicitly, without changing host trust or disabling verification.
+		var rendered map[string]any
+		if err := json.Unmarshal(gatewayJSON, &rendered); err != nil {
+			t.Fatal(err)
+		}
+		for _, outbound := range rendered["outbounds"].([]any) {
+			stream, _ := outbound.(map[string]any)["streamSettings"].(map[string]any)
+			if tlsSettings, ok := stream["tlsSettings"].(map[string]any); ok {
+				tlsSettings["disableSystemRoot"] = true
+				tlsSettings["certificates"] = []any{map[string]any{"certificateFile": certificatePath, "usage": "verify"}}
+			}
+		}
+		gatewayJSON, err = json.Marshal(rendered)
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 	gatewayProcess := startTestXray(t, xray, gatewayJSON)
 	defer stopTestProcess(gatewayProcess)
