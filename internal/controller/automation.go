@@ -137,6 +137,10 @@ func (s *Server) upgradeOptions(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	} else if role == model.RoleAgent {
+		if state.Agents[id].GatewayID != "" {
+			http.Error(w, "embedded Agent upgrades with its Gateway", http.StatusConflict)
+			return
+		}
 		if _, ok := state.Agents[id]; !ok {
 			http.NotFound(w, r)
 			return

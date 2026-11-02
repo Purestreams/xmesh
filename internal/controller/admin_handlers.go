@@ -284,6 +284,10 @@ func (s *Server) toggleGateway(w http.ResponseWriter, r *http.Request) {
 		gateway.Enabled = !gateway.Enabled
 		gateway.DesiredVersion++
 		state.Gateways[gateway.ID] = gateway
+		if agent, ok := state.Agents[model.GatewayAgentID(gateway.ID)]; ok && agent.GatewayID == gateway.ID {
+			agent.DesiredVersion++
+			embeddedAgentChanged(state, agent)
+		}
 		if !gateway.Enabled {
 			for id, grant := range state.Grants {
 				attachment := state.Attachments[grant.AttachmentID]
@@ -311,6 +315,12 @@ func (s *Server) toggleAgent(w http.ResponseWriter, r *http.Request) {
 		agent.Enabled = !agent.Enabled
 		agent.DesiredVersion++
 		state.Agents[agent.ID] = agent
+		if agent.GatewayID != "" {
+			gateway := state.Gateways[agent.GatewayID]
+			gateway.AgentEnabled = agent.Enabled
+			gateway.DesiredVersion++
+			state.Gateways[gateway.ID] = gateway
+		}
 		for _, attachment := range state.Attachments {
 			if attachment.AgentID != agent.ID {
 				continue
@@ -605,6 +615,10 @@ func (s *Server) createEnrollment(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if role == model.RoleAgent {
+		if state.Agents[nodeID].GatewayID != "" {
+			http.Error(w, "embedded Agent shares its Gateway process; enroll the Gateway instead", http.StatusConflict)
+			return
+		}
 		if _, ok := state.Agents[nodeID]; !ok {
 			http.Error(w, "agent not found", 404)
 			return

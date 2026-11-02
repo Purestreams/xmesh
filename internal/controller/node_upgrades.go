@@ -58,8 +58,8 @@ func nodeExists(state *model.State, role model.Role, id string) bool {
 		return ok
 	}
 	if role == model.RoleAgent {
-		_, ok := state.Agents[id]
-		return ok
+		agent, ok := state.Agents[id]
+		return ok && agent.GatewayID == ""
 	}
 	return false
 }
@@ -294,18 +294,14 @@ func (s *Server) createUpgrade(w http.ResponseWriter, r *http.Request) {
 			t.Role, t.Mode, t.Arch, t.FromVersion = up.Role, up.Mode, up.Arch, status.BinaryVersion
 			t.Asset = fmt.Sprintf("xmesh-%s-linux-%s.tar.gz", version, up.Arch)
 			for _, attachment := range state.Attachments {
-				if attachment.GatewayID != t.NodeID && attachment.AgentID != t.NodeID {
+				if !attachmentUsesNode(state, attachment, t.NodeID) {
 					continue
 				}
 				for _, link := range state.Links {
 					if link.AttachmentID != attachment.ID || !link.Enabled {
 						continue
 					}
-					peerID := attachment.GatewayID
-					if peerID == t.NodeID {
-						peerID = attachment.AgentID
-					}
-					local, peer := state.LinkStatus[t.NodeID+"/"+link.ID], state.LinkStatus[peerID+"/"+link.ID]
+					local, peer := state.LinkStatus[attachment.GatewayID+"/"+link.ID], state.LinkStatus[attachment.AgentID+"/"+link.ID]
 					if local.Ready && local.Online && peer.Ready && peer.Online && s.now().Sub(local.LastSeen) < 45*time.Second && s.now().Sub(peer.LastSeen) < 45*time.Second {
 						t.BaselineLinks = append(t.BaselineLinks, link.ID)
 					}

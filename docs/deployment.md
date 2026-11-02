@@ -85,6 +85,16 @@ revoke an active token explicitly.
 The Panel's readiness table shows enrollment, online status, applied version and runtime health;
 Link readiness and grant publication remain visible in their detailed tables.
 
+Gateway nodes can optionally run an embedded Agent in the same process. Enable
+it from the Gateway panel, then select that exit in connection management for
+its own Gateway or any other Gateway. No Agent install command, extra enrollment,
+service, or updater is needed. The Agent panel manages its CIDR policy. Disabling
+the embedded Agent closes its tunnels and unpublishes affected grants while
+preserving route configuration. Self connections use the local tunnel listener;
+remote connections use the configured Gateway Link transport. Upgrade the owning
+Gateway to upgrade both capabilities. For this feature, upgrade Controller first,
+then Gateway, to v0.4.5 or newer.
+
 The generic installer:
 
 - accepts Debian, Ubuntu and CentOS 7/8 on amd64 or arm64;

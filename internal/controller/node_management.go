@@ -156,6 +156,10 @@ func (s *Server) deleteGateway(w http.ResponseWriter, r *http.Request) {
 			return fmt.Errorf("gateway has an active upgrade; wait for completion or cancel the pending task")
 		}
 		removed := map[string]bool{gateway.ID: true}
+		if agent, ok := state.Agents[model.GatewayAgentID(gateway.ID)]; ok && agent.GatewayID == gateway.ID {
+			removed[agent.ID] = true
+			delete(state.Agents, agent.ID)
+		}
 		delete(state.Gateways, gateway.ID)
 		removeNodeReferences(state, removed)
 		return nil
@@ -176,10 +180,16 @@ func (s *Server) deleteAgent(w http.ResponseWriter, r *http.Request) {
 		if r.FormValue("confirm_name") != agent.Name {
 			return fmt.Errorf("confirmation name does not match")
 		}
-		if nodeHasActiveUpgrade(state, agent.ID) {
+		if nodeHasActiveUpgrade(state, agent.ID) || agent.GatewayID != "" && nodeHasActiveUpgrade(state, agent.GatewayID) {
 			return fmt.Errorf("agent has an active upgrade; wait for completion or cancel the pending task")
 		}
 		delete(state.Agents, agent.ID)
+		if agent.GatewayID != "" {
+			gateway := state.Gateways[agent.GatewayID]
+			gateway.AgentEnabled = false
+			gateway.DesiredVersion++
+			state.Gateways[gateway.ID] = gateway
+		}
 		removeNodeReferences(state, map[string]bool{agent.ID: true})
 		return nil
 	})

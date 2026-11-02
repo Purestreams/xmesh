@@ -26,7 +26,7 @@ func routeAvailable(state *model.State, attachment model.Attachment) bool {
 	if attachment.UpstreamID != "" {
 		return state.NodeStatus[attachment.GatewayID].ExternalUpstreams && upstreamAvailable(state, attachment)
 	}
-	return state.Agents[attachment.AgentID].Enabled && attachmentHasEnabledLink(state, attachment.ID)
+	return agentEnabled(state, state.Agents[attachment.AgentID]) && attachmentHasEnabledLink(state, attachment.ID)
 }
 
 func sortedUpstreams(state model.State) []model.VMessUpstream {

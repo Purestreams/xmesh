@@ -1244,7 +1244,8 @@ if (typeof document !== "undefined")
       const gatewayFilter = $(".pending-gateway", form).value;
       const manualTarget = form.elements.reality_target.value.trim();
       const plan = { created: 0, reenabled: 0 };
-      let selected = 0, visible = 0, available = 0, needsTarget = false;
+      let selected = 0, visible = 0, available = 0;
+      const missingTargetGateways = new Map();
       for (const candidate of candidates) {
         let row = rows.get(candidate.value);
         if (!row) {
@@ -1273,7 +1274,7 @@ if (typeof document !== "undefined")
         if (checkbox.checked) {
           selected++;
           plan[candidate.action]++;
-          needsTarget ||= candidate.needsTarget;
+          if (candidate.needsTarget) missingTargetGateways.set(candidate.gateway.id, candidate.gateway.name);
         }
         if (!row.isConnected) field.append(row);
       }
@@ -1282,7 +1283,19 @@ if (typeof document !== "undefined")
       empty.hidden = visible > 0;
       empty.textContent = candidates.length ? t("当前筛选下没有未开启连接。") : t("所有连接均已开启，或尚未添加 Gateway / Agent。");
       $(".selection-summary", form).textContent = t("未开启 {0} · 筛选结果 {1} / 可选 {2} · 已选 {3} · 新增 {4} · 重新启用 {5}。清除选择仅影响本次提交。", candidates.length, visible, available, selected, plan.created, plan.reenabled);
-      form.elements.reality_target.required = needsTarget;
+      const targetInput = form.elements.reality_target;
+      const needsTarget = missingTargetGateways.size > 0;
+      const targetHint = $(".pending-target-hint", form);
+      const targetMessage = needsTarget
+        ? t("以下 Gateway 未设置所在地且没有已有 target：{0}。请填写 REALITY target，或先设置这些 Gateway 的所在地。", [...missingTargetGateways.values()].join(", "))
+        : "";
+      targetInput.required = needsTarget;
+      targetInput.placeholder = needsTarget
+        ? t("必填：example.com:443（所选 Gateway 缺少默认值）")
+        : t("留空：按各 Gateway 所在地使用默认值");
+      targetInput.setCustomValidity(needsTarget && !manualTarget ? targetMessage : "");
+      targetHint.textContent = targetMessage;
+      targetHint.hidden = !needsTarget;
       $("button[type=submit]", form).disabled = !selected || submitting;
       $("[data-pending-select]", form).disabled = !available || submitting;
       $("[data-pending-clear]", form).disabled = !selected || submitting;

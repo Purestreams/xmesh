@@ -16,6 +16,7 @@ import (
 	"github.com/xtaci/smux"
 	"google.golang.org/grpc"
 
+	"github.com/Purestreams/xmesh/internal/agent"
 	"github.com/Purestreams/xmesh/internal/auth"
 	"github.com/Purestreams/xmesh/internal/controller"
 	"github.com/Purestreams/xmesh/internal/identity"
@@ -94,7 +95,8 @@ func (r *Runtime) Run(ctx context.Context) error {
 	}
 	var workers sync.WaitGroup
 	defer func() { cancel(); workers.Wait(); r.closeStatsConnection() }()
-	workers.Add(2)
+	workers.Add(3)
+	go func() { defer workers.Done(); r.embeddedAgentLoop(ctx) }()
 	go func() { defer workers.Done(); r.watchAuthorization(ctx) }()
 	go func() { defer workers.Done(); r.upstreamProbeLoop(ctx) }()
 	errCh := make(chan error, 4)
@@ -107,6 +109,26 @@ func (r *Runtime) Run(ctx context.Context) error {
 		return nil
 	case err := <-errCh:
 		return err
+	}
+}
+
+func (r *Runtime) embeddedAgentLoop(ctx context.Context) {
+	for ctx.Err() == nil {
+		r.mu.RLock()
+		enabled := r.config.Gateway.Enabled && r.config.Gateway.AgentEnabled
+		r.mu.RUnlock()
+		if enabled {
+			if err := agent.NewEmbedded(r.local, r.logger).Run(ctx); err != nil && ctx.Err() == nil {
+				r.logger.Warn("embedded Agent", "error", err)
+			}
+		}
+		timer := time.NewTimer(r.local.PollInterval.Value(15 * time.Second))
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		case <-timer.C:
+		}
 	}
 }
 
@@ -417,6 +439,7 @@ func (r *Runtime) report(ctx context.Context) error {
 	}
 	nodeStatus := model.NodeStatus{NodeID: r.local.NodeID, Role: model.RoleGateway, BinaryVersion: r.local.BinaryVersion, InstanceID: r.local.InstanceID, Online: true, Ready: ready, DesiredVersion: config.Revision, AppliedVersion: r.xrayAppliedRevision.Load(), XrayReady: r.xrayReady.Load(), XrayError: xrayError, ExternalUpstreams: true, LastSeen: time.Now().UTC(), TunnelConnections: tunnelCount, TCPConnections: int(r.tcpConnections.Load()), UDPAssociations: int(r.udpAssociations.Load()), UploadBytes: upload, DownloadBytes: download, LastError: lastError, FailureCounters: map[string]uint64{"udp_queue_drops": r.udpQueueDrops.Load()}}
 	nodeStatus.IngressControls = true
+	nodeStatus.EmbeddedAgent = true
 	nodeStatus.UpstreamProbes = true
 	nodeStatus.UpstreamProbeIntervalSeconds = int64(r.local.Gateway.UpstreamProbeInterval.Value(time.Minute) / time.Second)
 	nodeStatus.HY2Ready = nodeStatus.XrayReady && activeXrayConfig.Gateway.HY2Enabled() && nodeStatus.AppliedVersion == config.Revision

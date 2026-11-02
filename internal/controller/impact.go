@@ -36,7 +36,11 @@ func nodeImpacts(state model.State) map[string]deletionImpact {
 	result := make(map[string]deletionImpact, len(state.Gateways)+len(state.Agents))
 	users := map[string]map[string]bool{}
 	for id, attachment := range state.Attachments {
-		for _, nodeID := range []string{attachment.GatewayID, attachment.AgentID} {
+		nodes := []string{attachment.GatewayID, attachment.AgentID}
+		if parent := state.Agents[attachment.AgentID].GatewayID; parent != "" && parent != attachment.GatewayID {
+			nodes = append(nodes, parent)
+		}
+		for _, nodeID := range nodes {
 			impact := result[nodeID]
 			route := routes[id]
 			impact.Assignments += route.Assignments

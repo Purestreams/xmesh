@@ -94,6 +94,8 @@ flowchart LR
 
 同一 Agent 可以主动连接多个 Gateway；同一 Gateway 也可以通过不同线路使用多个 Agent。多 Link 调度作用于新 TCP 连接或 UDP association，不迁移已有会话，也不把单个会话拆到多条链路上。
 
+Gateway 也可以同时提供 Agent 出口：在 **Gateway 节点** 点击 **启用内置 Agent**，然后在连接管理中选择生成的内置 Agent，连接自身或其他 Gateway。它与 Gateway 共用一个进程、注册凭据、服务和升级助手，无需再次安装 Agent。允许/拒绝 CIDR 在 Agent 列表中管理；关闭开关会断开它的出口隧道并撤下相关订阅，保留线路配置以便重新开启。自身连接使用本机隧道地址。此功能需要先升级 Controller，再升级 Gateway 到 `v0.4.5` 或更新版本。
+
 ## 部署
 
 下面以三台独立 Linux 主机分别部署 Controller、Gateway 和 Agent。systemd 安装器支持 Debian/Ubuntu、CentOS 7/8 的 amd64、arm64；CentOS 7 自动使用兼容 systemd 219 的服务配置。Docker 安装器支持 Linux amd64、arm64，需要 Docker Engine 和 Compose 插件，并使用主机网络。Windows amd64 Release 仅提供独立可执行文件，没有 Windows 服务安装器或配套 Xray 包。
@@ -130,11 +132,11 @@ sudo dnf install -y ca-certificates curl tar coreutils iproute shadow-utils
 
 Gateway 如启用 firewalld，需在实际网卡所在 zone 放行 VMess 端口和 REALITY 端口。例如使用 `--vmess-port 8086` 时，放行 TCP 8086 和 8443；Agent 无需开放入站端口。下文 Nginx/Certbot 的包安装和配置路径以 Debian/Ubuntu 为例，CentOS Controller 按本机的软件源、Nginx 布局和 SELinux 策略配置 HTTPS 反向代理。
 
-仅在 Controller 主机安装以下工具并取得源码。本文说明当前代码行为，安装示例固定使用 `v0.4.4`；选择其他已发布版本时，将 `VERSION` 改为对应的精确 tag，源码与安装包使用同一版本。可用版本见 [Releases](https://github.com/Purestreams/xmesh/releases)。
+仅在 Controller 主机安装以下工具并取得源码。本文说明当前代码行为，安装示例固定使用 `v0.4.5`；选择其他已发布版本时，将 `VERSION` 改为对应的精确 tag，源码与安装包使用同一版本。可用版本见 [Releases](https://github.com/Purestreams/xmesh/releases)。
 
 ```sh
 sudo apt install -y git nginx certbot
-VERSION=v0.4.4
+VERSION=v0.4.5
 git clone --depth 1 --branch "$VERSION" https://github.com/Purestreams/xmesh.git
 cd xmesh
 ```

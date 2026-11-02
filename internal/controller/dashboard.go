@@ -139,7 +139,12 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 		data.Nodes = append(data.Nodes, dashboardNode{ID: node.ID, Name: node.Name, Role: "Gateway", HY2Port: node.HY2Port, VMessDisabled: node.VMessDisabled, HY2Disabled: node.HY2Disabled, Host: node.PublicHost, Region: node.Region, Target: node.RealityTarget, Enabled: node.Enabled, Enrolled: node.CredentialHash != "", Desired: node.DesiredVersion, Status: state.NodeStatus[node.ID], Next: nextDeploymentAction(state, node.ID, model.RoleGateway)})
 	}
 	for _, node := range sortedAgents(state) {
-		data.Nodes = append(data.Nodes, dashboardNode{ID: node.ID, Name: node.Name, Role: "Agent", Enabled: node.Enabled, Enrolled: node.CredentialHash != "", Desired: node.DesiredVersion, Status: state.NodeStatus[node.ID], Next: nextDeploymentAction(state, node.ID, model.RoleAgent)})
+		enabled, enrolled := agentEnabled(&state, node), node.CredentialHash != ""
+		if node.GatewayID != "" {
+			gateway := state.Gateways[node.GatewayID]
+			enrolled = gateway.CredentialHash != ""
+		}
+		data.Nodes = append(data.Nodes, dashboardNode{ID: node.ID, Name: node.Name, Role: "Agent", Enabled: enabled, Enrolled: enrolled, Desired: node.DesiredVersion, Status: state.NodeStatus[node.ID], Next: nextDeploymentAction(state, node.ID, model.RoleAgent)})
 	}
 	for _, upstream := range sortedUpstreams(state) {
 		data.Nodes = append(data.Nodes, dashboardNode{ID: upstream.ID, Name: upstream.Name, Role: "External exit", Host: upstream.Endpoint.Address, Enabled: upstream.Enabled, Status: model.NodeStatus{Online: upstream.Endpoint.UUID != ""}, Next: upstream.LastError})
@@ -175,8 +180,8 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 			data.Routes = append(data.Routes, dashboardRoute{ID: route.ID, GatewayID: route.GatewayID, UpstreamID: route.UpstreamID, Enabled: route.Enabled && upstream.Enabled && gateway.Enabled, AssignmentEnabled: route.Enabled, Selectable: routeAvailable(&state, route), State: stage, Probe: currentUpstreamProbe(&state, route), ProbeSupported: status.UpstreamProbes, ProbeIntervalSeconds: status.UpstreamProbeIntervalSeconds, CanProbe: status.UpstreamProbes && status.Online && route.Enabled && gateway.Enabled && upstreamAvailable(&state, route)})
 			continue
 		}
-		enabled := route.Enabled && state.Gateways[route.GatewayID].Enabled && state.Agents[route.AgentID].Enabled
-		selectable := enabled && attachmentHasEnabledLink(&state, route.ID)
+		enabled := route.Enabled && state.Gateways[route.GatewayID].Enabled && agentEnabled(&state, state.Agents[route.AgentID])
+		selectable := routeAvailable(&state, route)
 		stage := "pending"
 		if !enabled {
 			stage = "disabled"

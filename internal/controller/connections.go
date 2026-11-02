@@ -64,7 +64,7 @@ func pendingConnections(state model.State) []pendingConnection {
 			result = append(result, pendingConnection{
 				Value: string(value), AgentID: agent.ID, GatewayID: gateway.ID,
 				AgentName: agent.Name, GatewayName: gateway.Name, PublicHost: gateway.PublicHost,
-				Target: target, State: status, Available: agent.Enabled && gateway.Enabled && gateway.PublicHost != "",
+				Target: target, State: status, Available: agentEnabled(&state, agent) && gateway.Enabled && gateway.PublicHost != "",
 			})
 		}
 	}
@@ -127,7 +127,7 @@ func (s *Server) enableConnections(state *model.State, pairs []connectionPair, t
 		}
 		seen[pair] = true
 		agent, ok := state.Agents[pair.AgentID]
-		if !ok || !agent.Enabled {
+		if !ok || !agentEnabled(state, agent) {
 			return counts, fmt.Errorf("Agent %s unavailable", pair.AgentID)
 		}
 		gateway, ok := state.Gateways[pair.GatewayID]

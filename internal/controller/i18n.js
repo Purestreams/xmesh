@@ -3,6 +3,11 @@
 // Source messages are Chinese; English-only labels have explicit Chinese overrides.
 const XMeshI18n = (() => {
   const english = {
+    "升级 Gateway 后才能启用内置 Agent": "Upgrade the Gateway to enable its embedded Agent",
+    "启用内置 Agent": "Enable embedded Agent",
+    "关闭内置 Agent": "Disable embedded Agent",
+    "内置 Agent，随 Gateway 运行和升级": "Embedded Agent; runs and upgrades with its Gateway",
+    "随 Gateway 运行和升级": "Runs and upgrades with its Gateway",
     "关闭 WSS 的 TLS 校验会允许中间人截获 TunnelToken，请保持开启。": "Disabling WSS TLS verification allows a man-in-the-middle to steal the TunnelToken. Keep verification enabled.",
     "警告：此 WSS 链路未校验证书，TunnelToken 可能被中间人截获。": "Warning: this WSS link does not verify certificates. A man-in-the-middle could steal the TunnelToken.",
     "Agent 延迟为隧道 RTT；外部出口为经上游访问 ip.sb 的 HTTPS 耗时。页面每 15 秒刷新。": "Agent latency is tunnel RTT; external-exit latency is the HTTPS request time to ip.sb through the upstream. The page refreshes every 15 seconds.",
@@ -212,6 +217,8 @@ const XMeshI18n = (() => {
     "已选 {0} / 可选 {1} · 新增 {2} · 重新启用 {3} · 已存在 {4}。清除选择仅影响本次提交。": "Selected {0} / Available {1} · New {2} · Re-enable {3} · Already active {4}. Clearing only affects this submission.",
     "默认：{0}": "Default: {0}",
     "留空：按各 Gateway 所在地使用默认值": "Leave blank to use each Gateway's region default",
+    "必填：example.com:443（所选 Gateway 缺少默认值）": "Required: example.com:443 (selected Gateways have no default)",
+    "以下 Gateway 未设置所在地且没有已有 target：{0}。请填写 REALITY target，或先设置这些 Gateway 的所在地。": "These Gateways have no region or existing target: {0}. Enter a REALITY target or set their regions first.",
     "浏览器本地时间": "Browser local time",
     "搜索名称或地址": "Search names or addresses",
     "搜索可选项": "Search available options",

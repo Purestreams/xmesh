@@ -23,6 +23,7 @@ type User struct {
 }
 
 type Gateway struct {
+	AgentEnabled                bool      `json:"agent_enabled,omitempty"`
 	ID                          string    `json:"id"`
 	Name                        string    `json:"name"`
 	PublicHost                  string    `json:"public_host"`
@@ -53,6 +54,7 @@ func (g Gateway) VMessEnabled() bool { return !g.VMessDisabled }
 func (g Gateway) HY2Enabled() bool   { return !g.HY2Disabled && g.HY2Port > 0 }
 
 type Agent struct {
+	GatewayID                   string    `json:"gateway_id,omitempty"`
 	ID                          string    `json:"id"`
 	Name                        string    `json:"name"`
 	Enabled                     bool      `json:"enabled"`
@@ -65,6 +67,10 @@ type Agent struct {
 	DesiredVersion              uint64    `json:"desired_version"`
 	CreatedAt                   time.Time `json:"created_at"`
 }
+
+// GatewayAgentID identifies the embedded exit, which shares its Gateway's
+// process and credentials but has separate policy and tunnel status.
+func GatewayAgentID(gatewayID string) string { return "embedded-" + gatewayID }
 
 type Attachment struct {
 	ProbeRequestID              string               `json:"probe_request_id,omitempty"`
@@ -210,6 +216,7 @@ type Enrollment struct {
 }
 
 type NodeStatus struct {
+	EmbeddedAgent                bool              `json:"embedded_agent,omitempty"`
 	UpstreamProbeIntervalSeconds int64             `json:"upstream_probe_interval_seconds,omitempty"`
 	UpstreamProbes               bool              `json:"upstream_probes,omitempty"`
 	IngressControls              bool              `json:"ingress_controls,omitempty"`

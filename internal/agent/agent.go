@@ -31,6 +31,7 @@ import (
 )
 
 type Runtime struct {
+	parentGatewayID    string
 	auditQueue         chan audit.Event
 	auditMu            sync.Mutex
 	auditDrops         map[auditDropKey]uint64
@@ -70,6 +71,17 @@ func New(local runtimecfg.Config, logger *slog.Logger) *Runtime {
 		limit = 1024
 	}
 	return &Runtime{local: local, client: nodeclient.New(local.ControllerURL, local.Credential), logger: logger, workers: map[string]context.CancelFunc{}, activeStreams: map[*smux.Stream]*streamAuthorization{}, statuses: map[string]*linkRuntimeStatus{}, realities: map[string]*realityCore{}, streamSlots: make(chan struct{}, limit), authorizationUntil: time.Now().Add(nodeclient.ConfigLease), auditQueue: make(chan audit.Event, audit.QueueSize), auditDrops: map[auditDropKey]uint64{}}
+}
+
+// NewEmbedded runs the exit inside its owning Gateway, with the same physical
+// node credential and process lifetime. No second enrollment is needed.
+func NewEmbedded(local runtimecfg.Config, logger *slog.Logger) *Runtime {
+	parent := local.NodeID
+	local.NodeID, local.Role = model.GatewayAgentID(parent), model.RoleAgent
+	r := New(local, logger)
+	r.parentGatewayID = parent
+	r.client.EmbeddedAgent = true
+	return r
 }
 
 func (r *Runtime) Run(ctx context.Context) error {
@@ -112,6 +124,22 @@ func (r *Runtime) refresh(ctx context.Context) error {
 			r.invalidateAuthorization()
 		}
 		return err
+	}
+	if r.parentGatewayID != "" {
+		for i := range config.Links {
+			link := &config.Links[i]
+			if link.GatewayID == r.parentGatewayID {
+				host, port, err := net.SplitHostPort(r.local.Gateway.TunnelListen)
+				if err != nil {
+					return fmt.Errorf("embedded tunnel address: %w", err)
+				}
+				if host == "" || host == "0.0.0.0" || host == "::" {
+					host = "127.0.0.1"
+				}
+				link.URL = "ws://" + net.JoinHostPort(host, port) + r.local.Gateway.TunnelPath
+				link.HTTPHost, link.TLSServerName = "", ""
+			}
+		}
 	}
 	return r.applyConfig(config, epoch)
 }

@@ -34,6 +34,7 @@ func AuthorizationRejected(err error) bool {
 }
 
 type Client struct {
+	EmbeddedAgent bool
 	ControllerURL string
 	Credential    string
 	HTTP          *http.Client
@@ -101,6 +102,9 @@ func (c *Client) getJSON(ctx context.Context, path string, target any, ingressCo
 		return err
 	}
 	req.Header.Set("Authorization", "Bearer "+c.Credential)
+	if c.EmbeddedAgent {
+		req.Header.Set("X-XMesh-Embedded-Agent", "1")
+	}
 	if len(ingressControls) > 0 && ingressControls[0] {
 		req.Header.Set("X-XMesh-Ingress-Controls", "1")
 	}
@@ -128,6 +132,9 @@ func (c *Client) postJSON(ctx context.Context, path string, value, target any) e
 		return err
 	}
 	req.Header.Set("Authorization", "Bearer "+c.Credential)
+	if c.EmbeddedAgent {
+		req.Header.Set("X-XMesh-Embedded-Agent", "1")
+	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := c.HTTP.Do(req)
 	if err != nil {

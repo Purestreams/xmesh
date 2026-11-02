@@ -31,6 +31,53 @@ const fs = require("node:fs");
     assert.equal(await form.locator('.pending-choice input:not(:disabled)').count(), 2);
     assert.equal(await form.locator('[data-agent-id="a1"][data-gateway-id="g2"]').count(), 0, "active offline route must be excluded");
     assert.ok(await submit.isDisabled());
+    // A missing region must explain why blank is invalid, including selections
+    // hidden by filters. Region defaults and existing targets remain optional.
+    const target = form.locator('input[name="reality_target"]');
+    const hint = form.locator('.pending-target-hint');
+    let targetMode = "missing";
+    const dashboardURL = "**/admin/dashboard";
+    await page.route(dashboardURL, async (route) => {
+      const response = await route.fetch();
+      const body = await response.json();
+      const gateway = body.nodes.find((node) => node.id === "g1");
+      gateway.target = targetMode === "existing" ? "custom.example:443" : "";
+      gateway.region = targetMode === "default" ? "cn" : "";
+      await route.fulfill({ response, json: body });
+    });
+    await page.locator("#refresh-status").click();
+    await form.locator('[data-agent-id="a2"][data-gateway-id="g1"] input').check();
+    await page.waitForFunction(() => document.querySelector('#assign-pending-panel input[name="reality_target"]').required);
+    assert.match(await target.getAttribute("placeholder"), /必填/);
+    assert.match(await hint.textContent(), /Hong Kong Edge/);
+    assert.equal(await target.evaluate((input) => input.checkValidity()), false);
+    assert.match(await target.evaluate((input) => input.validationMessage), /Hong Kong Edge/);
+    await form.locator(".pending-search").fill("Singapore");
+    assert.ok(await hint.isVisible(), "hidden selections still require a target");
+    await target.fill("manual.example:443");
+    assert.equal(await target.evaluate((input) => input.checkValidity()), true);
+    await target.fill("   ");
+    assert.equal(await target.evaluate((input) => input.checkValidity()), false);
+    await clear.click();
+    assert.equal(await target.evaluate((input) => input.required), false);
+    assert.ok(await hint.isHidden());
+    await target.fill("");
+    await form.locator(".pending-search").fill("");
+    for (targetMode of ["default", "existing"]) {
+      await page.locator("#refresh-status").click();
+      await page.waitForFunction((mode) => {
+        const text = document.querySelector('.pending-choice[data-agent-id="a2"][data-gateway-id="g1"] .choice-state').textContent;
+        return text.includes(mode === "default" ? "api.bilibili.com:443" : "custom.example:443");
+      }, targetMode);
+      await form.locator('[data-agent-id="a2"][data-gateway-id="g1"] input').check();
+      assert.equal(await target.evaluate((input) => input.required), false);
+      assert.equal(await target.evaluate((input) => input.checkValidity()), true);
+      assert.ok(await hint.isHidden());
+      assert.match(await target.getAttribute("placeholder"), /留空/);
+      await clear.click();
+    }
+    await page.unroute(dashboardURL);
+    await page.locator("#refresh-status").click();
     await pendingTab.press("ArrowLeft");
     assert.ok(await page.locator("#assign-agent-panel").isVisible());
     await page.getByRole("tab", { name: "按 Agent 连接", exact: true }).press("ArrowRight");

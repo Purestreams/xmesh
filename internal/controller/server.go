@@ -145,6 +145,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /admin/gateways", s.requireAdmin(s.csrf(s.createGateway)))
 	mux.HandleFunc("POST /admin/quick-setup", s.requireAdmin(s.csrf(s.quickSetup)))
 	mux.HandleFunc("POST /admin/gateways/{id}/toggle", s.requireAdmin(s.csrf(s.toggleGateway)))
+	mux.HandleFunc("POST /admin/gateways/{id}/agent", s.requireAdmin(s.csrf(s.toggleEmbeddedAgent)))
 	mux.HandleFunc("POST /admin/gateways/{id}/edit", s.requireAdmin(s.csrf(s.editGateway)))
 	mux.HandleFunc("POST /admin/gateways/{id}/ingress", s.requireAdmin(s.csrf(s.saveGatewayIngress)))
 	mux.HandleFunc("POST /admin/gateways/{id}/delete", s.requireAdmin(s.csrf(s.deleteGateway)))
@@ -395,8 +396,9 @@ func (s *Server) panel(w http.ResponseWriter, r *http.Request) {
 		State: state, CSRF: auth.Derive(s.cfg.sessionKey(), "csrf", cookie.Value), Notice: r.URL.Query().Get("notice"), InsecurePublicURL: strings.HasPrefix(strings.ToLower(s.cfg.PublicURL), "http://"),
 		PublicURL: strings.TrimSuffix(s.cfg.PublicURL, "/"),
 		UserList:  sortedUsers(state), GatewayList: sortedGateways(state), AgentList: sortedAgents(state),
-		UpstreamList:   sortedUpstreams(state),
-		AttachmentList: agentAttachments, ExternalAttachmentList: externalAttachments, LinkList: sortedLinks(state), GrantList: sortedGrants(state),
+		StandaloneAgentList: standaloneAgents(state),
+		UpstreamList:        sortedUpstreams(state),
+		AttachmentList:      agentAttachments, ExternalAttachmentList: externalAttachments, LinkList: sortedLinks(state), GrantList: sortedGrants(state),
 		LinkSummary: summarizeLinks(state), LinkReports: sortedLinkReports(state), GrantSummary: summarizeGrants(state),
 		Release:            s.releaseStatus(),
 		Deployments:        deploymentStatuses(state),
@@ -539,6 +541,7 @@ type panelData struct {
 	UserList               []model.User
 	GatewayList            []model.Gateway
 	AgentList              []model.Agent
+	StandaloneAgentList    []model.Agent
 	UpstreamList           []model.VMessUpstream
 	AttachmentList         []model.Attachment
 	ExternalAttachmentList []model.Attachment
@@ -615,6 +618,12 @@ func deploymentStatuses(state model.State) []deploymentStatus {
 	}
 	for _, agent := range sortedAgents(state) {
 		st := state.NodeStatus[agent.ID]
+		if agent.GatewayID != "" {
+			result = append(result, deploymentStatus{Name: agent.Name, Role: "Agent (Gateway)", ID: agent.ID, Version: st.BinaryVersion,
+				Identity: yesNo(state.Gateways[agent.GatewayID].CredentialHash != ""), Online: yesNo(st.Online),
+				Applied: configStage(st.AppliedVersion, agent.DesiredVersion, st.ApplyError), Runtime: yesNo(st.Ready), Next: "随 Gateway 运行和升级"})
+			continue
+		}
 		result = append(result, deploymentStatus{Name: agent.Name, Role: "Agent", ID: agent.ID, Version: st.BinaryVersion,
 			Identity: yesNo(agent.CredentialHash != ""), Online: yesNo(st.Online),
 			Applied: configStage(st.AppliedVersion, agent.DesiredVersion, st.ApplyError), Runtime: yesNo(st.Ready), Next: nextDeploymentAction(state, agent.ID, model.RoleAgent)})
@@ -623,9 +632,15 @@ func deploymentStatuses(state model.State) []deploymentStatus {
 }
 
 func nextDeploymentAction(state model.State, id string, role model.Role) string {
+	if role == model.RoleAgent && state.Agents[id].GatewayID != "" {
+		return "随 Gateway 运行和升级"
+	}
 	status := state.NodeStatus[id]
 	if role == model.RoleGateway && state.Gateways[id].CredentialHash == "" || role == model.RoleAgent && state.Agents[id].CredentialHash == "" {
 		return "生成安装命令并在节点主机完成注册"
+	}
+	if role == model.RoleGateway && state.Gateways[id].AgentEnabled && !status.EmbeddedAgent {
+		return "升级 Gateway 后才能启用内置 Agent"
 	}
 	if !status.Online {
 		return "检查节点服务日志及 Controller HTTPS 连通性"

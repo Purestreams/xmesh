@@ -94,6 +94,8 @@ New routes use `reality://`. Existing `wss://` Links remain supported with exter
 
 One Agent can initiate connections to several Gateways, and one Gateway can use several Agents through separate routes. Link scheduling applies to new TCP connections or UDP associations. It neither migrates existing sessions nor splits one session across multiple Links.
 
+A Gateway can also provide its own Agent exit. Click **Enable embedded Agent** under **Gateway nodes**, then select the generated exit in connection management for itself or other Gateways. It shares the Gateway process, enrollment credential, service, and updater; no separate Agent installation is needed. Manage its allowed/denied CIDRs in the Agent list. Disabling it closes its exit tunnels and unpublishes affected subscriptions while preserving route configuration. Self connections use the local tunnel listener. Upgrade Controller first, then Gateway, to v0.4.5 or newer for this feature.
+
 ## Deployment
 
 This walkthrough uses three separate Linux hosts for Controller, Gateway and Agent. The systemd installers support Debian/Ubuntu and CentOS 7/8 on amd64 and arm64; CentOS 7 automatically uses service settings compatible with systemd 219. The Docker installer supports Linux amd64 and arm64, requires Docker Engine with the Compose plugin, and uses host networking. Windows amd64 releases contain only a standalone executable, without a Windows service installer or bundled Xray.
@@ -130,11 +132,11 @@ sudo dnf install -y ca-certificates curl tar coreutils iproute shadow-utils
 
 If firewalld is enabled on the Gateway, allow the VMess and REALITY TCP ports in the zone used by its network interface. For `--vmess-port 8086`, allow TCP 8086 and 8443; Agents need no inbound ports. The Nginx/Certbot package commands and paths below target Debian/Ubuntu. On a CentOS Controller, configure the HTTPS reverse proxy for its repositories, Nginx layout and SELinux policy.
 
-On the Controller host only, install these additional tools and obtain the source. This README describes the current code; the installation example pins release `v0.4.4`. To use another published version, set `VERSION` to its exact tag and use matching source and release assets. See [Releases](https://github.com/Purestreams/xmesh/releases) for available versions.
+On the Controller host only, install these additional tools and obtain the source. This README describes the current code; the installation example pins release `v0.4.5`. To use another published version, set `VERSION` to its exact tag and use matching source and release assets. See [Releases](https://github.com/Purestreams/xmesh/releases) for available versions.
 
 ```sh
 sudo apt install -y git nginx certbot
-VERSION=v0.4.4
+VERSION=v0.4.5
 git clone --depth 1 --branch "$VERSION" https://github.com/Purestreams/xmesh.git
 cd xmesh
 ```

@@ -263,7 +263,7 @@ func (s *Server) publicMonitor(state *model.State, now time.Time) monitorPayload
 		if gateway, ok := state.Gateways[id]; ok {
 			role, stage = "gateway", s.monitorNodeState(gateway.Enabled, gateway.DesiredVersion, state.NodeStatus[id], true, now)
 		} else if agent, ok := state.Agents[id]; ok {
-			role, stage = "agent", s.monitorNodeState(agent.Enabled, agent.DesiredVersion, state.NodeStatus[id], false, now)
+			role, stage = "agent", s.monitorNodeState(agentEnabled(state, agent), agent.DesiredVersion, state.NodeStatus[id], false, now)
 		} else if upstream, ok := state.Upstreams[id]; ok {
 			role, stage = "external", "unprobed"
 			if !upstream.Enabled {

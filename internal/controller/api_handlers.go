@@ -95,6 +95,9 @@ func (s *Server) enroll(w http.ResponseWriter, r *http.Request) {
 			if !ok {
 				return fmt.Errorf("agent no longer exists")
 			}
+			if node.GatewayID != "" {
+				return fmt.Errorf("embedded Agent cannot enroll separately")
+			}
 			if node.CredentialHash != "" {
 				node.PreviousCredentialHash = node.CredentialHash
 				node.PreviousCredentialExpiresAt = s.now().Add(15 * time.Minute).UTC()
@@ -182,7 +185,7 @@ func (s *Server) nodeConfig(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, response)
 	case model.RoleAgent:
 		agent := state.Agents[nodeID]
-		if !agent.Enabled {
+		if !agentEnabled(&state, agent) {
 			writeJSON(w, http.StatusOK, AgentConfig{Revision: agent.DesiredVersion, Agent: model.Agent{ID: nodeID}})
 			return
 		}
@@ -398,11 +401,25 @@ func (s *Server) authenticateNodeIdentity(r *http.Request, includeDisabled bool)
 	s.store.View(func(state *model.State) {
 		for id, gateway := range state.Gateways {
 			if (includeDisabled || gateway.Enabled) && (matches(gateway.CredentialHash) || now.Before(gateway.PreviousCredentialExpiresAt) && matches(gateway.PreviousCredentialHash)) {
+				if r.Header.Get("X-XMesh-Embedded-Agent") == "1" {
+					agentID := model.GatewayAgentID(id)
+					agent := state.Agents[agentID]
+					if agent.ID != "" && agent.GatewayID != id {
+						return
+					}
+					if includeDisabled || agent.GatewayID == id && agentEnabled(state, agent) {
+						role, nodeID = model.RoleAgent, agentID
+					}
+					return
+				}
 				role, nodeID = model.RoleGateway, id
 				return
 			}
 		}
 		for id, agent := range state.Agents {
+			if agent.GatewayID != "" || r.Header.Get("X-XMesh-Embedded-Agent") == "1" {
+				continue
+			}
 			if (includeDisabled || agent.Enabled) && (matches(agent.CredentialHash) || now.Before(agent.PreviousCredentialExpiresAt) && matches(agent.PreviousCredentialHash)) {
 				role, nodeID = model.RoleAgent, id
 				return

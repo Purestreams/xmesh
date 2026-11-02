@@ -20,7 +20,7 @@ func (s *Server) upgradeRecoveryProblem(state *model.State, task model.UpgradeTa
 	for _, linkID := range task.BaselineLinks {
 		link, ok := state.Links[linkID]
 		attachment, attached := state.Attachments[link.AttachmentID]
-		if !ok || !link.Enabled || !attached || !attachment.Enabled || (attachment.GatewayID != task.NodeID && attachment.AgentID != task.NodeID) {
+		if !ok || !link.Enabled || !attached || !attachment.Enabled || !attachmentUsesNode(state, attachment, task.NodeID) {
 			return fmt.Sprintf("%s%s did not recover: Link configuration is unavailable", upgradeLinkRecoveryError, linkID)
 		}
 		for _, endpoint := range []struct {
