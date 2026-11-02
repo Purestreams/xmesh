@@ -27,6 +27,11 @@ type Gateway struct {
 	ID                          string    `json:"id"`
 	Name                        string    `json:"name"`
 	PublicHost                  string    `json:"public_host"`
+	PublicHostAuto              bool      `json:"public_host_auto,omitempty"`
+	DetectedPublicIP            string    `json:"detected_public_ip,omitempty"`
+	PublicIPSources             string    `json:"public_ip_sources,omitempty"`
+	PublicIPCheckedAt           time.Time `json:"public_ip_checked_at,omitempty"`
+	ObservedPublicIP            string    `json:"observed_public_ip,omitempty"`
 	Region                      string    `json:"region,omitempty"`
 	VMessPort                   int       `json:"vmess_port"`
 	VMessPath                   string    `json:"vmess_path"`
@@ -153,6 +158,8 @@ type VMessUpstream struct {
 }
 
 type Link struct {
+	AutoURL         bool      `json:"auto_url,omitempty"`
+	URLOverride     bool      `json:"url_override,omitempty"`
 	ID              string    `json:"id"`
 	AttachmentID    string    `json:"attachment_id"`
 	Name            string    `json:"name"`

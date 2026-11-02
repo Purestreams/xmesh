@@ -52,6 +52,9 @@ func TestPanelBrowserFixture(t *testing.T) {
 	})
 	server.now = time.Now
 	server.cfg.PublicURL = "http://" + address
+	server.cfg.ReleaseVersion = "v0.4.5"
+	server.cfg.ReleaseDir = t.TempDir()
+	server.cfg.ReleaseBaseURL = "https://github.com/Purestreams/xmesh/releases/download"
 	server.cfg.NodeOfflineAfterSeconds = 86400
 	t.Logf("Browser fixture: http://%s (admin / a-strong-test-password)", address)
 	if err := http.ListenAndServe(address, server.Handler()); err != nil {

@@ -28,6 +28,7 @@ import (
 )
 
 type Runtime struct {
+	publicIPDiscover    func(context.Context) (model.PublicIPReport, error)
 	probeMu             sync.Mutex
 	probeResults        map[string]model.UpstreamProbeStatus
 	probeJobs           map[string]upstreamProbeJob
@@ -95,7 +96,8 @@ func (r *Runtime) Run(ctx context.Context) error {
 	}
 	var workers sync.WaitGroup
 	defer func() { cancel(); workers.Wait(); r.closeStatsConnection() }()
-	workers.Add(3)
+	workers.Add(4)
+	go func() { defer workers.Done(); r.publicIPLoop(ctx) }()
 	go func() { defer workers.Done(); r.embeddedAgentLoop(ctx) }()
 	go func() { defer workers.Done(); r.watchAuthorization(ctx) }()
 	go func() { defer workers.Done(); r.upstreamProbeLoop(ctx) }()

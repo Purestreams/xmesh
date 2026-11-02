@@ -18,6 +18,7 @@ func TestSubscriptionAndPanelSortByDisplayedNodeName(t *testing.T) {
 		{ID: "g2", Name: "HK-Mega", Enabled: true},
 		{ID: "g3", Name: "alpha", Enabled: true},
 	} {
+		gateway.PublicHost = gateway.ID + ".example"
 		state.Gateways[gateway.ID] = gateway
 	}
 	for _, agent := range []model.Agent{

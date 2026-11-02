@@ -14,7 +14,7 @@ import (
 func (s *Server) editLink(w http.ResponseWriter, r *http.Request) {
 	name := strings.TrimSpace(r.FormValue("name"))
 	linkURL := strings.TrimSpace(r.FormValue("url"))
-	if name == "" || validateURL(linkURL) != nil {
+	if name == "" {
 		http.Error(w, "valid name and Link URL are required", http.StatusBadRequest)
 		return
 	}
@@ -23,8 +23,12 @@ func (s *Server) editLink(w http.ResponseWriter, r *http.Request) {
 		if !ok {
 			return fmt.Errorf("link not found")
 		}
-		oldReality := strings.HasPrefix(link.URL, "reality://")
-		newReality := strings.HasPrefix(linkURL, "reality://")
+		pending := link.AutoURL && link.URL == ""
+		if !(pending && linkURL == "") && validateURL(linkURL) != nil {
+			return fmt.Errorf("valid Link URL is required")
+		}
+		oldReality := strings.HasPrefix(link.URL, "reality://") || (pending && link.RealityUUID != "")
+		newReality := strings.HasPrefix(linkURL, "reality://") || (pending && linkURL == "" && oldReality)
 		if oldReality != newReality {
 			return fmt.Errorf("changing between REALITY and legacy WS requires a new Link")
 		}
@@ -33,13 +37,15 @@ func (s *Server) editLink(w http.ResponseWriter, r *http.Request) {
 			return fmt.Errorf("external VMess routes do not use Links")
 		}
 		if newReality {
-			u, err := url.Parse(linkURL)
-			if err != nil || u.Hostname() == "" || u.Port() == "" || u.Path == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
-				return fmt.Errorf("REALITY URL must be reality://host:port/path")
-			}
-			port, err := strconv.Atoi(u.Port())
-			if err != nil || port < 1 || port > 65535 {
-				return fmt.Errorf("invalid REALITY port")
+			if linkURL != "" {
+				u, err := url.Parse(linkURL)
+				if err != nil || u.Hostname() == "" || u.Port() == "" || u.Path == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+					return fmt.Errorf("REALITY URL must be reality://host:port/path")
+				}
+				port, err := strconv.Atoi(u.Port())
+				if err != nil || port < 1 || port > 65535 {
+					return fmt.Errorf("invalid REALITY port")
+				}
 			}
 			target := strings.TrimSpace(r.FormValue("reality_target"))
 			gateway := state.Gateways[attachment.GatewayID]
@@ -62,6 +68,10 @@ func (s *Server) editLink(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		previous := link
+		if link.URL != linkURL {
+			link.AutoURL = false
+			link.URLOverride = true
+		}
 		link.Name, link.URL = name, linkURL
 		link.HTTPHost = strings.TrimSpace(r.FormValue("http_host"))
 		link.TLSServerName = strings.TrimSpace(r.FormValue("tls_server_name"))

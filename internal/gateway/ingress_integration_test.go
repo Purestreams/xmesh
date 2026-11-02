@@ -67,6 +67,7 @@ func TestWebIngressSwitchesCloseSocketsAndKeepOtherProtocol(t *testing.T) {
 	defer server.Close()
 	r := New(runtimecfg.Config{NodeID: "g", ControllerURL: server.URL, Credential: "gateway", PollInterval: runtimecfg.Duration(30 * time.Millisecond), StatusInterval: runtimecfg.Duration(30 * time.Millisecond), Gateway: runtimecfg.Gateway{SOCKSListen: socks, TunnelListen: tunnel, TunnelPath: "/tunnel", XrayBinary: xray, XrayConfigPath: filepath.Join(t.TempDir(), "gateway.json"), MaxUDPAssociations: 16}}, slog.Default())
 	ctx, cancel := context.WithCancel(context.Background())
+	r.publicIPDiscover = func(context.Context) (model.PublicIPReport, error) { return model.PublicIPReport{}, context.Canceled }
 	defer cancel()
 	done := make(chan error, 1)
 	go func() { done <- r.Run(ctx) }()

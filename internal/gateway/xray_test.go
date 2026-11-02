@@ -2,18 +2,79 @@ package gateway
 
 import (
 	"bytes"
+	"context"
 	"crypto/ecdh"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/Purestreams/xmesh/internal/controller"
+	"github.com/Purestreams/xmesh/internal/hy2"
 	"github.com/Purestreams/xmesh/internal/model"
 )
+
+func TestIPv6GatewayIngressListeners(t *testing.T) {
+	key, err := ecdh.X25519().GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert, privateKey, pin, err := hy2.Generate("::1", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	vmess, reality, hy2Address := freeTCPAddress(t), freeTCPAddress(t), freeTCPUDPAddress(t)
+	config := controller.GatewayConfig{Gateway: model.Gateway{
+		PublicHost: "::1", VMessPort: testPort(t, vmess), VMessPath: "/proxy", HY2Port: testPort(t, hy2Address),
+		HY2Certificate: cert, HY2PrivateKey: privateKey, HY2PinSHA256: pin,
+		RealityTarget: "example.com:443", RealityName: "example.com", RealityPrivateKey: base64.RawURLEncoding.EncodeToString(key.Bytes()),
+	}, Links: []controller.GatewayLinkConfig{{Link: model.Link{ID: "link", Enabled: true, RealityUUID: "00000000-0000-4000-8000-000000000001", RealityShortID: "0123456789abcdef"}}}}
+	_, realityPort, _ := net.SplitHostPort(reality)
+	payload, err := buildXrayConfigWithReality(config, "127.0.0.1:18080", net.JoinHostPort("0.0.0.0", realityPort), "127.0.0.1:18081")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rendered xrayConfig
+	if err := json.Unmarshal(payload, &rendered); err != nil {
+		t.Fatal(err)
+	}
+	for _, inbound := range rendered.Inbounds {
+		if inbound.Listen != "::" {
+			t.Fatalf("IPv6 ingress is unreachable: %s listens on %s", inbound.Tag, inbound.Listen)
+		}
+	}
+	binary := os.Getenv("XMESH_TEST_XRAY")
+	if binary == "" {
+		return // Rendering coverage also runs without the optional Xray binary.
+	}
+	path := filepath.Join(t.TempDir(), "ipv6.json")
+	if err := os.WriteFile(path, payload, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, binary, "run", "-config", path)
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { cancel(); _ = cmd.Wait() }()
+	for _, address := range []string{vmess, reality} {
+		_, port, _ := net.SplitHostPort(address)
+		waitFor(t, 5*time.Second, func() bool {
+			conn, err := net.DialTimeout("tcp6", net.JoinHostPort("::1", port), 100*time.Millisecond)
+			if err != nil {
+				return false
+			}
+			_ = conn.Close()
+			return true
+		})
+	}
+}
 
 func TestRealityGatewayConfigAcceptedByXray(t *testing.T) {
 	binary := os.Getenv("XMESH_TEST_XRAY")

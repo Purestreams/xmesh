@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"path/filepath"
 	"sort"
@@ -68,6 +69,11 @@ type loginFailure struct {
 }
 
 func New(cfg Config, state *store.Store, logger *slog.Logger) (*Server, error) {
+	for _, cidr := range cfg.TrustedProxyCIDRs {
+		if _, err := netip.ParsePrefix(cidr); err != nil {
+			return nil, fmt.Errorf("invalid trusted_proxy_cidrs entry %q: %w", cidr, err)
+		}
+	}
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -186,6 +192,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /admin/upgrades/{id}/resume", s.requireAdmin(s.csrf(s.resumeUpgrade)))
 	mux.HandleFunc("GET /admin/upgrades", s.requireAdmin(s.listUpgrades))
 	mux.HandleFunc("POST /api/v1/updater/pair", s.updaterPair)
+	mux.HandleFunc("POST /api/v1/gateway/address", s.gatewayAddress)
 	mux.HandleFunc("POST /api/v1/updater/heartbeat", s.updaterHeartbeat)
 	mux.HandleFunc("GET /api/v1/updater/task", s.updaterTask)
 	mux.HandleFunc("POST /api/v1/updater/manual", s.startManualUpgrade)

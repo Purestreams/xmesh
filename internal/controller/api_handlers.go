@@ -148,6 +148,9 @@ func (s *Server) nodeConfig(w http.ResponseWriter, r *http.Request) {
 		gateway.CredentialHash = ""
 		gateway.PreviousCredentialHash = ""
 		gateway.PreviousCredentialExpiresAt = time.Time{}
+		if gateway.PublicHost == "" {
+			gateway.HY2Port = 0 // Wait for address consensus before provisioning TLS.
+		}
 		// Older Gateways use the port as the HY2 switch. Keep their listener
 		// closed too, while preserving the configured port in Controller state.
 		if r.Header.Get("X-XMesh-Ingress-Controls") != "1" && gateway.HY2Disabled {
@@ -205,7 +208,7 @@ func (s *Server) nodeConfig(w http.ResponseWriter, r *http.Request) {
 			}
 			sort.Strings(grantIDs)
 			for _, link := range state.Links {
-				if link.AttachmentID != attachment.ID || !link.Enabled {
+				if link.AttachmentID != attachment.ID || !link.Enabled || (link.AutoURL && link.URL == "") {
 					continue
 				}
 				link.TunnelTokenHash = ""

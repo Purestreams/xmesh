@@ -47,20 +47,27 @@ func pruneLinkHistory(state *model.State, now time.Time) {
 }
 
 type dashboardNode struct {
-	HY2Port       int              `json:"hy2_port,omitempty"`
-	VMessDisabled bool             `json:"vmess_disabled,omitempty"`
-	HY2Disabled   bool             `json:"hy2_disabled,omitempty"`
-	ID            string           `json:"id"`
-	Name          string           `json:"name"`
-	Role          string           `json:"role"`
-	Host          string           `json:"host"`
-	Region        string           `json:"region"`
-	Target        string           `json:"target"`
-	Enabled       bool             `json:"enabled"`
-	Enrolled      bool             `json:"enrolled"`
-	Desired       uint64           `json:"desired"`
-	Status        model.NodeStatus `json:"status"`
-	Next          string           `json:"next"`
+	VMessPort         int              `json:"vmess_port,omitempty"`
+	VMessPath         string           `json:"vmess_path,omitempty"`
+	PublicHostAuto    bool             `json:"public_host_auto,omitempty"`
+	DetectedPublicIP  string           `json:"detected_public_ip,omitempty"`
+	PublicIPSources   string           `json:"public_ip_sources,omitempty"`
+	ObservedPublicIP  string           `json:"observed_public_ip,omitempty"`
+	PublicIPCheckedAt time.Time        `json:"public_ip_checked_at,omitempty"`
+	HY2Port           int              `json:"hy2_port,omitempty"`
+	VMessDisabled     bool             `json:"vmess_disabled,omitempty"`
+	HY2Disabled       bool             `json:"hy2_disabled,omitempty"`
+	ID                string           `json:"id"`
+	Name              string           `json:"name"`
+	Role              string           `json:"role"`
+	Host              string           `json:"host"`
+	Region            string           `json:"region"`
+	Target            string           `json:"target"`
+	Enabled           bool             `json:"enabled"`
+	Enrolled          bool             `json:"enrolled"`
+	Desired           uint64           `json:"desired"`
+	Status            model.NodeStatus `json:"status"`
+	Next              string           `json:"next"`
 }
 type dashboardRoute struct {
 	Probe                *model.UpstreamProbeStatus `json:"probe,omitempty"`
@@ -77,6 +84,7 @@ type dashboardRoute struct {
 	State                string                     `json:"state"`
 }
 type dashboardLink struct {
+	URL     string           `json:"url"`
 	ID      string           `json:"id"`
 	Name    string           `json:"name"`
 	RouteID string           `json:"route_id"`
@@ -136,7 +144,7 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 	state := s.panelState()
 	data := dashboardData{At: s.now().UTC(), Revision: state.Revision, Nodes: []dashboardNode{}, Routes: []dashboardRoute{}, Links: []dashboardLink{}, Users: []dashboardUser{}, Grants: []dashboardGrant{}, History: map[string][]model.LinkSample{}, Usage: usageViews(state, s.now()), Operations: state.Operations, Upgrade: s.controllerUpgradeStatus(), UpgradeTasks: sortedUpgradeTasks(state), Updaters: updaterViews(state, s.now()), UpgradeBatches: state.UpgradeBatches}
 	for _, node := range sortedGateways(state) {
-		data.Nodes = append(data.Nodes, dashboardNode{ID: node.ID, Name: node.Name, Role: "Gateway", HY2Port: node.HY2Port, VMessDisabled: node.VMessDisabled, HY2Disabled: node.HY2Disabled, Host: node.PublicHost, Region: node.Region, Target: node.RealityTarget, Enabled: node.Enabled, Enrolled: node.CredentialHash != "", Desired: node.DesiredVersion, Status: state.NodeStatus[node.ID], Next: nextDeploymentAction(state, node.ID, model.RoleGateway)})
+		data.Nodes = append(data.Nodes, dashboardNode{ID: node.ID, Name: node.Name, Role: "Gateway", VMessPort: node.VMessPort, VMessPath: node.VMessPath, HY2Port: node.HY2Port, VMessDisabled: node.VMessDisabled, HY2Disabled: node.HY2Disabled, Host: node.PublicHost, PublicHostAuto: node.PublicHostAuto, DetectedPublicIP: node.DetectedPublicIP, PublicIPSources: node.PublicIPSources, PublicIPCheckedAt: node.PublicIPCheckedAt, ObservedPublicIP: node.ObservedPublicIP, Region: node.Region, Target: node.RealityTarget, Enabled: node.Enabled, Enrolled: node.CredentialHash != "", Desired: node.DesiredVersion, Status: state.NodeStatus[node.ID], Next: nextDeploymentAction(state, node.ID, model.RoleGateway)})
 	}
 	for _, node := range sortedAgents(state) {
 		enabled, enrolled := agentEnabled(&state, node), node.CredentialHash != ""
@@ -207,7 +215,7 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 	}
 	summaries := summarizeLinks(state)
 	for _, link := range sortedLinks(state) {
-		data.Links = append(data.Links, dashboardLink{ID: link.ID, Name: link.Name, RouteID: link.AttachmentID, Enabled: link.Enabled, Status: summaries[link.ID]})
+		data.Links = append(data.Links, dashboardLink{ID: link.ID, URL: link.URL, Name: link.Name, RouteID: link.AttachmentID, Enabled: link.Enabled, Status: summaries[link.ID]})
 		for _, sample := range state.LinkHistory[link.ID] {
 			if !sample.At.Before(s.now().Add(-historyRetention)) {
 				data.History[link.ID] = append(data.History[link.ID], sample)

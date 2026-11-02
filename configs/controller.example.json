@@ -1,5 +1,6 @@
 {
   "listen": "127.0.0.1:8088",
+  "trusted_proxy_cidrs": ["127.0.0.0/8", "::1/128"],
   "public_url": "https://panel.example.com",
   "state_path": "/var/lib/xmesh/controller-state.json",
   "admin_username": "admin",

@@ -219,7 +219,11 @@ func buildXrayConfigWithStats(config controller.GatewayConfig, socksAddress, rea
 		}
 		result.Outbounds = append(result.Outbounds, xrayOutbound{Protocol: "vmess", Tag: "upstream-" + upstream.AttachmentID, Settings: xrayOutboundSettings{VNext: []xrayVMessServer{{Address: upstream.Endpoint.Address, Port: upstream.Endpoint.Port, Users: []xrayVMessUser{{ID: upstream.Endpoint.UUID, AlterID: 0, Security: cipher}}}}}, StreamSettings: &stream})
 	}
-	inbound := xrayInbound{Listen: "0.0.0.0", Port: config.Gateway.VMessPort, Protocol: "vmess", Tag: "xmesh-vmess", Settings: xrayInboundSettings{}, StreamSettings: &xrayStreamSettings{Network: "ws", Security: "none", WSSettings: xrayWSSettings{Path: config.Gateway.VMessPath, Host: config.Gateway.VMessHost}}}
+	ingressHost := "0.0.0.0"
+	if ip := net.ParseIP(strings.Trim(config.Gateway.PublicHost, "[]")); ip != nil && ip.To4() == nil {
+		ingressHost = "::"
+	}
+	inbound := xrayInbound{Listen: ingressHost, Port: config.Gateway.VMessPort, Protocol: "vmess", Tag: "xmesh-vmess", Settings: xrayInboundSettings{}, StreamSettings: &xrayStreamSettings{Network: "ws", Security: "none", WSSettings: xrayWSSettings{Path: config.Gateway.VMessPath, Host: config.Gateway.VMessHost}}}
 	var hy2Inbound *xrayInbound
 	if config.Gateway.HY2Enabled() {
 		gateway := config.Gateway
@@ -229,7 +233,7 @@ func buildXrayConfigWithStats(config controller.GatewayConfig, socksAddress, rea
 		if err := hy2.Validate(gateway.HY2Certificate, gateway.HY2PrivateKey, gateway.HY2PinSHA256, gateway.PublicHost, time.Now()); err != nil {
 			return nil, err
 		}
-		hy2Inbound = &xrayInbound{Listen: "0.0.0.0", Port: gateway.HY2Port, Protocol: "hysteria", Tag: "xmesh-hy2", Settings: xrayInboundSettings{Version: 2}, StreamSettings: &xrayStreamSettings{Network: "hysteria", Security: "tls", HysteriaSettings: &xrayHysteriaSettings{Version: 2, Masquerade: xrayHY2Masquerade{Type: "string", Content: "Not Found", StatusCode: 404}}, TLSSettings: &xrayTLSSettings{ALPN: []string{"h3"}, MinVersion: "1.3", Certificates: []xrayTLSCertificate{{Certificate: strings.Split(strings.TrimSpace(gateway.HY2Certificate), "\n"), Key: strings.Split(strings.TrimSpace(gateway.HY2PrivateKey), "\n")}}}}}
+		hy2Inbound = &xrayInbound{Listen: ingressHost, Port: gateway.HY2Port, Protocol: "hysteria", Tag: "xmesh-hy2", Settings: xrayInboundSettings{Version: 2}, StreamSettings: &xrayStreamSettings{Network: "hysteria", Security: "tls", HysteriaSettings: &xrayHysteriaSettings{Version: 2, Masquerade: xrayHY2Masquerade{Type: "string", Content: "Not Found", StatusCode: 404}}, TLSSettings: &xrayTLSSettings{ALPN: []string{"h3"}, MinVersion: "1.3", Certificates: []xrayTLSCertificate{{Certificate: strings.Split(strings.TrimSpace(gateway.HY2Certificate), "\n"), Key: strings.Split(strings.TrimSpace(gateway.HY2PrivateKey), "\n")}}}}}
 	}
 	clientInboundTags := []string{}
 	if config.Gateway.VMessEnabled() {
@@ -303,8 +307,8 @@ func buildXrayConfigWithStats(config controller.GatewayConfig, socksAddress, rea
 		if err != nil || realityPort <= 0 || realityPort > 65535 {
 			return nil, errors.New("invalid REALITY listen port")
 		}
-		if realityHost == "" {
-			realityHost = "0.0.0.0"
+		if realityHost == "" || realityHost == "0.0.0.0" {
+			realityHost = ingressHost
 		}
 		tunnelHost, tunnelPort, err := net.SplitHostPort(tunnelAddress)
 		if err != nil {

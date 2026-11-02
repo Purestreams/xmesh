@@ -170,7 +170,7 @@ func (s *Server) enableConnections(state *model.State, pairs []connectionPair, t
 			if err != nil {
 				return counts, fmt.Errorf("Gateway %s: %w", gateway.Name, err)
 			}
-			state.Links[linkID] = model.Link{ID: linkID, AttachmentID: attachment.ID, Name: gateway.Name + " / " + agent.Name, URL: linkURL, TLSVerify: true, RealityUUID: uuid, RealityShortID: shortID, Priority: 10, Weight: 1, Connections: 2, MaxStreams: 256, Enabled: true, TunnelTokenHash: auth.SecretHash(auth.Derive(s.cfg.sessionKey(), "tunnel", linkID)), CreatedAt: s.now().UTC()}
+			state.Links[linkID] = model.Link{ID: linkID, AttachmentID: attachment.ID, Name: gateway.Name + " / " + agent.Name, URL: linkURL, AutoURL: true, TLSVerify: true, RealityUUID: uuid, RealityShortID: shortID, Priority: 10, Weight: 1, Connections: 2, MaxStreams: 256, Enabled: true, TunnelTokenHash: auth.SecretHash(auth.Derive(s.cfg.sessionKey(), "tunnel", linkID)), CreatedAt: s.now().UTC()}
 			counts.Created++
 		}
 		bumpGateway(state, gateway.ID)

@@ -2,7 +2,6 @@ package controller
 
 import (
 	"fmt"
-	"net"
 	"net/http"
 	"net/netip"
 	"strings"
@@ -17,11 +16,15 @@ func (s *Server) editGateway(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	name := strings.TrimSpace(r.FormValue("name"))
-	host := strings.TrimSpace(r.FormValue("public_host"))
+	host, hostErr := normalizeGatewayPublicHost(r.FormValue("public_host"))
+	if hostErr != nil {
+		http.Error(w, hostErr.Error(), http.StatusBadRequest)
+		return
+	}
 	path := strings.TrimSpace(r.FormValue("vmess_path"))
 	port, err := parsePositive(r.FormValue("vmess_port"), 0)
-	if name == "" || host == "" || port < 1 || port > 65535 || err != nil || !strings.HasPrefix(path, "/") {
-		http.Error(w, "valid name, public host, port, and WS path are required", http.StatusBadRequest)
+	if name == "" || port < 1 || port > 65535 || err != nil || !strings.HasPrefix(path, "/") {
+		http.Error(w, "valid name, port, and WS path are required", http.StatusBadRequest)
 		return
 	}
 	err = s.store.Update(func(state *model.State) error {
@@ -30,6 +33,15 @@ func (s *Server) editGateway(w http.ResponseWriter, r *http.Request) {
 			return fmt.Errorf("gateway not found")
 		}
 		vmessHost := strings.TrimSpace(r.FormValue("vmess_host"))
+		gateway.PublicHostAuto = host == ""
+		if gateway.PublicHostAuto {
+			host = gateway.DetectedPublicIP
+			if host == "" {
+				// Switching an existing node to automatic discovery must not
+				// withdraw its working address while providers are unavailable.
+				host = gateway.PublicHost
+			}
+		}
 		previousVMessDisabled, previousHY2Disabled := gateway.VMessDisabled, gateway.HY2Disabled
 		applyIngressSwitches(r, &gateway)
 		hy2Port, err := parseHY2Port(r, gateway.HY2Port)
@@ -40,19 +52,7 @@ func (s *Server) editGateway(w http.ResponseWriter, r *http.Request) {
 			hy2Port = port
 		}
 		connectionChanged := gateway.PublicHost != host || gateway.VMessPort != port || gateway.VMessPath != path || gateway.VMessHost != vmessHost || gateway.HY2Port != hy2Port || previousVMessDisabled != gateway.VMessDisabled || previousHY2Disabled != gateway.HY2Disabled
-		if gateway.PublicHost != host {
-			gateway.HY2Certificate, gateway.HY2PrivateKey, gateway.HY2PinSHA256 = "", "", ""
-			oldURL := "reality://" + net.JoinHostPort(gateway.PublicHost, "8443") + "/tunnel"
-			newURL := "reality://" + net.JoinHostPort(host, "8443") + "/tunnel"
-			for id, link := range state.Links {
-				attachment := state.Attachments[link.AttachmentID]
-				if attachment.GatewayID == gateway.ID && link.URL == oldURL {
-					link.URL = newURL
-					state.Links[id] = link
-					bumpAgent(state, attachment.AgentID)
-				}
-			}
-		}
+		changeGatewayHost(state, &gateway, host)
 		gateway.Name, gateway.PublicHost, gateway.VMessPort, gateway.VMessPath, gateway.VMessHost = name, host, port, path, vmessHost
 		if err := configureHY2(state, &gateway, hy2Port, s.now()); err != nil {
 			return err

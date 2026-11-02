@@ -2,6 +2,7 @@ package controller
 
 import (
 	"fmt"
+	"net"
 	"net/http"
 	"net/netip"
 	"strconv"
@@ -120,7 +121,11 @@ func (s *Server) createGateway(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	name := strings.TrimSpace(r.FormValue("name"))
-	host := strings.TrimSpace(r.FormValue("public_host"))
+	host, hostErr := normalizeGatewayPublicHost(r.FormValue("public_host"))
+	if hostErr != nil {
+		http.Error(w, hostErr.Error(), http.StatusBadRequest)
+		return
+	}
 	path := strings.TrimSpace(r.FormValue("vmess_path"))
 	port, err := parsePositive(r.FormValue("vmess_port"), 8080)
 	hy2Port, hy2Err := parseHY2Port(r, port)
@@ -128,8 +133,8 @@ func (s *Server) createGateway(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, hy2Err.Error(), http.StatusBadRequest)
 		return
 	}
-	if err != nil || port > 65535 || name == "" || host == "" {
-		http.Error(w, "valid name, public host, and port are required", 400)
+	if err != nil || port > 65535 || name == "" {
+		http.Error(w, "valid name and port are required", 400)
 		return
 	}
 	if path == "" {
@@ -145,7 +150,7 @@ func (s *Server) createGateway(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	err = s.store.Update(func(state *model.State) error {
-		state.Gateways[id] = model.Gateway{ID: id, Name: name, PublicHost: host, Region: region, VMessPort: port, VMessPath: path, VMessHost: strings.TrimSpace(r.FormValue("vmess_host")), Enabled: true, DesiredVersion: 1, CreatedAt: s.now().UTC()}
+		state.Gateways[id] = model.Gateway{ID: id, Name: name, PublicHost: host, PublicHostAuto: host == "", Region: region, VMessPort: port, VMessPath: path, VMessHost: strings.TrimSpace(r.FormValue("vmess_host")), Enabled: true, DesiredVersion: 1, CreatedAt: s.now().UTC()}
 		gateway := state.Gateways[id]
 		applyIngressSwitches(r, &gateway)
 		if err := configureHY2(state, &gateway, hy2Port, s.now()); err != nil {
@@ -203,8 +208,20 @@ func (s *Server) quickSetup(w http.ResponseWriter, r *http.Request) {
 	}
 	gwName := strings.TrimSpace(r.FormValue("gateway_name"))
 	agtName := strings.TrimSpace(r.FormValue("agent_name"))
-	publicHost := strings.TrimSpace(r.FormValue("public_host"))
+	publicHost, hostErr := normalizeGatewayPublicHost(r.FormValue("public_host"))
+	if hostErr != nil {
+		http.Error(w, hostErr.Error(), http.StatusBadRequest)
+		return
+	}
 	linkURL := strings.TrimSpace(r.FormValue("link_url"))
+	autoURL := linkURL == ""
+	if autoURL {
+		host := publicHost
+		if host == "" {
+			host = "pending.invalid" // Only used to provision keys; never sent to nodes.
+		}
+		linkURL = "reality://" + net.JoinHostPort(host, "8443") + "/tunnel"
+	}
 	vmessPath := strings.TrimSpace(r.FormValue("vmess_path"))
 	vmessPort, portErr := parsePositive(r.FormValue("vmess_port"), 8080)
 	hy2Port, hy2Err := parseHY2Port(r, vmessPort)
@@ -214,7 +231,7 @@ func (s *Server) quickSetup(w http.ResponseWriter, r *http.Request) {
 	}
 	allowedCIDRs := splitCSV(r.FormValue("allowed_cidrs"))
 	deniedCIDRs := splitCSV(r.FormValue("denied_cidrs"))
-	if gwName == "" || agtName == "" || publicHost == "" || strings.ContainsAny(publicHost, "/?#@ \t\r\n") ||
+	if gwName == "" || agtName == "" || strings.ContainsAny(publicHost, "/?#@ \t\r\n") ||
 		vmessPort > 65535 || portErr != nil || !strings.HasPrefix(vmessPath, "/") || strings.ContainsAny(vmessPath, " \t\r\n") ||
 		validateURL(linkURL) != nil || (!strings.HasPrefix(linkURL, "wss://") && !strings.HasPrefix(linkURL, "reality://")) || len(allowedCIDRs) == 0 {
 		http.Error(w, "valid node names, public host, VMess port/path, allowed CIDRs and wss:// or reality:// Link URL are required", 400)
@@ -248,7 +265,7 @@ func (s *Server) quickSetup(w http.ResponseWriter, r *http.Request) {
 	}
 	now := s.now().UTC()
 	err = s.store.Update(func(state *model.State) error {
-		state.Gateways[gwID] = model.Gateway{ID: gwID, Name: gwName, PublicHost: publicHost, Region: region, VMessPort: vmessPort, VMessPath: vmessPath, VMessHost: strings.TrimSpace(r.FormValue("vmess_host")), Enabled: true, DesiredVersion: 1, CreatedAt: now}
+		state.Gateways[gwID] = model.Gateway{ID: gwID, Name: gwName, PublicHost: publicHost, PublicHostAuto: publicHost == "", Region: region, VMessPort: vmessPort, VMessPath: vmessPath, VMessHost: strings.TrimSpace(r.FormValue("vmess_host")), Enabled: true, DesiredVersion: 1, CreatedAt: now}
 		gateway := state.Gateways[gwID]
 		applyIngressSwitches(r, &gateway)
 		if err := configureHY2(state, &gateway, hy2Port, now); err != nil {
@@ -264,6 +281,11 @@ func (s *Server) quickSetup(w http.ResponseWriter, r *http.Request) {
 			if err != nil {
 				return err
 			}
+		}
+		link.AutoURL = autoURL
+		link.URLOverride = !autoURL
+		if autoURL && publicHost == "" {
+			link.URL = ""
 		}
 		state.Links[linkID] = link
 		return nil
@@ -516,7 +538,7 @@ func (s *Server) createLink(w http.ResponseWriter, r *http.Request) {
 		if attachment.UpstreamID != "" {
 			return fmt.Errorf("external VMess routes do not use Links")
 		}
-		link := model.Link{ID: id, AttachmentID: attachmentID, Name: name, URL: linkURL, HTTPHost: strings.TrimSpace(r.FormValue("http_host")), TLSServerName: strings.TrimSpace(r.FormValue("tls_server_name")), TLSVerify: r.FormValue("tls_verify") == "on", Priority: priority, Weight: weight, Connections: connections, MaxStreams: maxStreams, Enabled: true, TunnelTokenHash: auth.SecretHash(tunnelToken), CreatedAt: s.now().UTC()}
+		link := model.Link{ID: id, AttachmentID: attachmentID, Name: name, URL: linkURL, URLOverride: true, HTTPHost: strings.TrimSpace(r.FormValue("http_host")), TLSServerName: strings.TrimSpace(r.FormValue("tls_server_name")), TLSVerify: r.FormValue("tls_verify") == "on", Priority: priority, Weight: weight, Connections: connections, MaxStreams: maxStreams, Enabled: true, TunnelTokenHash: auth.SecretHash(tunnelToken), CreatedAt: s.now().UTC()}
 		if strings.HasPrefix(linkURL, "reality://") {
 			var err error
 			link.RealityUUID, link.RealityShortID, err = provisionReality(state, attachment.GatewayID, strings.TrimSpace(r.FormValue("reality_target")), linkURL)

@@ -3,6 +3,15 @@
 // Source messages are Chinese; English-only labels have explicit Chinese overrides.
 const XMeshI18n = (() => {
   const english = {
+    "留空：自动识别公网 IP，可手动覆盖": "Leave blank to detect the public IP; enter an address to override",
+    "留空：随 Gateway 公网 IP 自动生成": "Leave blank to generate from the Gateway public IP",
+    "自动地址": "Automatic address",
+    "手动覆盖": "Manual override",
+    "已确认公网 IP": "Confirmed public IP",
+    "等待公网 IP 确认": "Waiting for public IP confirmation",
+    "地址模式": "Address mode",
+    "确认来源": "Confirmation sources",
+    "Controller 观察 IP": "IP observed by Controller",
     "升级 Gateway 后才能启用内置 Agent": "Upgrade the Gateway to enable its embedded Agent",
     "启用内置 Agent": "Enable embedded Agent",
     "关闭内置 Agent": "Disable embedded Agent",

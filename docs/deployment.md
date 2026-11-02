@@ -169,6 +169,40 @@ whose writes recently stalled; established streams are never migrated.
 
 ## Runtime boundaries
 
+Gateway addresses can be left blank at creation (including full-route setup).
+Gateway queries `https://api.ip.sb/ip`, `https://api64.ipify.org` and
+`https://ifconfig.co/ip` over direct HTTPS, without environment proxies or managed
+exits. At least two independent services must agree on a public IP. IPv4 is tried
+first and IPv6 is checked separately if IPv4 cannot reach consensus. Discovery runs
+in the background at startup and every 15 minutes; failures retry after one minute
+and retain the last confirmed address. Query timeouts never block traffic serving.
+
+The authenticated Gateway announces its confirmed address and sources to Controller.
+The Panel shows automatic/manual mode, the confirmed IP, source names and the
+source IP observed by Controller. The observed IP is supplementary, since policy
+routing or NAT can use different source addresses for different destinations.
+Existing manually configured addresses remain manual overrides. Enter an address
+in the Gateway edit form to override detection; clear it to restore automatic mode.
+If an existing node has not confirmed an IP yet, clearing its override retains the
+current working address until the first successful consensus.
+Announcements never replace an override or restart a node when its effective
+address is unchanged. Detection does not establish inbound port reachability;
+NAT forwarding or domain-based access may still require an explicit override.
+
+For observed-IP diagnostics only, Controller trusts forwarding headers from
+loopback proxies by default. Set `trusted_proxy_cidrs` to the exact addresses/CIDRs
+of Nginx/Caddy if they connect over a container/private network. An explicit empty
+list disables this trust. `X-Forwarded-For` is walked from the nearest proxy;
+`X-Real-IP` is a fallback. Untrusted peers' forwarding headers are ignored, and
+login/rate-limit identity remains the actual TCP peer. Nginx should overwrite
+`X-Real-IP` and append the actual client to `X-Forwarded-For`; Caddy's normal
+reverse-proxy forwarding behavior is supported.
+
+Before the first confirmed address, HY2 TLS provisioning, automatic Agent Link
+dials and subscription publication wait. An address change updates managed REALITY
+Link URLs and HY2 certificates, and requires the new Gateway revision to be
+acknowledged before subscriptions are republished. Custom Link URLs remain custom.
+
 Node, route, access-policy and switch changes in the Panel are applied live; the
 Controller does not restart for these saves. Nodes normally fetch configuration
 every 15 seconds. State writes are serialized and durable before acknowledgement,

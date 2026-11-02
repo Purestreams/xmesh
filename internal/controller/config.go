@@ -13,18 +13,19 @@ import (
 )
 
 type Config struct {
-	AuditDir                    string `json:"audit_dir,omitempty"`
-	Listen                      string `json:"listen"`
-	PublicURL                   string `json:"public_url"`
-	StatePath                   string `json:"state_path"`
-	AdminUsername               string `json:"admin_username"`
-	AdminPasswordHash           string `json:"admin_password_hash,omitempty"`
-	SessionSecret               string `json:"session_secret"`
-	ReleaseBaseURL              string `json:"release_base_url,omitempty"`
-	ReleaseVersion              string `json:"release_version,omitempty"`
-	ReleaseDir                  string `json:"release_dir,omitempty"`
-	NodeOfflineAfterSeconds     int    `json:"node_offline_after_seconds,omitempty"`
-	AllowPrivateUpstreamSources bool   `json:"allow_private_upstream_sources,omitempty"`
+	AuditDir                    string   `json:"audit_dir,omitempty"`
+	Listen                      string   `json:"listen"`
+	PublicURL                   string   `json:"public_url"`
+	StatePath                   string   `json:"state_path"`
+	AdminUsername               string   `json:"admin_username"`
+	AdminPasswordHash           string   `json:"admin_password_hash,omitempty"`
+	SessionSecret               string   `json:"session_secret"`
+	ReleaseBaseURL              string   `json:"release_base_url,omitempty"`
+	ReleaseVersion              string   `json:"release_version,omitempty"`
+	ReleaseDir                  string   `json:"release_dir,omitempty"`
+	NodeOfflineAfterSeconds     int      `json:"node_offline_after_seconds,omitempty"`
+	TrustedProxyCIDRs           []string `json:"trusted_proxy_cidrs,omitempty"`
+	AllowPrivateUpstreamSources bool     `json:"allow_private_upstream_sources,omitempty"`
 }
 
 func LoadConfig(path string) (Config, error) {

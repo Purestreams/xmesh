@@ -229,6 +229,12 @@ if (typeof document !== "undefined")
           node.status.xray_error ||
           t("无"),
       };
+      if (node.role === "Gateway") {
+        values[t("地址模式")] = node.public_host_auto ? t("自动地址") : t("手动覆盖");
+        values[t("已确认公网 IP")] = node.detected_public_ip || t("等待公网 IP 确认");
+        values[t("确认来源")] = node.public_ip_sources || "—";
+        values[t("Controller 观察 IP")] = node.observed_public_ip || "—";
+      }
       Object.entries(values).forEach(([k, v]) =>
         dl.append(el("dt", k), el("dd", v)),
       );
@@ -1008,6 +1014,15 @@ if (typeof document !== "undefined")
             ),
           );
           if (role === "Gateway") {
+            const endpoint = node.host?.includes(":") ? `[${node.host}]` : node.host || t("等待公网 IP 确认");
+            cells[1].replaceChildren(
+              el("div", node.vmess_disabled ? t("VMess/WS 已关闭") : `VMess/WS ${endpoint}:${node.vmess_port}${node.vmess_path}`),
+              el("div", node.hy2_disabled || !node.hy2_port ? t("HY2 已关闭") : `HY2 UDP ${endpoint}:${node.hy2_port}`),
+            );
+            if (!node.vmess_disabled) cells[1].append(el("small", t("WS TLS 未启用")));
+            if (!node.hy2_disabled && node.hy2_port) cells[1].append(el("small", t("自签证书 + SHA-256 pin")), el("small", node.status.hy2_ready ? t("HY2 就绪") : t("HY2 待应用")));
+            const ipInfo = $("[data-public-ip]", row);
+            if (ipInfo) ipInfo.textContent = `${node.public_host_auto ? t("自动地址") : t("手动覆盖")} · ${node.host || t("等待公网 IP 确认")} · ${t("已确认公网 IP")}: ${node.detected_public_ip || "—"} · ${node.public_ip_sources || "—"}`;
             runtime.append(el("small", `VMess/WS ${node.vmess_disabled ? t("已关闭") : t("已开启")}`));
             runtime.append(el("small", `HY2 ${node.hy2_disabled || !node.hy2_port ? t("已关闭") : `UDP ${node.hy2_port} · ${node.status.hy2_ready ? t("就绪") : t("待应用")}`}`));
           }
@@ -1025,6 +1040,14 @@ if (typeof document !== "undefined")
             (l) => action === `/admin/links/${l.id}/toggle`,
           );
         if (!link) return;
+        const linkAddress = $("td:nth-child(2) code", row);
+        if (linkAddress) linkAddress.textContent = link.url;
+        const urlInput = $('form[action$="/edit"] [name="url"]', row);
+        if (urlInput && urlInput.value === urlInput.defaultValue &&
+            document.activeElement !== urlInput && !urlInput.form.hasAttribute("aria-busy")) {
+          urlInput.value = urlInput.defaultValue = link.url;
+          urlInput.required = !!link.url;
+        }
         const st = link.status;
         row.cells[3].replaceChildren(
           badge(

@@ -14,7 +14,7 @@ import (
 const upstreamSubscriptionFailureGrace = 5 * time.Minute
 
 func subscriptionRouteAvailable(state *model.State, attachment model.Attachment, now time.Time) bool {
-	if !routeAvailable(state, attachment) {
+	if state.Gateways[attachment.GatewayID].PublicHost == "" || !routeAvailable(state, attachment) {
 		return false
 	}
 	if attachment.UpstreamID == "" {

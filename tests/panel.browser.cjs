@@ -255,6 +255,70 @@ const fs = require("node:fs");
       releaseSave();
       await page.unroute("**/admin/agents/a1/toggle");
     }
+    // Create without a host, then exercise authenticated node announcement and
+    // manual override without reloading the panel.
+    await page.goto(base + "/#wizard-gateway");
+    const autoWizard = page.locator('#wizard-gateway form');
+    await autoWizard.locator('[name="name"]').fill("Browser Auto Gateway");
+    assert.equal(await autoWizard.locator('[name="public_host"]').getAttribute("required"), null);
+    await autoWizard.locator('button').click();
+    await page.locator('#wizard-gateway .form-success').waitFor();
+    await page.locator('.sidebar a[href="#network"]').click();
+    const autoRow = page.locator('#gateways tbody tr').filter({ hasText: 'Browser Auto Gateway' });
+    const autoID = await autoRow.locator('td code').first().textContent();
+    const csrf = await page.locator('input[name="csrf"]').first().inputValue();
+    const tokenResponse = await page.request.post(base + '/admin/enrollments', { form: { csrf, role: 'gateway', node_id: autoID } });
+    assert.equal(tokenResponse.status(), 200);
+    const token = (await tokenResponse.text()).split('\n')[1].trim();
+    const enrollment = await page.request.post(base + '/api/v1/enroll', { data: { token, role: 'gateway', node_id: autoID } });
+    assert.equal(enrollment.status(), 201);
+    const credential = (await enrollment.json()).credential;
+    const announce = async (ip, id = autoID, key = credential) => {
+      const response = await page.request.post(base + '/api/v1/gateway/address', { headers: { Authorization: 'Bearer ' + key }, data: { ip, sources: ['ip.sb', 'ipify'] } });
+      assert.equal(response.status(), 204);
+      await Promise.all([page.waitForResponse((r) => r.url().endsWith('/admin/dashboard')), page.locator('#refresh-status').click()]);
+      await page.waitForFunction(({ id, ip }) => Array.from(document.querySelectorAll('#gateways tr')).find((r) => r.textContent.includes(id))?.querySelector('[data-public-ip]')?.textContent.includes(ip), { id, ip });
+    };
+    await announce('8.8.8.8');
+    assert.match(await autoRow.locator('td').nth(1).textContent(), /8\.8\.8\.8/);
+    assert.match(await autoRow.locator('[data-public-ip]').textContent(), /ip\.sb, ipify/);
+    await autoRow.locator('details summary').click();
+    const addressForm = autoRow.locator('form[action$="/edit"]');
+    await addressForm.locator('[name="public_host"]').fill('manual.example');
+    await addressForm.getByRole('button', { name: '保存', exact: true }).click();
+    await page.locator('#gateways .form-success').waitFor();
+    await announce('9.9.9.9');
+    assert.match(await autoRow.locator('td').nth(1).textContent(), /manual\.example/);
+    const editDetails = autoRow.locator('details');
+    if (!(await editDetails.getAttribute('open') !== null)) await editDetails.locator('summary').click();
+    await addressForm.locator('[name="public_host"]').fill('');
+    await addressForm.getByRole('button', { name: '保存', exact: true }).click();
+    await page.locator('#gateways .form-success').waitFor();
+    await page.waitForFunction((id) => Array.from(document.querySelectorAll('#gateways tr')).find((r) => r.textContent.includes(id))?.cells[1].textContent.includes('9.9.9.9'), autoID);
+    const pendingRoute = await page.request.post(base + '/admin/quick-setup', { form: {
+      csrf, gateway_name: 'Pending IP Gateway', agent_name: 'Pending IP Agent', region: 'cn',
+      vmess_port: '8080', vmess_path: '/proxy', allowed_cidrs: '0.0.0.0/0',
+    } });
+    assert.equal(pendingRoute.status(), 200);
+    await page.reload();
+    const pendingID = await page.locator('#gateways tbody tr').filter({ hasText: 'Pending IP Gateway' }).locator('td code').first().textContent();
+    const pendingToken = await page.request.post(base + '/admin/enrollments', { form: { csrf, role: 'gateway', node_id: pendingID } });
+    assert.equal(pendingToken.status(), 200);
+    const pendingEnrollment = await page.request.post(base + '/api/v1/enroll', { data: { role: 'gateway', node_id: pendingID, token: (await pendingToken.text()).split('\n')[1].trim() } });
+    assert.equal(pendingEnrollment.status(), 201);
+    const pendingCredential = (await pendingEnrollment.json()).credential;
+    const pendingLink = page.locator('#links>table:first-of-type tbody tr').filter({ hasText: 'Pending IP Gateway / Pending IP Agent' });
+    const linkInput = pendingLink.locator('form[action$="/edit"] [name="url"]');
+    assert.equal(await linkInput.inputValue(), '');
+    assert.equal(await linkInput.getAttribute('required'), null);
+    await announce('8.8.8.8', pendingID, pendingCredential);
+    assert.equal(await linkInput.inputValue(), 'reality://8.8.8.8:8443/tunnel');
+    assert.equal(await pendingLink.locator('td').nth(1).locator('code').textContent(), 'reality://8.8.8.8:8443/tunnel');
+    await pendingLink.locator('details summary').click();
+    await linkInput.fill('reality://manual-link.example:8443/tunnel');
+    await announce('9.9.9.9', pendingID, pendingCredential);
+    assert.equal(await linkInput.inputValue(), 'reality://manual-link.example:8443/tunnel', 'refresh discarded an edited URL');
+    assert.equal(await pendingLink.locator('td').nth(1).locator('code').textContent(), 'reality://9.9.9.9:8443/tunnel');
     await page.setViewportSize({ width: 390, height: 844 });
     await page.goto(base + "/");
     await page.waitForFunction(() =>

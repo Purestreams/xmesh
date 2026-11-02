@@ -56,6 +56,10 @@ func FetchAgent(ctx context.Context, client *Client) (controller.AgentConfig, er
 	return result, err
 }
 
+func (c *Client) AnnouncePublicIP(ctx context.Context, report model.PublicIPReport) error {
+	return c.postJSON(ctx, "/api/v1/gateway/address", report, nil)
+}
+
 func (c *Client) Report(ctx context.Context, status model.NodeStatus, links []model.LinkStatus, grants []model.GrantStatus, probes ...[]model.UpstreamProbeStatus) error {
 	// Diagnostics can contain large subprocess output or terminal escapes. Keep
 	// normal node reports within the Controller's input limits without mutating

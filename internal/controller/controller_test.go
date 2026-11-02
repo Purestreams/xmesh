@@ -258,7 +258,7 @@ func TestPanelWarnsForInsecureWSSLinks(t *testing.T) {
 func TestSubscriptionCountsRejectMissingRelationships(t *testing.T) {
 	state := model.NewState()
 	state.Users["u"] = model.User{ID: "u", Enabled: true}
-	state.Gateways["g"] = model.Gateway{ID: "g", Enabled: true}
+	state.Gateways["g"] = model.Gateway{ID: "g", PublicHost: "edge.example", Enabled: true}
 	state.Agents["a"] = model.Agent{ID: "a", Enabled: true}
 	state.Attachments["r"] = model.Attachment{ID: "r", GatewayID: "g", AgentID: "a", Enabled: true}
 	state.Links["l"] = model.Link{ID: "l", AttachmentID: "r", Enabled: true}

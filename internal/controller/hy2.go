@@ -22,7 +22,7 @@ func configureHY2(state *model.State, gateway *model.Gateway, port int, now time
 		return fmt.Errorf("HY2 UDP port must be between 0 and 65535")
 	}
 	gateway.HY2Port = port
-	if !gateway.HY2Enabled() {
+	if !gateway.HY2Enabled() || gateway.PublicHost == "" {
 		return nil
 	}
 	if gateway.HY2Certificate == "" {
