@@ -142,9 +142,14 @@ if (typeof document !== "undefined")
     };
     let data = null,
       refreshBusy = false,
-      submitting = false,
+      refreshRequested = false,
       mapView = "topology",
       lastSuccessfulRefresh = null;
+    const submittingForms = new Set();
+    const sectionRevisions = new Map();
+    const yieldToBrowser = () => globalThis.scheduler?.yield
+      ? globalThis.scheduler.yield()
+      : new Promise((resolve) => setTimeout(resolve, 0));
     const nodeName = (id) => data?.nodes.find((n) => n.id === id)?.name || id;
     const exitID = (route) => route.upstream_id || route.agent_id;
     const routeName = (route) =>
@@ -165,7 +170,7 @@ if (typeof document !== "undefined")
       error.focus();
       error.scrollIntoView({ block: "center", behavior: "smooth" });
     }
-    function navigate() {
+    function navigate({ preserveScroll = false } = {}) {
       const target = location.hash.slice(1) || "overview";
       const section = document.getElementById(target);
       const page = names[target] ? target : section?.dataset.page || "overview";
@@ -179,6 +184,7 @@ if (typeof document !== "undefined")
       });
       $("#page-title").textContent = names[page][0];
       $("#page-description").textContent = names[page][1];
+      if (preserveScroll) return;
       if (section && target !== page) {
         const details = $("details.create-details", section);
         if (details) details.open = true;
@@ -1110,6 +1116,7 @@ if (typeof document !== "undefined")
     function renderNodeUpgrades() {
       const section = $("#node-upgrades");
       if (!section || !data) return;
+      if ([...submittingForms].some((form) => section.contains(form))) return;
       section.querySelectorAll('form[action="/admin/upgrades"] fieldset label').forEach((label) => {
         const input = label.querySelector('input[name="node_id"]');
         const node = data.nodes.find((item) => item.id === input?.value);
@@ -1296,9 +1303,9 @@ if (typeof document !== "undefined")
       targetInput.setCustomValidity(needsTarget && !manualTarget ? targetMessage : "");
       targetHint.textContent = targetMessage;
       targetHint.hidden = !needsTarget;
-      $("button[type=submit]", form).disabled = !selected || submitting;
-      $("[data-pending-select]", form).disabled = !available || submitting;
-      $("[data-pending-clear]", form).disabled = !selected || submitting;
+      $("button[type=submit]", form).disabled = !selected || submittingForms.has(form);
+      $("[data-pending-select]", form).disabled = !available || submittingForms.has(form);
+      $("[data-pending-clear]", form).disabled = !selected || submittingForms.has(form);
     }
     function enhancePendingChooser(form) {
       $(".pending-tools", form).hidden = false;
@@ -1390,7 +1397,7 @@ if (typeof document !== "undefined")
         plan = selectionPlan(kind, owner, selected, data);
       $(".selection-summary", form).textContent =
         t("已选 {0} / 可选 {1} · 新增 {2} · 重新启用 {3} · 已存在 {4}。清除选择仅影响本次提交。", selected.length, checkboxes.filter((c) => !c.disabled).length, plan.created, plan.reenabled, plan.unchanged);
-      $("button[type=submit]", form).disabled = !selected.length || submitting;
+      $("button[type=submit]", form).disabled = !selected.length || submittingForms.has(form);
       if (kind === "assign") {
         const targets = new Set(
           selected.map((id) => {
@@ -1608,7 +1615,10 @@ if (typeof document !== "undefined")
       }
     }
     async function refresh() {
-      if (refreshBusy || submitting) return;
+      if (refreshBusy) {
+        refreshRequested = true;
+        return;
+      }
       refreshBusy = true;
       try {
         const response = await fetch("/admin/dashboard", {
@@ -1623,16 +1633,12 @@ if (typeof document !== "undefined")
         )
           throw new Error(t("会话已过期或服务不可用，请重新登录后刷新。"));
         data = await response.json();
-        renderMetrics();
-        renderMap();
-        renderRouteOverview();
-        renderUpstreamProbes();
-        renderProgress();
-        renderHistory();
-        renderUsage();
-        renderOperations();
-        updateLiveTables();
-        renderNodeUpgrades();
+        for (const render of [renderMetrics, renderMap, renderRouteOverview,
+          renderUpstreamProbes, renderProgress, renderHistory, renderUsage,
+          renderOperations, updateLiveTables, renderNodeUpgrades]) {
+          render();
+          await yieldToBrowser();
+        }
         labelResponsiveTables();
         $$(".chooser").forEach((f) => {
           if (f.classList.contains("pending-chooser")) {
@@ -1666,15 +1672,21 @@ if (typeof document !== "undefined")
         $("#stale-banner").hidden = false;
       } finally {
         refreshBusy = false;
+        if (refreshRequested) {
+          refreshRequested = false;
+          void refresh();
+        }
       }
     }
-    async function replaceSections(html, submittedForm) {
+    async function replaceSections(html, submittedForm, submittedValues) {
       const doc = new DOMParser().parseFromString(html, "text/html");
       if (!$("#page-title", doc)) throw new Error(t("会话已过期，请重新登录。"));
+      const revision = BigInt($("main", doc)?.dataset.revision || "0");
       const originID = submittedForm.closest("section")?.id;
-      delete submittedForm.dataset.dirty;
+      if (new URLSearchParams(new FormData(submittedForm)).toString() === submittedValues)
+        delete submittedForm.dataset.dirty;
       clearFormError(submittedForm);
-      $$("section[data-page]")
+      const sections = $$("section[data-page]")
         .filter(
           (s) =>
             s.id !== "overview" &&
@@ -1698,29 +1710,33 @@ if (typeof document !== "undefined")
               "subscribe",
               "upgrade",
             ].includes(s.id),
+        );
+      for (const section of sections) {
+        if (
+          $("form[data-dirty]", section) ||
+          (!section.contains(submittedForm) && $("details[open]", section)) ||
+          [...submittingForms].some((form) => form !== submittedForm && section.contains(form)) ||
+          revision < (sectionRevisions.get(section.id) || 0n)
         )
-        .forEach((section) => {
-          if (
-            $("form[data-dirty]", section) ||
-            (!section.contains(submittedForm) && $("details[open]", section))
-          )
-            return;
-          const incoming = doc.getElementById(section.id);
-          if (!incoming) return;
-          const searches = $$(".table-search", section).map((s) => s.value);
-          section.replaceChildren(
-            ...[...incoming.childNodes].map((n) =>
-              document.importNode(n, true),
-            ),
-          );
-          i18n.apply(section);
-          enhance(section);
-          labelResponsiveTables(section);
-          $$(".table-search", section).forEach((s, i) => {
-            s.value = searches[i] || "";
-            s.dispatchEvent(new Event("input"));
-          });
+          continue;
+        const incoming = doc.getElementById(section.id);
+        if (!incoming) continue;
+        const searches = $$(".table-search", section).map((s) => s.value);
+        section.replaceChildren(
+          ...[...incoming.childNodes].map((n) =>
+            document.importNode(n, true),
+          ),
+        );
+        i18n.apply(section);
+        enhance(section);
+        labelResponsiveTables(section);
+        $$(".table-search", section).forEach((s, i) => {
+          s.value = searches[i] || "";
+          s.dispatchEvent(new Event("input"));
         });
+        sectionRevisions.set(section.id, revision);
+        await yieldToBrowser();
+      }
       const message = submittedForm.action.endsWith("/probe")
         ? t("测试请求已提交；请等待 Gateway 回传结果。")
         : t($("#notice", doc)?.textContent.trim()) || t("操作成功。正在跟踪配置与运行状态。");
@@ -1732,7 +1748,7 @@ if (typeof document !== "undefined")
         feedback.setAttribute("role", "status");
         $("h2", section)?.after(feedback);
       }
-      navigate();
+      navigate({ preserveScroll: true });
     }
     document.addEventListener("input", (event) => {
       if (
@@ -1754,17 +1770,20 @@ if (typeof document !== "undefined")
       const form = event.target;
       if (!form.action.includes("/admin/")) return;
       event.preventDefault();
-      if (submitting) return;
-      submitting = true;
+      if (submittingForms.has(form)) return;
+      submittingForms.add(form);
+      form.setAttribute("aria-busy", "true");
       clearFormError(form);
       $(".form-success", form.closest("section"))?.remove();
       const buttons = $$("button", form);
+      const submittedValues = new URLSearchParams(new FormData(form)).toString();
       buttons.forEach((b) => (b.disabled = true));
       try {
         const response = await fetch(form.action, {
             method: "POST",
-            body: new URLSearchParams(new FormData(form)),
+            body: new URLSearchParams(submittedValues),
             headers: { Accept: "text/html, text/plain" },
+            signal: AbortSignal.timeout(30000),
           }),
           text = await response.text();
         if (!response.ok) throw new Error(t(text.slice(0, 700).trim()));
@@ -1782,13 +1801,14 @@ if (typeof document !== "undefined")
           showDetail(t("安装选项 · 一次性令牌"), content);
           delete form.dataset.dirty;
           notice(t("已生成安装选项。关闭窗口前保存所需令牌。"));
-        } else await replaceSections(text, form);
+        } else await replaceSections(text, form, submittedValues);
       } catch (error) {
         const message = t("操作未完成：{0}。输入已保留；网络中断时请先检查操作记录，避免重复提交。", error.message);
         notice(message, true);
         showFormError(form, message);
       } finally {
-        submitting = false;
+        submittingForms.delete(form);
+        form.removeAttribute("aria-busy");
         buttons.forEach((b) => (b.disabled = false));
         await refresh();
       }

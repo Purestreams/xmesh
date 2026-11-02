@@ -211,6 +211,50 @@ const fs = require("node:fs");
     await page.screenshot({ path: out + "/network-with-external-exit.png", fullPage: true });
     await page.goto(base + "/#subscribe");
     assert.equal(await page.locator('#subscribe input[name="attachment_id"]').count(), 3);
+    // A delayed save must not stop refreshing or submitting another form.
+    // Deliver the older response last to exercise concurrent section updates.
+    await page.goto(base + "/#agents");
+    let releaseSave, markHeld, holdTimer;
+    const saveGate = new Promise((resolve) => { releaseSave = resolve; });
+    const held = new Promise((resolve) => { markHeld = resolve; });
+    let agentSubmissions = 0;
+    await page.route("**/admin/agents/a1/toggle", async (route) => {
+      agentSubmissions++;
+      const response = await route.fetch();
+      markHeld();
+      await saveGate;
+      await route.fulfill({ response });
+    });
+    try {
+      await page.locator('#agents form[action="/admin/agents/a1/toggle"] button').click();
+      await Promise.race([held, new Promise((_, reject) => {
+        holdTimer = setTimeout(() => reject(new Error("save did not reach fixture")), 5000);
+      })]);
+      clearTimeout(holdTimer);
+      await page.evaluate(() => document.querySelector('#agents form[action="/admin/agents/a1/toggle"]').requestSubmit());
+      await Promise.all([
+        page.waitForResponse("**/admin/dashboard", { timeout: 5000 }),
+        page.locator("#refresh-status").click(),
+      ]);
+      await page.locator('.sidebar a[href="#network"]').click();
+      const otherSave = page.locator('#gateways form[action="/admin/gateways/g1/toggle"]');
+      await otherSave.locator("button").click();
+      await page.locator("#gateways .form-success").waitFor({ timeout: 5000 });
+      assert.equal(agentSubmissions, 1, "duplicate submission escaped the form lock");
+      assert.equal(await page.locator('#agents form[action="/admin/agents/a1/toggle"]').getAttribute("aria-busy"), "true");
+      await page.locator('#gateways form[action="/admin/gateways/g1/toggle"]').evaluate((form) => {
+        form.closest("tr").dataset.keepLatest = "true";
+      });
+      const completed = page.waitForResponse((response) => response.url().endsWith("/admin/agents/a1/toggle"));
+      releaseSave();
+      await completed;
+      await page.waitForFunction(() => !document.querySelector('#agents form[action="/admin/agents/a1/toggle"]')?.hasAttribute("aria-busy"));
+      assert.equal(await page.locator('#gateways form[action="/admin/gateways/g1/toggle"]').evaluate((form) => form.closest("tr").dataset.keepLatest), "true", "an older save response replaced newer controls");
+    } finally {
+      clearTimeout(holdTimer);
+      releaseSave();
+      await page.unroute("**/admin/agents/a1/toggle");
+    }
     await page.setViewportSize({ width: 390, height: 844 });
     await page.goto(base + "/");
     await page.waitForFunction(() =>

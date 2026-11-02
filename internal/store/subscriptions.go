@@ -23,9 +23,9 @@ func (s *Store) ProtectSubscriptions(secret []byte) error {
 		return errors.New("subscription encryption requires a 32-byte session secret")
 	}
 	key := sha256.Sum256(append([]byte("xmesh subscription tokens v1\x00"), secret...))
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	next := s.state.Clone()
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	next := s.Snapshot()
 	if len(s.subscriptionKey) > 0 && !bytes.Equal(s.subscriptionKey, key[:]) {
 		for id, user := range next.Users {
 			user.SubscriptionTokenCipher = ""
@@ -42,7 +42,9 @@ func (s *Store) ProtectSubscriptions(secret []byte) error {
 			return err
 		}
 	}
+	s.mu.Lock()
 	s.subscriptionKey, s.state = key[:], next
+	s.mu.Unlock()
 	return nil
 }
 

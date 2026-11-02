@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"log/slog"
@@ -21,6 +22,7 @@ import (
 
 	agentpkg "github.com/Purestreams/xmesh/internal/agent"
 	"github.com/Purestreams/xmesh/internal/controller"
+	"github.com/Purestreams/xmesh/internal/hy2"
 	"github.com/Purestreams/xmesh/internal/model"
 	"github.com/Purestreams/xmesh/internal/runtimecfg"
 )
@@ -79,19 +81,31 @@ func TestGatewayAppliesChangedPayloadAtSameRevision(t *testing.T) {
 }
 
 func TestHotConfigKeepsManagedTunnelsAndEstablishedVMessTraffic(t *testing.T) {
-	t.Run("websocket", func(t *testing.T) { testHotConfigTraffic(t, false) })
-	t.Run("reality", func(t *testing.T) { testHotConfigTraffic(t, true) })
+	t.Run("websocket", func(t *testing.T) { testHotConfigTraffic(t, false, false) })
+	t.Run("reality", func(t *testing.T) { testHotConfigTraffic(t, true, false) })
+	t.Run("hy2", func(t *testing.T) { testHotConfigTraffic(t, false, true) })
 }
 
-func testHotConfigTraffic(t *testing.T, useReality bool) {
+func testHotConfigTraffic(t *testing.T, useReality, useHY2 bool) {
 	binary := os.Getenv("XMESH_TEST_XRAY")
 	if binary == "" {
 		t.Skip("XMESH_TEST_XRAY not set")
 	}
 	tunnel, socks, vmess, clientSOCKS := freeTCPAddress(t), freeTCPAddress(t), freeTCPAddress(t), freeTCPUDPAddress(t)
 	link := model.Link{ID: "link", AttachmentID: "route", URL: "ws://" + tunnel + "/tunnel", Enabled: true, Connections: 1, Priority: 10, Weight: 1, MaxStreams: 16}
-	grant := model.Grant{ID: "grant", AttachmentID: "route", Enabled: true, VMessUUID: "00000000-0000-4000-8000-000000000001", SOCKSUsername: "user", SOCKSPassword: "password"}
+	grant := model.Grant{ID: "grant", AttachmentID: "route", Enabled: true, VMessUUID: "00000000-0000-4000-8000-000000000001", HY2Auth: "hy2-original", SOCKSUsername: "user", SOCKSPassword: "password"}
 	gateway := model.Gateway{ID: "g", Enabled: true, VMessPort: testPort(t, vmess), VMessPath: "/proxy"}
+	if useHY2 {
+		if os.Getenv("XMESH_TEST_HYSTERIA") == "" {
+			t.Skip("XMESH_TEST_HYSTERIA not set")
+		}
+		certificate, key, pin, err := hy2.Generate("127.0.0.1", time.Now())
+		if err != nil {
+			t.Fatal(err)
+		}
+		gateway.PublicHost, gateway.HY2Port = "127.0.0.1", testPort(t, freeTCPUDPAddress(t))
+		gateway.HY2Certificate, gateway.HY2PrivateKey, gateway.HY2PinSHA256 = certificate, key, pin
+	}
 	var realityAddress, publicKey string
 	if useReality {
 		key, err := ecdh.X25519().GenerateKey(rand.Reader)
@@ -136,7 +150,7 @@ func testHotConfigTraffic(t *testing.T, useReality bool) {
 		}
 	}))
 	defer server.Close()
-	r := New(runtimecfg.Config{NodeID: "g", ControllerURL: server.URL, Credential: "gateway", Gateway: runtimecfg.Gateway{SOCKSListen: socks, TunnelListen: tunnel, TunnelPath: "/tunnel", RealityListen: realityAddress, XrayBinary: binary, XrayConfigPath: filepath.Join(t.TempDir(), "gateway.json"), MaxUDPAssociations: 8}}, slog.Default())
+	r := New(runtimecfg.Config{NodeID: "g", ControllerURL: server.URL, Credential: "gateway", Gateway: runtimecfg.Gateway{SOCKSListen: socks, TunnelListen: tunnel, TunnelPath: "/tunnel", RealityListen: realityAddress, StatsListen: freeTCPAddress(t), XrayBinary: binary, XrayConfigPath: filepath.Join(t.TempDir(), "gateway.json"), MaxUDPAssociations: 8}}, slog.Default())
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	if err := r.refresh(ctx); err != nil {
@@ -213,7 +227,7 @@ func testHotConfigTraffic(t *testing.T, useReality bool) {
 	agentConfig.Agent.Name, gatewayConfig.Gateway.Name = "renamed agent", "renamed gateway"
 	agentConfig.Links[0].Priority, gatewayConfig.Links[0].Priority = 30, 30
 	agentConfig.Links[0].Weight, gatewayConfig.Links[0].Weight = 7, 7
-	agentConfig.Links[0].MaxStreams, gatewayConfig.Links[0].MaxStreams = 4, 4
+	agentConfig.Links[0].MaxStreams, gatewayConfig.Links[0].MaxStreams = 8, 8
 	configMu.Unlock()
 	if err := r.refresh(ctx); err != nil {
 		t.Fatal(err)
@@ -229,7 +243,7 @@ func testHotConfigTraffic(t *testing.T, useReality bool) {
 		}
 		for _, session := range sessions {
 			if session.ID == old.ID {
-				if session.SMux != old.SMux || session.Generation != old.Generation || session.SMux.IsClosed() || session.Priority != 30 || session.Weight != 7 || session.MaxStreams != 4 {
+				if session.SMux != old.SMux || session.Generation != old.Generation || session.SMux.IsClosed() || session.Priority != 30 || session.Weight != 7 || session.MaxStreams != 8 {
 					t.Fatal("original session was replaced or did not receive scheduling policy")
 				}
 				return
@@ -264,6 +278,46 @@ func testHotConfigTraffic(t *testing.T, useReality bool) {
 	if r.udpAssociations.Load() != udpCount {
 		t.Fatal("hot update replaced the UDP association")
 	}
+	// Adding a Grant extends users, outbounds and routing through the live API.
+	// Both existing TCP and UDP must survive, and the new credential must work.
+	var existingHY2 net.Conn
+	if useHY2 {
+		client := startHY2Client(t, net.JoinHostPort("127.0.0.1", fmt.Sprint(gateway.HY2Port)), grant.HY2Auth, gateway.HY2Certificate, gateway.HY2PinSHA256, "127.0.0.1")
+		existingHY2 = dialSOCKSNoAuth(t, client, 1, target.Addr().String())
+		defer existingHY2.Close()
+	}
+	newGrant := model.Grant{ID: "new", AttachmentID: "route", Enabled: true, VMessUUID: "00000000-0000-4000-8000-000000000002", HY2Auth: "hy2-added", SOCKSUsername: "new", SOCKSPassword: "new-password"}
+	configMu.Lock()
+	agentConfig.Revision, gatewayConfig.Revision = 5, 5
+	agentConfig.GrantIDs = append(agentConfig.GrantIDs, newGrant.ID)
+	agentConfig.Links[0].GrantIDs = append(agentConfig.Links[0].GrantIDs, newGrant.ID)
+	gatewayConfig.Grants = append(gatewayConfig.Grants, newGrant)
+	configMu.Unlock()
+	waitFor(t, 3*time.Second, func() bool { return agentApplied.Load() == 5 })
+	if err := r.refresh(ctx); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, 5*time.Second, func() bool { return r.xrayAppliedRevision.Load() == 5 })
+	echo()
+	assertUDP()
+	checkOld(1)
+	newClientSOCKS := freeTCPUDPAddress(t)
+	clientConfig["inbounds"].([]any)[0].(map[string]any)["port"] = testPort(t, newClientSOCKS)
+	clientConfig["outbounds"].([]any)[0].(map[string]any)["settings"].(map[string]any)["vnext"].([]any)[0].(map[string]any)["users"].([]any)[0].(map[string]any)["id"] = newGrant.VMessUUID
+	newClientJSON, _ := json.Marshal(clientConfig)
+	newProcess := startTestXray(t, binary, newClientJSON)
+	defer stopTestProcess(newProcess)
+	waitTCP(t, newClientSOCKS, 5*time.Second)
+	newConn := dialSOCKSNoAuth(t, newClientSOCKS, 1, target.Addr().String())
+	defer newConn.Close()
+	assertLiveEcho(t, newConn)
+	if useHY2 {
+		assertLiveEcho(t, existingHY2)
+		client := startHY2Client(t, net.JoinHostPort("127.0.0.1", fmt.Sprint(gateway.HY2Port)), newGrant.HY2Auth, gateway.HY2Certificate, gateway.HY2PinSHA256, "127.0.0.1")
+		added := dialSOCKSNoAuth(t, client, 1, target.Addr().String())
+		defer added.Close()
+		assertLiveEcho(t, added)
+	}
 	// A Controller capability/credential change may alter the snapshot without
 	// a new revision. The running Xray must also pick up the actual payload.
 	configMu.Lock()
@@ -292,4 +346,16 @@ func testHotConfigTraffic(t *testing.T, useReality bool) {
 	conn = dialSOCKSNoAuth(t, clientSOCKS, 1, target.Addr().String())
 	defer conn.Close()
 	echo()
+}
+
+func assertLiveEcho(t *testing.T, conn net.Conn) {
+	t.Helper()
+	_ = conn.SetDeadline(time.Now().Add(3 * time.Second))
+	if _, err := conn.Write([]byte("hot")); err != nil {
+		t.Fatal(err)
+	}
+	reply := make([]byte, 3)
+	if _, err := io.ReadFull(conn, reply); err != nil || string(reply) != "hot" {
+		t.Fatalf("connection failed after hot update: %q %v", reply, err)
+	}
 }

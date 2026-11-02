@@ -13,6 +13,7 @@ import (
 )
 
 type Store struct {
+	writeMu         sync.Mutex
 	mu              sync.RWMutex
 	path            string
 	state           model.State
@@ -53,10 +54,12 @@ func (s *Store) View(fn func(*model.State)) {
 }
 
 func (s *Store) Update(fn func(*model.State) error) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	// Serialize transactions, but let readers keep using the last durable
+	// snapshot while a writer computes and fsyncs its replacement.
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 
-	next := s.state.Clone()
+	next := s.Snapshot()
 	if err := fn(&next); err != nil {
 		return err
 	}
@@ -68,7 +71,9 @@ func (s *Store) Update(fn func(*model.State) error) error {
 	if err := writeAtomic(s.path, persisted); err != nil {
 		return err
 	}
+	s.mu.Lock()
 	s.state = next
+	s.mu.Unlock()
 	return nil
 }
 

@@ -279,7 +279,7 @@ func buildXrayConfigWithStats(config controller.GatewayConfig, socksAddress, rea
 	if hy2Inbound != nil {
 		result.Inbounds = append(result.Inbounds, *hy2Inbound)
 	}
-	if len(config.Upstreams) > 0 && statsAddress != "" {
+	if statsAddress != "" {
 		statsHost, statsPortText, err := net.SplitHostPort(statsAddress)
 		if err != nil || statsHost != "127.0.0.1" {
 			return nil, errors.New("Xray stats must listen on 127.0.0.1")
@@ -289,7 +289,7 @@ func buildXrayConfigWithStats(config controller.GatewayConfig, socksAddress, rea
 			return nil, errors.New("invalid Xray stats port")
 		}
 		result.Inbounds = append(result.Inbounds, xrayInbound{Listen: statsHost, Port: statsPort, Protocol: "dokodemo-door", Tag: "xmesh-stats-api", Settings: xrayInboundSettings{Address: statsHost}})
-		result.API = &xrayAPI{Tag: "xmesh-api", Services: []string{"StatsService"}}
+		result.API = &xrayAPI{Tag: "xmesh-api", Services: []string{"StatsService", "HandlerService", "RoutingService"}}
 		result.Stats = &struct{}{}
 		result.Policy = &xrayPolicy{Levels: map[string]map[string]bool{"0": {"statsUserUplink": true, "statsUserDownlink": true}}}
 		result.Routing.Rules = append(result.Routing.Rules, xrayRule{Type: "field", InboundTag: []string{"xmesh-stats-api"}, OutboundTag: "xmesh-api"})
@@ -555,6 +555,23 @@ func (r *Runtime) runXrayUntilChange(ctx context.Context, config controller.Gate
 				cancel()
 				<-done
 				return errXrayReload
+			}
+			if currentErr == nil {
+				applied, hotErr := r.hotAddXrayConfig(childCtx, payload, currentPayload)
+				if hotErr != nil {
+					r.logger.Warn("Xray hot update failed; restarting to reconcile configuration", "error", hotErr)
+				}
+				if applied && hotErr == nil {
+					payload = currentPayload
+					r.mu.Lock()
+					if childCtx.Err() == nil && r.authorizationEpoch == epoch && r.config.Gateway.Enabled && time.Now().Before(r.authorizationUntil) {
+						r.xrayRunningPayload = string(payload)
+						r.xrayStatsConfig = current
+						r.xrayAppliedRevision.Store(current.Revision)
+					}
+					r.mu.Unlock()
+					continue
+				}
 			}
 			r.collectXrayStats(context.Background())
 			reportCtx, reportCancel := context.WithTimeout(context.Background(), 3*time.Second)

@@ -169,6 +169,13 @@ whose writes recently stalled; established streams are never migrated.
 
 ## Runtime boundaries
 
+Node, route, access-policy and switch changes in the Panel are applied live; the
+Controller does not restart for these saves. Nodes normally fetch configuration
+every 15 seconds. State writes are serialized and durable before acknowledgement,
+while concurrent readers continue using the last committed snapshot. The Panel
+keeps unrelated forms and status refresh usable while a save is pending. Startup
+settings in the Controller configuration file still require a Controller restart.
+
 Controller configuration saves are applied according to their effect on live traffic:
 
 - Saving identical values or changing node/Link names and Gateway region does not
@@ -183,10 +190,15 @@ Controller configuration saves are applied according to their effect on live tra
   remains allowed. Disallowed TCP streams close promptly. Pending TCP dials and UDP
   associations close when the access policy changes. Equivalent CIDR/port ordering
   does not count as a policy change. Removing a grant closes its Agent streams.
-- Gateway restarts Xray only when the generated Xray configuration changes. VMess
-  listener settings, users, upstream routes and REALITY settings can still require a
-  restart and interrupt clients on that Gateway. A metadata-only revision is reported
-  applied only when its payload matches the running process.
+- Gateway adds VMess/HY2 grants on existing routes through Xray's loopback-only
+  control API, preserving existing client TCP/UDP connections and Agent tunnels.
+  This requires the default `stats_listen` control address; do not expose it publicly.
+  Existing users, outbounds, listener settings and rule order must remain unchanged.
+  Revoking/rotating credentials, changing listeners or REALITY settings, replacing
+  upstreams, and an API failure still use a reconciled Xray restart and can interrupt
+  clients on that Gateway. A revision is acknowledged only after every API request
+  succeeds or the replacement process starts; metadata-only updates must match the
+  running payload. Binary upgrades also restart services and are not connection-free.
 
 - Upgrade Controller before Gateway and Agent for per-Link grant authorization.
   Updated Agents require the grant list attached to each Link and reject requests

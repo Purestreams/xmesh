@@ -3,10 +3,82 @@ package store
 import (
 	"errors"
 	"path/filepath"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/Purestreams/xmesh/internal/model"
 )
+
+func TestPendingUpdateDoesNotBlockCommittedReads(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	started, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	unblock := func() { once.Do(func() { close(release) }) }
+	defer unblock()
+	done := make(chan error, 1)
+	go func() {
+		done <- s.Update(func(state *model.State) error {
+			state.Users["pending"] = model.User{ID: "pending"}
+			close(started)
+			<-release
+			return nil
+		})
+	}()
+	<-started
+	read := make(chan bool, 1)
+	go func() {
+		empty := false
+		s.View(func(state *model.State) {
+			empty = len(state.Users) == 0
+		})
+		read <- empty && len(s.Snapshot().Users) == 0
+	}()
+	select {
+	case committed := <-read:
+		if !committed {
+			t.Fatal("read exposed an uncommitted update")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("a pending write blocked reads of the committed state")
+	}
+	unblock()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if s.Snapshot().Users["pending"].ID != "pending" {
+		t.Fatal("successful update was not published")
+	}
+}
+
+func TestConcurrentUpdatesPreserveAllCommits(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var writers sync.WaitGroup
+	for _, id := range []string{"a", "b", "c", "d"} {
+		writers.Go(func() {
+			if err := s.Update(func(state *model.State) error {
+				state.Users[id] = model.User{ID: id}
+				return nil
+			}); err != nil {
+				t.Error(err)
+			}
+		})
+	}
+	writers.Wait()
+	reopened, err := Open(s.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state := reopened.Snapshot(); len(state.Users) != 4 || state.Revision != 4 {
+		t.Fatalf("lost a concurrent commit: %+v", state)
+	}
+}
 
 func TestUpdateIsAtomicOnCallbackError(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.json")
