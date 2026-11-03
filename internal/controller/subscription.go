@@ -89,26 +89,39 @@ func buildSubscriptionAt(state model.State, userID string, now time.Time) (strin
 		if !gatewayOK || !gateway.Enabled {
 			continue
 		}
-		share := vmessShare{
-			Version: "2", Name: routeDisplayName(state, attachment),
-			Address: gateway.PublicHost, Port: fmt.Sprintf("%d", gateway.VMessPort),
-			ID: grant.VMessUUID, AlterID: "0", Net: "ws", Type: "none",
-			Host: gateway.VMessHost, Path: gateway.VMessPath, TLS: "", Cipher: "auto",
+		addresses := []string{gateway.PublicHost}
+		if extra := gateway.IPv6IngressHost(); extra != "" && extra != gateway.PublicHost && state.NodeStatus[gateway.ID].IPv6IngressReady && gatewayIPv6Supported(state.NodeStatus[gateway.ID].BinaryVersion) {
+			addresses = append(addresses, extra)
 		}
-		payload, err := json.Marshal(share)
-		if err != nil {
-			return "", err
-		}
-		if gateway.VMessEnabled() {
-			items = append(items, item{
-				name:    share.Name,
-				nodeID:  attachment.ID,
-				grantID: grant.ID,
-				link:    "vmess://" + base64.RawStdEncoding.EncodeToString(payload),
-			})
-		}
-		if gateway.HY2Enabled() && state.NodeStatus[gateway.ID].HY2Ready && grant.HY2Auth != "" && gateway.HY2PinSHA256 != "" {
-			items = append(items, item{name: share.Name, nodeID: attachment.ID, grantID: grant.ID + "/hy2", link: hy2Share(gateway, grant, share.Name)})
+		for index, host := range addresses {
+			name, suffix := routeDisplayName(state, attachment), ""
+			if index != 0 {
+				name += " / IPv6"
+				suffix = "/ipv6"
+			}
+			share := vmessShare{
+				Version: "2", Name: name,
+				Address: host, Port: fmt.Sprintf("%d", gateway.VMessPort),
+				ID: grant.VMessUUID, AlterID: "0", Net: "ws", Type: "none",
+				Host: gateway.VMessHost, Path: gateway.VMessPath, TLS: "", Cipher: "auto",
+			}
+			payload, err := json.Marshal(share)
+			if err != nil {
+				return "", err
+			}
+			if gateway.VMessEnabled() {
+				items = append(items, item{
+					name:    share.Name,
+					nodeID:  attachment.ID,
+					grantID: grant.ID + suffix,
+					link:    "vmess://" + base64.RawStdEncoding.EncodeToString(payload),
+				})
+			}
+			if gateway.HY2Enabled() && state.NodeStatus[gateway.ID].HY2Ready && grant.HY2Auth != "" && gateway.HY2PinSHA256 != "" {
+				endpoint := gateway
+				endpoint.PublicHost = host
+				items = append(items, item{name: share.Name, nodeID: attachment.ID, grantID: grant.ID + suffix + "/hy2", link: hy2Share(endpoint, grant, share.Name)})
+			}
 		}
 	}
 	sort.Slice(items, func(i, j int) bool {

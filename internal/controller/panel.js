@@ -1014,6 +1014,10 @@ if (typeof document !== "undefined")
             ),
           );
           if (role === "Gateway") {
+            const autoControl = $('[name="public_host_auto"]', row);
+            const ipv6Control = $('[name="ipv6_ingress_enabled"]', row);
+            if (autoControl) autoControl.disabled = !node.public_ip_supported && !autoControl.checked;
+            if (ipv6Control) ipv6Control.disabled = !node.ipv6_ingress_supported && !ipv6Control.checked;
             const endpoint = node.host?.includes(":") ? `[${node.host}]` : node.host || t("等待公网 IP 确认");
             cells[1].replaceChildren(
               el("div", node.vmess_disabled ? t("VMess/WS 已关闭") : `VMess/WS ${endpoint}:${node.vmess_port}${node.vmess_path}`),
@@ -1022,7 +1026,12 @@ if (typeof document !== "undefined")
             if (!node.vmess_disabled) cells[1].append(el("small", t("WS TLS 未启用")));
             if (!node.hy2_disabled && node.hy2_port) cells[1].append(el("small", t("自签证书 + SHA-256 pin")), el("small", node.status.hy2_ready ? t("HY2 就绪") : t("HY2 待应用")));
             const ipInfo = $("[data-public-ip]", row);
-            if (ipInfo) ipInfo.textContent = `${node.public_host_auto ? t("自动地址") : t("手动覆盖")} · ${node.host || t("等待公网 IP 确认")} · ${t("已确认公网 IP")}: ${node.detected_public_ip || "—"} · ${node.public_ip_sources || "—"}`;
+            if (ipInfo) ipInfo.textContent = `${node.public_host_auto ? t("自动地址") : t("手动覆盖")} · ${node.host || t("等待公网 IP 确认")} · ${t("已确认公网 IP")}: ${node.detected_public_ip || "—"} · ${node.public_ip_sources || "—"} · IPv6: ${node.detected_public_ipv6 || "—"} · ${node.public_ipv6_sources || "—"}`;
+            if (node.ipv6_ingress_enabled && node.detected_public_ipv6 && node.detected_public_ipv6 !== node.host) {
+              const v6 = `[${node.detected_public_ipv6}]`;
+              if (!node.vmess_disabled) cells[1].append(el("div", `VMess/WS IPv6 ${v6}:${node.vmess_port}${node.vmess_path}`));
+              if (!node.hy2_disabled && node.hy2_port) cells[1].append(el("div", `HY2 IPv6 UDP ${v6}:${node.hy2_port}`));
+            }
             runtime.append(el("small", `VMess/WS ${node.vmess_disabled ? t("已关闭") : t("已开启")}`));
             runtime.append(el("small", `HY2 ${node.hy2_disabled || !node.hy2_port ? t("已关闭") : `UDP ${node.hy2_port} · ${node.status.hy2_ready ? t("就绪") : t("待应用")}`}`));
           }
@@ -1590,14 +1599,16 @@ if (typeof document !== "undefined")
         });
         const host = quick.elements.public_host,
           url = quick.elements.link_url;
-        host.addEventListener("input", () => {
+        const syncLinkAddress = () => {
           if (!url.dataset.manual) {
-            const h = host.value.trim();
+            const h = quick.elements.public_host_auto?.checked ? "" : host.value.trim();
             url.value = h
               ? `reality://${h.includes(":") && !h.startsWith("[") ? "[" + h + "]" : h}:8443/tunnel`
               : "";
           }
-        });
+        };
+        host.addEventListener("input", syncLinkAddress);
+        quick.elements.public_host_auto?.addEventListener("change", syncLinkAddress);
         url.addEventListener("input", () => (url.dataset.manual = "true"));
       }
       const install = $("#install form", root);

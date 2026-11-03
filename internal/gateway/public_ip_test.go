@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -10,6 +11,38 @@ import (
 
 	"github.com/Purestreams/xmesh/internal/model"
 )
+
+func TestDiscoverPublicIPChecksBothFamilies(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		v4, v6 bool
+	}{
+		{"dual-stack", true, true}, {"ipv4-only", true, false}, {"ipv6-only", false, true}, {"unavailable", false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var queried []string
+			report, err := discoverPublicIPs(context.Background(), func(_ context.Context, network string) (model.PublicIPReport, error) {
+				queried = append(queried, network)
+				if network == "tcp4" && tc.v4 {
+					return model.PublicIPReport{IP: "8.8.8.8", Sources: []string{"ip.sb", "ipify"}}, nil
+				}
+				if network == "tcp6" && tc.v6 {
+					return model.PublicIPReport{IP: "2606:4700:4700::1111", Sources: []string{"ip.sb", "ifconfig.co"}}, nil
+				}
+				return model.PublicIPReport{}, errors.New("unavailable")
+			})
+			if len(queried) != 2 || (err == nil) != (tc.v4 || tc.v6) {
+				t.Fatalf("queries=%v report=%+v err=%v", queried, report, err)
+			}
+			if tc.v4 && report.IP != "8.8.8.8" {
+				t.Fatal("IPv6 replaced IPv4", report)
+			}
+			if tc.v6 && (report.IPv6 != "2606:4700:4700::1111" || len(report.IPv6Sources) != 2) {
+				t.Fatal("IPv6 consensus lost", report)
+			}
+		})
+	}
+}
 
 func TestPublicIPRequiresIndependentSourceConsensus(t *testing.T) {
 	for _, tc := range []struct {

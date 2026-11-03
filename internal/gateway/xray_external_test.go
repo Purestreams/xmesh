@@ -115,3 +115,40 @@ func TestExpiredPendingUsageDoesNotBlockStatus(t *testing.T) {
 		t.Fatalf("expired pending revision was reported: %+v", accepted)
 	}
 }
+
+func TestIPv6IngressReadinessRequiresAppliedDualStackConfig(t *testing.T) {
+	var accepted controller.StatusReport
+	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		accepted = controller.StatusReport{}
+		if err := json.NewDecoder(r.Body).Decode(&accepted); err != nil {
+			t.Error(err)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer source.Close()
+	for _, tc := range []struct {
+		name           string
+		enabled, ready bool
+		applied        uint64
+		want           bool
+	}{
+		{"applied", true, true, 2, true},
+		{"pending", true, true, 1, false},
+		{"stopped", true, false, 2, false},
+		{"disabled", false, true, 2, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runtime := New(runtimecfg.Config{NodeID: "g", ControllerURL: source.URL, Credential: "secret"}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+			runtime.config = controller.GatewayConfig{Revision: 2, Gateway: model.Gateway{ID: "g"}}
+			runtime.xrayStatsConfig = controller.GatewayConfig{Revision: tc.applied, Gateway: model.Gateway{ID: "g", IPv6IngressEnabled: tc.enabled, DetectedPublicIPv6: "2606:4700:4700::1111"}}
+			runtime.xrayAppliedRevision.Store(tc.applied)
+			runtime.xrayReady.Store(tc.ready)
+			if err := runtime.report(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if accepted.Status.IPv6IngressReady != tc.want {
+				t.Fatalf("IPv6 readiness = %v, want %v", accepted.Status.IPv6IngressReady, tc.want)
+			}
+		})
+	}
+}

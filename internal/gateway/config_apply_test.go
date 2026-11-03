@@ -84,9 +84,10 @@ func TestHotConfigKeepsManagedTunnelsAndEstablishedVMessTraffic(t *testing.T) {
 	t.Run("websocket", func(t *testing.T) { testHotConfigTraffic(t, false, false) })
 	t.Run("reality", func(t *testing.T) { testHotConfigTraffic(t, true, false) })
 	t.Run("hy2", func(t *testing.T) { testHotConfigTraffic(t, false, true) })
+	t.Run("hy2-dual-stack", func(t *testing.T) { testHotConfigTraffic(t, false, true, true) })
 }
 
-func testHotConfigTraffic(t *testing.T, useReality, useHY2 bool) {
+func testHotConfigTraffic(t *testing.T, useReality, useHY2 bool, dualStack ...bool) {
 	binary := os.Getenv("XMESH_TEST_XRAY")
 	if binary == "" {
 		t.Skip("XMESH_TEST_XRAY not set")
@@ -95,11 +96,17 @@ func testHotConfigTraffic(t *testing.T, useReality, useHY2 bool) {
 	link := model.Link{ID: "link", AttachmentID: "route", URL: "ws://" + tunnel + "/tunnel", Enabled: true, Connections: 1, Priority: 10, Weight: 1, MaxStreams: 16}
 	grant := model.Grant{ID: "grant", AttachmentID: "route", Enabled: true, VMessUUID: "00000000-0000-4000-8000-000000000001", HY2Auth: "hy2-original", SOCKSUsername: "user", SOCKSPassword: "password"}
 	gateway := model.Gateway{ID: "g", Enabled: true, VMessPort: testPort(t, vmess), VMessPath: "/proxy"}
+	hy2Host, hy2ServerName := "127.0.0.1", "127.0.0.1"
+	if len(dualStack) > 0 && dualStack[0] {
+		gateway.IPv6IngressEnabled = true
+		gateway.DetectedPublicIPv6 = "2606:4700:4700::1111"
+		hy2Host, hy2ServerName = "::1", gateway.DetectedPublicIPv6
+	}
 	if useHY2 {
 		if os.Getenv("XMESH_TEST_HYSTERIA") == "" {
 			t.Skip("XMESH_TEST_HYSTERIA not set")
 		}
-		certificate, key, pin, err := hy2.Generate("127.0.0.1", time.Now())
+		certificate, key, pin, err := hy2.Generate("127.0.0.1", time.Now(), hy2ServerName)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -282,7 +289,7 @@ func testHotConfigTraffic(t *testing.T, useReality, useHY2 bool) {
 	// Both existing TCP and UDP must survive, and the new credential must work.
 	var existingHY2 net.Conn
 	if useHY2 {
-		client := startHY2Client(t, net.JoinHostPort("127.0.0.1", fmt.Sprint(gateway.HY2Port)), grant.HY2Auth, gateway.HY2Certificate, gateway.HY2PinSHA256, "127.0.0.1")
+		client := startHY2Client(t, net.JoinHostPort(hy2Host, fmt.Sprint(gateway.HY2Port)), grant.HY2Auth, gateway.HY2Certificate, gateway.HY2PinSHA256, hy2ServerName)
 		existingHY2 = dialSOCKSNoAuth(t, client, 1, target.Addr().String())
 		defer existingHY2.Close()
 	}
@@ -313,7 +320,7 @@ func testHotConfigTraffic(t *testing.T, useReality, useHY2 bool) {
 	assertLiveEcho(t, newConn)
 	if useHY2 {
 		assertLiveEcho(t, existingHY2)
-		client := startHY2Client(t, net.JoinHostPort("127.0.0.1", fmt.Sprint(gateway.HY2Port)), newGrant.HY2Auth, gateway.HY2Certificate, gateway.HY2PinSHA256, "127.0.0.1")
+		client := startHY2Client(t, net.JoinHostPort(hy2Host, fmt.Sprint(gateway.HY2Port)), newGrant.HY2Auth, gateway.HY2Certificate, gateway.HY2PinSHA256, hy2ServerName)
 		added := dialSOCKSNoAuth(t, client, 1, target.Addr().String())
 		defer added.Close()
 		assertLiveEcho(t, added)

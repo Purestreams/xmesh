@@ -28,6 +28,11 @@ type Gateway struct {
 	Name                        string    `json:"name"`
 	PublicHost                  string    `json:"public_host"`
 	PublicHostAuto              bool      `json:"public_host_auto,omitempty"`
+	ManualPublicHost            string    `json:"manual_public_host,omitempty"`
+	IPv6IngressEnabled          bool      `json:"ipv6_ingress_enabled,omitempty"`
+	DetectedPublicIPv6          string    `json:"detected_public_ipv6,omitempty"`
+	PublicIPv6Sources           string    `json:"public_ipv6_sources,omitempty"`
+	PublicIPv6CheckedAt         time.Time `json:"public_ipv6_checked_at,omitempty"`
 	DetectedPublicIP            string    `json:"detected_public_ip,omitempty"`
 	PublicIPSources             string    `json:"public_ip_sources,omitempty"`
 	PublicIPCheckedAt           time.Time `json:"public_ip_checked_at,omitempty"`
@@ -228,6 +233,7 @@ type NodeStatus struct {
 	UpstreamProbes               bool              `json:"upstream_probes,omitempty"`
 	IngressControls              bool              `json:"ingress_controls,omitempty"`
 	HY2Ready                     bool              `json:"hy2_ready,omitempty"`
+	IPv6IngressReady             bool              `json:"ipv6_ingress_ready,omitempty"`
 	NodeID                       string            `json:"node_id"`
 	Role                         Role              `json:"role"`
 	BinaryVersion                string            `json:"binary_version,omitempty"`

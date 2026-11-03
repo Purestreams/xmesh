@@ -20,7 +20,7 @@ import (
 
 // Generate provisions a persistent ECDSA identity. Pin is the SHA-256 hash of
 // the DER certificate, as used by Hysteria's pinSHA256 (not an SPKI hash).
-func Generate(host string, now time.Time) (certificate, privateKey, pin string, err error) {
+func Generate(host string, now time.Time, additionalHosts ...string) (certificate, privateKey, pin string, err error) {
 	host = strings.Trim(host, "[]")
 	if host == "" || strings.ContainsAny(host, "/?#@ \t\r\n") || (strings.Contains(host, ":") && net.ParseIP(host) == nil) {
 		return "", "", "", fmt.Errorf("invalid HY2 certificate host")
@@ -44,6 +44,20 @@ func Generate(host string, now time.Time) (certificate, privateKey, pin string, 
 		template.IPAddresses = []net.IP{ip}
 	} else {
 		template.DNSNames = []string{host}
+	}
+	for _, extra := range additionalHosts {
+		extra = strings.Trim(extra, "[]")
+		if extra == "" || strings.ContainsAny(extra, "/?#@ \t\r\n") || (strings.Contains(extra, ":") && net.ParseIP(extra) == nil) {
+			return "", "", "", fmt.Errorf("invalid additional HY2 certificate host")
+		}
+		if extra == host {
+			continue
+		}
+		if ip := net.ParseIP(extra); ip != nil {
+			template.IPAddresses = append(template.IPAddresses, ip)
+		} else {
+			template.DNSNames = append(template.DNSNames, extra)
+		}
 	}
 	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
 	if err != nil {

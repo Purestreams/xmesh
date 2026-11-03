@@ -47,27 +47,32 @@ func pruneLinkHistory(state *model.State, now time.Time) {
 }
 
 type dashboardNode struct {
-	VMessPort         int              `json:"vmess_port,omitempty"`
-	VMessPath         string           `json:"vmess_path,omitempty"`
-	PublicHostAuto    bool             `json:"public_host_auto,omitempty"`
-	DetectedPublicIP  string           `json:"detected_public_ip,omitempty"`
-	PublicIPSources   string           `json:"public_ip_sources,omitempty"`
-	ObservedPublicIP  string           `json:"observed_public_ip,omitempty"`
-	PublicIPCheckedAt time.Time        `json:"public_ip_checked_at,omitempty"`
-	HY2Port           int              `json:"hy2_port,omitempty"`
-	VMessDisabled     bool             `json:"vmess_disabled,omitempty"`
-	HY2Disabled       bool             `json:"hy2_disabled,omitempty"`
-	ID                string           `json:"id"`
-	Name              string           `json:"name"`
-	Role              string           `json:"role"`
-	Host              string           `json:"host"`
-	Region            string           `json:"region"`
-	Target            string           `json:"target"`
-	Enabled           bool             `json:"enabled"`
-	Enrolled          bool             `json:"enrolled"`
-	Desired           uint64           `json:"desired"`
-	Status            model.NodeStatus `json:"status"`
-	Next              string           `json:"next"`
+	PublicIPSupported    bool             `json:"public_ip_supported"`
+	IPv6IngressSupported bool             `json:"ipv6_ingress_supported"`
+	IPv6IngressEnabled   bool             `json:"ipv6_ingress_enabled,omitempty"`
+	DetectedPublicIPv6   string           `json:"detected_public_ipv6,omitempty"`
+	PublicIPv6Sources    string           `json:"public_ipv6_sources,omitempty"`
+	VMessPort            int              `json:"vmess_port,omitempty"`
+	VMessPath            string           `json:"vmess_path,omitempty"`
+	PublicHostAuto       bool             `json:"public_host_auto,omitempty"`
+	DetectedPublicIP     string           `json:"detected_public_ip,omitempty"`
+	PublicIPSources      string           `json:"public_ip_sources,omitempty"`
+	ObservedPublicIP     string           `json:"observed_public_ip,omitempty"`
+	PublicIPCheckedAt    time.Time        `json:"public_ip_checked_at,omitempty"`
+	HY2Port              int              `json:"hy2_port,omitempty"`
+	VMessDisabled        bool             `json:"vmess_disabled,omitempty"`
+	HY2Disabled          bool             `json:"hy2_disabled,omitempty"`
+	ID                   string           `json:"id"`
+	Name                 string           `json:"name"`
+	Role                 string           `json:"role"`
+	Host                 string           `json:"host"`
+	Region               string           `json:"region"`
+	Target               string           `json:"target"`
+	Enabled              bool             `json:"enabled"`
+	Enrolled             bool             `json:"enrolled"`
+	Desired              uint64           `json:"desired"`
+	Status               model.NodeStatus `json:"status"`
+	Next                 string           `json:"next"`
 }
 type dashboardRoute struct {
 	Probe                *model.UpstreamProbeStatus `json:"probe,omitempty"`
@@ -144,7 +149,7 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 	state := s.panelState()
 	data := dashboardData{At: s.now().UTC(), Revision: state.Revision, Nodes: []dashboardNode{}, Routes: []dashboardRoute{}, Links: []dashboardLink{}, Users: []dashboardUser{}, Grants: []dashboardGrant{}, History: map[string][]model.LinkSample{}, Usage: usageViews(state, s.now()), Operations: state.Operations, Upgrade: s.controllerUpgradeStatus(), UpgradeTasks: sortedUpgradeTasks(state), Updaters: updaterViews(state, s.now()), UpgradeBatches: state.UpgradeBatches}
 	for _, node := range sortedGateways(state) {
-		data.Nodes = append(data.Nodes, dashboardNode{ID: node.ID, Name: node.Name, Role: "Gateway", VMessPort: node.VMessPort, VMessPath: node.VMessPath, HY2Port: node.HY2Port, VMessDisabled: node.VMessDisabled, HY2Disabled: node.HY2Disabled, Host: node.PublicHost, PublicHostAuto: node.PublicHostAuto, DetectedPublicIP: node.DetectedPublicIP, PublicIPSources: node.PublicIPSources, PublicIPCheckedAt: node.PublicIPCheckedAt, ObservedPublicIP: node.ObservedPublicIP, Region: node.Region, Target: node.RealityTarget, Enabled: node.Enabled, Enrolled: node.CredentialHash != "", Desired: node.DesiredVersion, Status: state.NodeStatus[node.ID], Next: nextDeploymentAction(state, node.ID, model.RoleGateway)})
+		data.Nodes = append(data.Nodes, dashboardNode{PublicIPSupported: node.CredentialHash == "" || gatewayAutoIPSupported(state.NodeStatus[node.ID].BinaryVersion), IPv6IngressSupported: node.CredentialHash == "" || gatewayIPv6Supported(state.NodeStatus[node.ID].BinaryVersion), ID: node.ID, Name: node.Name, Role: "Gateway", VMessPort: node.VMessPort, VMessPath: node.VMessPath, HY2Port: node.HY2Port, VMessDisabled: node.VMessDisabled, HY2Disabled: node.HY2Disabled, Host: node.PublicHost, PublicHostAuto: node.PublicHostAuto, IPv6IngressEnabled: node.IPv6IngressEnabled, DetectedPublicIPv6: node.DetectedPublicIPv6, PublicIPv6Sources: node.PublicIPv6Sources, DetectedPublicIP: node.DetectedPublicIP, PublicIPSources: node.PublicIPSources, PublicIPCheckedAt: node.PublicIPCheckedAt, ObservedPublicIP: node.ObservedPublicIP, Region: node.Region, Target: node.RealityTarget, Enabled: node.Enabled, Enrolled: node.CredentialHash != "", Desired: node.DesiredVersion, Status: state.NodeStatus[node.ID], Next: nextDeploymentAction(state, node.ID, model.RoleGateway)})
 	}
 	for _, node := range sortedAgents(state) {
 		enabled, enrolled := agentEnabled(&state, node), node.CredentialHash != ""

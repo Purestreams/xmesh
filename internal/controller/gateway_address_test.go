@@ -83,6 +83,7 @@ func TestGatewaySwitchToAutomaticKeepsWorkingAddressUntilConsensus(t *testing.T)
 		if err := configureHY2(state, &gateway, 8080, s.now()); err != nil {
 			return err
 		}
+		state.NodeStatus[gateway.ID] = model.NodeStatus{NodeID: gateway.ID, BinaryVersion: gatewayAutoIPMinimum}
 		state.Gateways[gateway.ID] = gateway
 		state.Agents["a"] = model.Agent{ID: "a", DesiredVersion: 2}
 		state.Attachments["r"] = model.Attachment{ID: "r", GatewayID: "g", AgentID: "a"}
@@ -142,6 +143,7 @@ func TestGatewayAutomaticAddressAndManualOverride(t *testing.T) {
 	if err := db.Update(func(state *model.State) error {
 		gateway := state.Gateways[gatewayID]
 		gateway.CredentialHash = auth.SecretHash("gateway-key")
+		state.NodeStatus[gatewayID] = model.NodeStatus{NodeID: gatewayID, BinaryVersion: gatewayAutoIPMinimum}
 		state.Gateways[gatewayID] = gateway
 		for id, agent := range state.Agents {
 			agentID = id

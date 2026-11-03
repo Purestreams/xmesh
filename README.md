@@ -98,6 +98,8 @@ Gateway 也可以同时提供 Agent 出口：在 **Gateway 节点** 点击 **启
 
 ## 部署
 
+在 **Gateway 节点 → 编辑与删除** 可开启“同时生成 IPv6 用户接入节点”：保留原有 IPv4/域名节点，额外生成 IPv6 VMess、HY2 节点。开启“公网 IP 自动识别”会忽略手填地址，但保留其内容，关闭后恢复使用。IPv4、IPv6 均通过多个独立来源确认；需要同时升级 Controller 和 Gateway。
+
 下面以三台独立 Linux 主机分别部署 Controller、Gateway 和 Agent。systemd 安装器支持 Debian/Ubuntu、CentOS 7/8 的 amd64、arm64；CentOS 7 自动使用兼容 systemd 219 的服务配置。Docker 安装器支持 Linux amd64、arm64，需要 Docker Engine 和 Compose 插件，并使用主机网络。Windows amd64 Release 仅提供独立可执行文件，没有 Windows 服务安装器或配套 Xray 包。
 
 同一主机、同一角色选择一种安装方式。systemd 安装器使用固定服务名和目录，Controller 与节点应分开部署。

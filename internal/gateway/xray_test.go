@@ -20,17 +20,27 @@ import (
 )
 
 func TestIPv6GatewayIngressListeners(t *testing.T) {
+	t.Run("ipv6", func(t *testing.T) { testIPv6GatewayIngressListeners(t, false) })
+	t.Run("dual-stack", func(t *testing.T) { testIPv6GatewayIngressListeners(t, true) })
+}
+
+func testIPv6GatewayIngressListeners(t *testing.T, dualStack bool) {
 	key, err := ecdh.X25519().GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatal(err)
 	}
-	cert, privateKey, pin, err := hy2.Generate("::1", time.Now())
+	host, extra := "::1", "::1"
+	if dualStack {
+		host, extra = "127.0.0.1", "2606:4700:4700::1111"
+	}
+	cert, privateKey, pin, err := hy2.Generate(host, time.Now(), extra)
 	if err != nil {
 		t.Fatal(err)
 	}
 	vmess, reality, hy2Address := freeTCPAddress(t), freeTCPAddress(t), freeTCPUDPAddress(t)
 	config := controller.GatewayConfig{Gateway: model.Gateway{
-		PublicHost: "::1", VMessPort: testPort(t, vmess), VMessPath: "/proxy", HY2Port: testPort(t, hy2Address),
+		PublicHost: host, IPv6IngressEnabled: dualStack, DetectedPublicIPv6: extra,
+		VMessPort: testPort(t, vmess), VMessPath: "/proxy", HY2Port: testPort(t, hy2Address),
 		HY2Certificate: cert, HY2PrivateKey: privateKey, HY2PinSHA256: pin,
 		RealityTarget: "example.com:443", RealityName: "example.com", RealityPrivateKey: base64.RawURLEncoding.EncodeToString(key.Bytes()),
 	}, Links: []controller.GatewayLinkConfig{{Link: model.Link{ID: "link", Enabled: true, RealityUUID: "00000000-0000-4000-8000-000000000001", RealityShortID: "0123456789abcdef"}}}}
@@ -63,16 +73,22 @@ func TestIPv6GatewayIngressListeners(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { cancel(); _ = cmd.Wait() }()
-	for _, address := range []string{vmess, reality} {
-		_, port, _ := net.SplitHostPort(address)
-		waitFor(t, 5*time.Second, func() bool {
-			conn, err := net.DialTimeout("tcp6", net.JoinHostPort("::1", port), 100*time.Millisecond)
-			if err != nil {
-				return false
-			}
-			_ = conn.Close()
-			return true
-		})
+	hosts := []string{"::1"}
+	if dualStack {
+		hosts = append(hosts, "127.0.0.1")
+	}
+	for _, host := range hosts {
+		for _, address := range []string{vmess, reality} {
+			_, port, _ := net.SplitHostPort(address)
+			waitFor(t, 5*time.Second, func() bool {
+				conn, err := net.DialTimeout("tcp", net.JoinHostPort(host, port), 100*time.Millisecond)
+				if err != nil {
+					return false
+				}
+				_ = conn.Close()
+				return true
+			})
+		}
 	}
 }
 

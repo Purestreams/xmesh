@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"net/netip"
@@ -16,31 +17,27 @@ func (s *Server) editGateway(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	name := strings.TrimSpace(r.FormValue("name"))
-	host, hostErr := normalizeGatewayPublicHost(r.FormValue("public_host"))
-	if hostErr != nil {
-		http.Error(w, hostErr.Error(), http.StatusBadRequest)
-		return
-	}
 	path := strings.TrimSpace(r.FormValue("vmess_path"))
 	port, err := parsePositive(r.FormValue("vmess_port"), 0)
 	if name == "" || port < 1 || port > 65535 || err != nil || !strings.HasPrefix(path, "/") {
 		http.Error(w, "valid name, port, and WS path are required", http.StatusBadRequest)
 		return
 	}
+	notFound := errors.New("gateway not found")
 	err = s.store.Update(func(state *model.State) error {
 		gateway, ok := state.Gateways[r.PathValue("id")]
 		if !ok {
-			return fmt.Errorf("gateway not found")
+			return notFound
 		}
 		vmessHost := strings.TrimSpace(r.FormValue("vmess_host"))
-		gateway.PublicHostAuto = host == ""
-		if gateway.PublicHostAuto {
-			host = gateway.DetectedPublicIP
-			if host == "" {
-				// Switching an existing node to automatic discovery must not
-				// withdraw its working address while providers are unavailable.
-				host = gateway.PublicHost
-			}
+		previous := gateway
+		previousIPv6 := gateway.IPv6IngressHost()
+		host, err := gatewayAddressForm(r, &gateway)
+		if err != nil {
+			return err
+		}
+		if err := validateGatewayAddressActivation(previous, gateway, state.NodeStatus[gateway.ID]); err != nil {
+			return err
 		}
 		previousVMessDisabled, previousHY2Disabled := gateway.VMessDisabled, gateway.HY2Disabled
 		applyIngressSwitches(r, &gateway)
@@ -51,7 +48,7 @@ func (s *Server) editGateway(w http.ResponseWriter, r *http.Request) {
 		if r.Form.Has("ingress_controls") && !gateway.HY2Disabled && hy2Port == 0 {
 			hy2Port = port
 		}
-		connectionChanged := gateway.PublicHost != host || gateway.VMessPort != port || gateway.VMessPath != path || gateway.VMessHost != vmessHost || gateway.HY2Port != hy2Port || previousVMessDisabled != gateway.VMessDisabled || previousHY2Disabled != gateway.HY2Disabled
+		connectionChanged := gateway.PublicHost != host || previousIPv6 != gateway.IPv6IngressHost() || gateway.VMessPort != port || gateway.VMessPath != path || gateway.VMessHost != vmessHost || gateway.HY2Port != hy2Port || previousVMessDisabled != gateway.VMessDisabled || previousHY2Disabled != gateway.HY2Disabled
 		changeGatewayHost(state, &gateway, host)
 		gateway.Name, gateway.PublicHost, gateway.VMessPort, gateway.VMessPath, gateway.VMessHost = name, host, port, path, vmessHost
 		if err := configureHY2(state, &gateway, hy2Port, s.now()); err != nil {
@@ -75,7 +72,11 @@ func (s *Server) editGateway(w http.ResponseWriter, r *http.Request) {
 		return nil
 	})
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
+		status := http.StatusBadRequest
+		if errors.Is(err, notFound) {
+			status = http.StatusNotFound
+		}
+		http.Error(w, err.Error(), status)
 		return
 	}
 	http.Redirect(w, r, "/", http.StatusSeeOther)

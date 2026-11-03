@@ -445,6 +445,7 @@ func (r *Runtime) report(ctx context.Context) error {
 	nodeStatus.UpstreamProbes = true
 	nodeStatus.UpstreamProbeIntervalSeconds = int64(r.local.Gateway.UpstreamProbeInterval.Value(time.Minute) / time.Second)
 	nodeStatus.HY2Ready = nodeStatus.XrayReady && activeXrayConfig.Gateway.HY2Enabled() && nodeStatus.AppliedVersion == config.Revision
+	nodeStatus.IPv6IngressReady = nodeStatus.XrayReady && activeXrayConfig.Gateway.IPv6IngressHost() != "" && nodeStatus.AppliedVersion == config.Revision
 	if err := r.client.Report(ctx, nodeStatus, linkList, grantList, r.upstreamProbeSnapshot(config)); err != nil {
 		if nodeclient.AuthorizationRejected(err) {
 			r.invalidateAuthorization()

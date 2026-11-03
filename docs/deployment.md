@@ -173,7 +173,7 @@ Gateway addresses can be left blank at creation (including full-route setup).
 Gateway queries `https://api.ip.sb/ip`, `https://api64.ipify.org` and
 `https://ifconfig.co/ip` over direct HTTPS, without environment proxies or managed
 exits. At least two independent services must agree on a public IP. IPv4 is tried
-first and IPv6 is checked separately if IPv4 cannot reach consensus. Discovery runs
+first and IPv6 is checked independently even when IPv4 succeeds. Discovery runs
 in the background at startup and every 15 minutes; failures retry after one minute
 and retain the last confirmed address. Query timeouts never block traffic serving.
 
@@ -181,10 +181,26 @@ The authenticated Gateway announces its confirmed address and sources to Control
 The Panel shows automatic/manual mode, the confirmed IP, source names and the
 source IP observed by Controller. The observed IP is supplementary, since policy
 routing or NAT can use different source addresses for different destinations.
-Existing manually configured addresses remain manual overrides. Enter an address
-in the Gateway edit form to override detection; clear it to restore automatic mode.
-If an existing node has not confirmed an IP yet, clearing its override retains the
-current working address until the first successful consensus.
+Existing manually configured addresses remain manual overrides. In the Gateway
+edit form, enable **public IP automatic discovery** to ignore the manual address;
+the manual value is retained and restored when automatic discovery is disabled.
+New Gateways default to automatic discovery. Without a confirmed IP, an existing
+Gateway retains its current working address until the first successful consensus.
+
+Enable **also generate IPv6 user ingress nodes** to keep the primary IPv4/domain
+entries and add IPv6 VMess and HY2 entries after IPv6 reaches consensus. Both
+Controller and Gateway must support this feature. Automatic discovery requires
+Gateway v0.4.6 or newer; dual-stack IPv6 requires v0.4.7 or newer. Controller
+checks the reported stable binary version before enabling features on installed
+nodes, accepting address reports, and publishing IPv6 subscriptions/bundles.
+Unknown, development and prerelease versions are not assumed compatible.
+Uninstalled Gateways may be preconfigured, but cannot publish IPv6 entries until
+a supported version reports successful application. The Gateway listens on both
+families, and HY2 uses one certificate covering both addresses. IPv6 strict HY2
+client bundles are available separately. Subscription entries remain unpublished
+until the Gateway acknowledges the new configuration. A temporary IPv4 probe
+failure retains the last confirmed IPv4. Initial enablement may reload listeners
+and rotate the HY2 certificate; established connections can be interrupted then.
 Announcements never replace an override or restart a node when its effective
 address is unchanged. Detection does not establish inbound port reachability;
 NAT forwarding or domain-based access may still require an explicit override.

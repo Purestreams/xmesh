@@ -98,6 +98,8 @@ A Gateway can also provide its own Agent exit. Click **Enable embedded Agent** u
 
 ## Deployment
 
+In **Gateway nodes → Edit and delete**, enable **also generate IPv6 user ingress nodes** to retain IPv4/domain entries and add IPv6 VMess and HY2 entries. Enable **public IP automatic discovery** to ignore the manual address while retaining it for later use. Both address families require agreement from independent sources. Upgrade both Controller and Gateway for these features.
+
 This walkthrough uses three separate Linux hosts for Controller, Gateway and Agent. The systemd installers support Debian/Ubuntu and CentOS 7/8 on amd64 and arm64; CentOS 7 automatically uses service settings compatible with systemd 219. The Docker installer supports Linux amd64 and arm64, requires Docker Engine with the Compose plugin, and uses host networking. Windows amd64 releases contain only a standalone executable, without a Windows service installer or bundled Xray.
 
 Choose one installation method per role on a host. The systemd installers use fixed service names and paths; deploy the Controller separately from nodes.

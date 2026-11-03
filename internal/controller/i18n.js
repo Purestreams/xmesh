@@ -3,6 +3,11 @@
 // Source messages are Chinese; English-only labels have explicit Chinese overrides.
 const XMeshI18n = (() => {
   const english = {
+    "下载 IPv6 HY2 严格验证客户端包": "Download IPv6 HY2 strict-verification client bundle",
+    "关闭自动识别后使用此地址": "Use this address when automatic discovery is disabled",
+    "启用公网 IP 自动识别（忽略手填地址）": "Enable public IP discovery (ignore the manual address)",
+    "自动识别需要 Gateway v0.4.6+；双栈 IPv6 需要 v0.4.7+。已安装节点须先上报支持的版本。": "Public IP discovery requires Gateway v0.4.6+; dual-stack IPv6 requires v0.4.7+. Installed nodes must report a supported version first.",
+    "同时生成 IPv6 用户接入节点": "Also generate IPv6 client nodes",
     "留空：自动识别公网 IP，可手动覆盖": "Leave blank to detect the public IP; enter an address to override",
     "留空：随 Gateway 公网 IP 自动生成": "Leave blank to generate from the Gateway public IP",
     "自动地址": "Automatic address",

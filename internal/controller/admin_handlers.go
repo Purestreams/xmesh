@@ -121,7 +121,8 @@ func (s *Server) createGateway(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	name := strings.TrimSpace(r.FormValue("name"))
-	host, hostErr := normalizeGatewayPublicHost(r.FormValue("public_host"))
+	address := model.Gateway{}
+	host, hostErr := gatewayAddressForm(r, &address)
 	if hostErr != nil {
 		http.Error(w, hostErr.Error(), http.StatusBadRequest)
 		return
@@ -150,7 +151,7 @@ func (s *Server) createGateway(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	err = s.store.Update(func(state *model.State) error {
-		state.Gateways[id] = model.Gateway{ID: id, Name: name, PublicHost: host, PublicHostAuto: host == "", Region: region, VMessPort: port, VMessPath: path, VMessHost: strings.TrimSpace(r.FormValue("vmess_host")), Enabled: true, DesiredVersion: 1, CreatedAt: s.now().UTC()}
+		state.Gateways[id] = model.Gateway{ID: id, Name: name, PublicHost: host, PublicHostAuto: address.PublicHostAuto, ManualPublicHost: address.ManualPublicHost, IPv6IngressEnabled: address.IPv6IngressEnabled, Region: region, VMessPort: port, VMessPath: path, VMessHost: strings.TrimSpace(r.FormValue("vmess_host")), Enabled: true, DesiredVersion: 1, CreatedAt: s.now().UTC()}
 		gateway := state.Gateways[id]
 		applyIngressSwitches(r, &gateway)
 		if err := configureHY2(state, &gateway, hy2Port, s.now()); err != nil {
@@ -208,7 +209,8 @@ func (s *Server) quickSetup(w http.ResponseWriter, r *http.Request) {
 	}
 	gwName := strings.TrimSpace(r.FormValue("gateway_name"))
 	agtName := strings.TrimSpace(r.FormValue("agent_name"))
-	publicHost, hostErr := normalizeGatewayPublicHost(r.FormValue("public_host"))
+	address := model.Gateway{}
+	publicHost, hostErr := gatewayAddressForm(r, &address)
 	if hostErr != nil {
 		http.Error(w, hostErr.Error(), http.StatusBadRequest)
 		return
@@ -265,7 +267,7 @@ func (s *Server) quickSetup(w http.ResponseWriter, r *http.Request) {
 	}
 	now := s.now().UTC()
 	err = s.store.Update(func(state *model.State) error {
-		state.Gateways[gwID] = model.Gateway{ID: gwID, Name: gwName, PublicHost: publicHost, PublicHostAuto: publicHost == "", Region: region, VMessPort: vmessPort, VMessPath: vmessPath, VMessHost: strings.TrimSpace(r.FormValue("vmess_host")), Enabled: true, DesiredVersion: 1, CreatedAt: now}
+		state.Gateways[gwID] = model.Gateway{ID: gwID, Name: gwName, PublicHost: publicHost, PublicHostAuto: address.PublicHostAuto, ManualPublicHost: address.ManualPublicHost, IPv6IngressEnabled: address.IPv6IngressEnabled, Region: region, VMessPort: vmessPort, VMessPath: vmessPath, VMessHost: strings.TrimSpace(r.FormValue("vmess_host")), Enabled: true, DesiredVersion: 1, CreatedAt: now}
 		gateway := state.Gateways[gwID]
 		applyIngressSwitches(r, &gateway)
 		if err := configureHY2(state, &gateway, hy2Port, now); err != nil {

@@ -25,8 +25,19 @@ func configureHY2(state *model.State, gateway *model.Gateway, port int, now time
 	if !gateway.HY2Enabled() || gateway.PublicHost == "" {
 		return nil
 	}
-	if gateway.HY2Certificate == "" {
-		cert, key, pin, err := hy2.Generate(gateway.PublicHost, now)
+	extra := gateway.IPv6IngressHost()
+	if gateway.HY2Certificate != "" {
+		if err := hy2.Validate(gateway.HY2Certificate, gateway.HY2PrivateKey, gateway.HY2PinSHA256, gateway.PublicHost, now); err != nil {
+			return err
+		}
+	}
+	additional := []string{}
+	if extra != "" {
+		additional = append(additional, extra)
+	}
+	missingIPv6 := extra != "" && gateway.HY2Certificate != "" && hy2.Validate(gateway.HY2Certificate, gateway.HY2PrivateKey, gateway.HY2PinSHA256, extra, now) != nil
+	if gateway.HY2Certificate == "" || missingIPv6 {
+		cert, key, pin, err := hy2.Generate(gateway.PublicHost, now, additional...)
 		if err != nil {
 			return err
 		}
@@ -76,6 +87,14 @@ func (s *Server) hy2ClientBundle(w http.ResponseWriter, r *http.Request, state m
 	if !ok || grant.UserID != userID || !state.Users[userID].Enabled || !grant.Enabled || !grant.Published || !subscriptionRouteAvailable(&state, attachment, s.now()) || !gateway.Enabled || !gateway.HY2Enabled() || !state.NodeStatus[gateway.ID].HY2Ready || grant.HY2Auth == "" {
 		http.Error(w, "HY2 authorization unavailable", http.StatusForbidden)
 		return
+	}
+	if r.URL.Query().Get("family") == "6" {
+		host := gateway.IPv6IngressHost()
+		if host == "" || !state.NodeStatus[gateway.ID].IPv6IngressReady || !gatewayIPv6Supported(state.NodeStatus[gateway.ID].BinaryVersion) {
+			http.Error(w, "IPv6 ingress unavailable", http.StatusForbidden)
+			return
+		}
+		gateway.PublicHost = host
 	}
 	if err := hy2.Validate(gateway.HY2Certificate, gateway.HY2PrivateKey, gateway.HY2PinSHA256, gateway.PublicHost, s.now()); err != nil {
 		http.Error(w, "HY2 certificate unavailable", http.StatusConflict)

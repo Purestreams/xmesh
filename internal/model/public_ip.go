@@ -9,8 +9,25 @@ func PublicIPSources() []PublicIPSource {
 }
 
 type PublicIPReport struct {
-	IP      string   `json:"ip"`
-	Sources []string `json:"sources"`
+	IP          string   `json:"ip"`
+	Sources     []string `json:"sources"`
+	IPv6        string   `json:"ipv6,omitempty"`
+	IPv6Sources []string `json:"ipv6_sources,omitempty"`
+}
+
+func (g Gateway) IPv6IngressHost() string {
+	ip, ok := ParsePublicIP(g.DetectedPublicIPv6)
+	if !g.IPv6IngressEnabled || !ok || !ip.Is6() {
+		return ""
+	}
+	return ip.String()
+}
+
+func (g Gateway) ManualHost() string {
+	if g.ManualPublicHost != "" || g.PublicHostAuto {
+		return g.ManualPublicHost
+	}
+	return g.PublicHost
 }
 
 func ParsePublicIP(value string) (netip.Addr, bool) {

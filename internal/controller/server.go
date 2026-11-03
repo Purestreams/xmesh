@@ -93,8 +93,10 @@ func New(cfg Config, state *store.Store, logger *slog.Logger) (*Server, error) {
 			}
 			return "applied"
 		},
-		"join":             func(values []string) string { return strings.Join(values, ", ") },
-		"canResumeUpgrade": canResumeUpgrade,
+		"join":                   func(values []string) string { return strings.Join(values, ", ") },
+		"canResumeUpgrade":       canResumeUpgrade,
+		"gatewayAutoIPSupported": gatewayAutoIPSupported,
+		"gatewayIPv6Supported":   gatewayIPv6Supported,
 		"insecureWSS": func(link model.Link) bool {
 			return strings.HasPrefix(strings.ToLower(link.URL), "wss://") && !link.TLSVerify
 		},

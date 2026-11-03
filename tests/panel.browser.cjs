@@ -33,6 +33,25 @@ const fs = require("node:fs");
       document.querySelector("#refresh-note").textContent.startsWith("已更新"),
     );
     await page.locator("#metrics .metric").first().waitFor();
+    assert.equal(await page.locator('#gateways form[action="/admin/gateways/g1/edit"] [name="public_host_auto"]').isDisabled(), true);
+    assert.equal(await page.locator('#gateways form[action="/admin/gateways/g1/edit"] [name="ipv6_ingress_enabled"]').isDisabled(), true);
+    // Version/capability changes must update controls without a full reload.
+    const upgradedGateway = async (route) => {
+      const response = await route.fetch();
+      const data = await response.json();
+      const node = data.nodes.find((node) => node.id === 'g1');
+      node.status.binary_version = 'v0.4.7';
+      node.public_ip_supported = node.ipv6_ingress_supported = true;
+      await route.fulfill({ response, json: data });
+    };
+    await page.route('**/admin/dashboard', upgradedGateway);
+    await Promise.all([page.waitForResponse((r) => r.url().endsWith('/admin/dashboard')), page.locator('#refresh-status').click()]);
+    await page.waitForFunction(() => !document.querySelector('#gateways form[action="/admin/gateways/g1/edit"] [name="ipv6_ingress_enabled"]').disabled);
+    assert.equal(await page.locator('#gateways form[action="/admin/gateways/g1/edit"] [name="public_host_auto"]').isDisabled(), false);
+    await page.unroute('**/admin/dashboard', upgradedGateway);
+    await Promise.all([page.waitForResponse((r) => r.url().endsWith('/admin/dashboard')), page.locator('#refresh-status').click()]);
+    await page.waitForFunction(() => document.querySelector('#gateways form[action="/admin/gateways/g1/edit"] [name="ipv6_ingress_enabled"]').disabled);
+    assert.equal(await page.locator('#gateways form[action="/admin/gateways/g1/edit"] [name="public_host_auto"]').isDisabled(), true);
     assert.equal(await page.locator("section[data-page]:visible").count(), 4);
     assert.equal(await page.locator("#topology svg .node").count(), 4);
     assert.equal(await page.locator("#topology svg .route-label").count(), 0);
@@ -137,6 +156,7 @@ const fs = require("node:fs");
     await page
       .locator("#create-route input[name=agent_name]")
       .fill("New agent");
+    await page.locator('#create-route input[name="public_host_auto"]').uncheck();
     await page
       .locator("#create-route input[name=public_host]")
       .fill("203.0.113.7");
@@ -165,6 +185,7 @@ const fs = require("node:fs");
     assert.ok(await page.locator('#wizard-gateway input[name="vmess_enabled"]').isChecked());
     assert.ok(await page.locator('#wizard-gateway input[name="hy2_enabled"]').isChecked());
     await page.locator('#wizard-gateway input[name="name"]').fill("Browser QA Gateway");
+    await page.locator('#wizard-gateway input[name="public_host_auto"]').uncheck();
     await page.locator('#wizard-gateway input[name="public_host"]').fill("qa.example.com");
     await page.locator('#wizard-gateway select[name="region"]').selectOption("overseas");
     await page.locator('#wizard-gateway form[action="/admin/gateways"] button').click();
@@ -260,6 +281,8 @@ const fs = require("node:fs");
     await page.goto(base + "/#wizard-gateway");
     const autoWizard = page.locator('#wizard-gateway form');
     await autoWizard.locator('[name="name"]').fill("Browser Auto Gateway");
+    await autoWizard.locator('[name="public_host"]').fill('ignored.example');
+    await autoWizard.locator('[name="ipv6_ingress_enabled"]').check();
     assert.equal(await autoWizard.locator('[name="public_host"]').getAttribute("required"), null);
     await autoWizard.locator('button').click();
     await page.locator('#wizard-gateway .form-success').waitFor();
@@ -274,7 +297,9 @@ const fs = require("node:fs");
     assert.equal(enrollment.status(), 201);
     const credential = (await enrollment.json()).credential;
     const announce = async (ip, id = autoID, key = credential) => {
-      const response = await page.request.post(base + '/api/v1/gateway/address', { headers: { Authorization: 'Bearer ' + key }, data: { ip, sources: ['ip.sb', 'ipify'] } });
+      const status = await page.request.post(base + '/api/v1/status', { headers: { Authorization: 'Bearer ' + key }, data: { status: { node_id: id, role: 'gateway', binary_version: 'v0.4.7' } } });
+      assert.equal(status.status(), 204);
+      const response = await page.request.post(base + '/api/v1/gateway/address', { headers: { Authorization: 'Bearer ' + key }, data: { ip, sources: ['ip.sb', 'ipify'], ipv6: '2606:4700:4700::1111', ipv6_sources: ['ip.sb', 'ifconfig.co'] } });
       assert.equal(response.status(), 204);
       await Promise.all([page.waitForResponse((r) => r.url().endsWith('/admin/dashboard')), page.locator('#refresh-status').click()]);
       await page.waitForFunction(({ id, ip }) => Array.from(document.querySelectorAll('#gateways tr')).find((r) => r.textContent.includes(id))?.querySelector('[data-public-ip]')?.textContent.includes(ip), { id, ip });
@@ -282,8 +307,11 @@ const fs = require("node:fs");
     await announce('8.8.8.8');
     assert.match(await autoRow.locator('td').nth(1).textContent(), /8\.8\.8\.8/);
     assert.match(await autoRow.locator('[data-public-ip]').textContent(), /ip\.sb, ipify/);
+    assert.match(await autoRow.locator('td').nth(1).textContent(), /IPv6.*2606:4700:4700::1111/);
     await autoRow.locator('details summary').click();
     const addressForm = autoRow.locator('form[action$="/edit"]');
+    assert.equal(await addressForm.locator('[name="public_host"]').inputValue(), 'ignored.example');
+    await addressForm.locator('[name="public_host_auto"]').uncheck();
     await addressForm.locator('[name="public_host"]').fill('manual.example');
     await addressForm.getByRole('button', { name: '保存', exact: true }).click();
     await page.locator('#gateways .form-success').waitFor();
@@ -291,10 +319,11 @@ const fs = require("node:fs");
     assert.match(await autoRow.locator('td').nth(1).textContent(), /manual\.example/);
     const editDetails = autoRow.locator('details');
     if (!(await editDetails.getAttribute('open') !== null)) await editDetails.locator('summary').click();
-    await addressForm.locator('[name="public_host"]').fill('');
+    await addressForm.locator('[name="public_host_auto"]').check();
     await addressForm.getByRole('button', { name: '保存', exact: true }).click();
     await page.locator('#gateways .form-success').waitFor();
     await page.waitForFunction((id) => Array.from(document.querySelectorAll('#gateways tr')).find((r) => r.textContent.includes(id))?.cells[1].textContent.includes('9.9.9.9'), autoID);
+    assert.equal(await addressForm.locator('[name="public_host"]').inputValue(), 'manual.example', 'automatic mode discarded the manual fallback');
     const pendingRoute = await page.request.post(base + '/admin/quick-setup', { form: {
       csrf, gateway_name: 'Pending IP Gateway', agent_name: 'Pending IP Agent', region: 'cn',
       vmess_port: '8080', vmess_path: '/proxy', allowed_cidrs: '0.0.0.0/0',

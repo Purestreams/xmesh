@@ -17,25 +17,44 @@ import (
 // managed Agent routes and external upstreams. Query each address family alone
 // so a dual-stack host does not mistake IPv4/IPv6 answers for disagreement.
 func discoverPublicIP(ctx context.Context) (model.PublicIPReport, error) {
+	return discoverPublicIPs(ctx, discoverPublicIPFamily)
+}
+
+func discoverPublicIPFamily(ctx context.Context, network string) (model.PublicIPReport, error) {
+	dialer := &net.Dialer{Timeout: 4 * time.Second}
+	transport := &http.Transport{
+		DialContext: func(ctx context.Context, _ string, address string) (net.Conn, error) {
+			return dialer.DialContext(ctx, network, address)
+		},
+		TLSClientConfig:     &tls.Config{MinVersion: tls.VersionTLS12},
+		TLSHandshakeTimeout: 4 * time.Second, ResponseHeaderTimeout: 4 * time.Second,
+	}
+	defer transport.CloseIdleConnections()
+	client := &http.Client{Transport: transport, Timeout: 5 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	return queryPublicIP(ctx, client, network)
+}
+
+func discoverPublicIPs(ctx context.Context, query func(context.Context, string) (model.PublicIPReport, error)) (model.PublicIPReport, error) {
+	var confirmed model.PublicIPReport
 	for _, network := range []string{"tcp4", "tcp6"} {
-		dialer := &net.Dialer{Timeout: 4 * time.Second}
-		transport := &http.Transport{
-			DialContext: func(ctx context.Context, _ string, address string) (net.Conn, error) {
-				return dialer.DialContext(ctx, network, address)
-			},
-			TLSClientConfig:       &tls.Config{MinVersion: tls.VersionTLS12},
-			TLSHandshakeTimeout:   4 * time.Second,
-			ResponseHeaderTimeout: 4 * time.Second,
-		}
-		client := &http.Client{Transport: transport, Timeout: 5 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-		report, err := queryPublicIP(ctx, client, network)
-		transport.CloseIdleConnections()
+		report, err := query(ctx, network)
 		if err == nil {
-			return report, nil
+			if confirmed.IP == "" {
+				confirmed = report
+			}
+			if network == "tcp6" {
+				confirmed.IPv6, confirmed.IPv6Sources = report.IP, report.Sources
+			}
 		}
 		if ctx.Err() != nil {
+			if confirmed.IP != "" {
+				return confirmed, nil
+			}
 			return model.PublicIPReport{}, ctx.Err()
 		}
+	}
+	if confirmed.IP != "" {
+		return confirmed, nil
 	}
 	return model.PublicIPReport{}, fmt.Errorf("public IP sources did not reach a two-source consensus")
 }
