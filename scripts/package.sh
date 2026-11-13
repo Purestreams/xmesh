@@ -26,7 +26,7 @@ for arch in amd64 arm64; do
   set -- $(od -An -tu1 -j18 -N2 "$xray_path")
   case "$arch:$1:$2" in amd64:62:0|arm64:183:0) ;; *) echo "Xray binary architecture does not match $arch" >&2; exit 1;; esac
   case "$(go version "$xray_path")" in *": go$GO_VERSION") ;; *) echo "Xray binary for $arch must be built with Go $GO_VERSION" >&2; exit 1;; esac
-  metadata=$(go version -m "$xray_path" | awk '$1 == "dep" { print $2, $3, $4 }')
+  metadata=$(go version -m "$xray_path" | awk '$1 == "mod" || $1 == "dep" { print $2, $3, $4 }')
   for module in github.com/xtls/xray-core github.com/andybalholm/brotli github.com/klauspost/compress; do
     pinned=$(cd "$root/build/gateway-xray" && go list -m -f '{{.Path}} {{.Version}} {{.Sum}}' "$module")
     if ! printf '%s\n' "$metadata" | grep -Fx "$pinned" >/dev/null; then
