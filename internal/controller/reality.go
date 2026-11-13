@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
@@ -30,6 +31,67 @@ func defaultRealityTarget(region string) string {
 
 func validGatewayRegion(region string) bool {
 	return region == "" || region == "cn" || region == "overseas"
+}
+
+func parseRealityPort(r *http.Request, fallback int) (int, error) {
+	if !r.Form.Has("reality_port") {
+		return fallback, nil
+	}
+	value := strings.TrimSpace(r.FormValue("reality_port"))
+	if value == "" {
+		return 0, nil
+	}
+	port, err := strconv.Atoi(value)
+	if err != nil || port < 1 || port > 65535 {
+		return 0, errors.New("REALITY TCP port must be between 1 and 65535")
+	}
+	return port, nil
+}
+
+func gatewayRealityURL(host string, port int) string {
+	if host == "" {
+		return ""
+	}
+	return "reality://" + net.JoinHostPort(host, strconv.Itoa(port)) + "/tunnel"
+}
+
+func realityLinkForNode(gateway model.Gateway, link model.Link) model.Link {
+	if link.AutoURL && gateway.PreviousRealityLinkPort != 0 {
+		link.URL = gatewayRealityURL(gateway.PublicHost, gateway.PreviousRealityLinkPort)
+	}
+	return link
+}
+
+func confirmGatewayRealityPort(state *model.State, gateway *model.Gateway, status model.NodeStatus) {
+	if gateway.RealityPortPendingRevision == 0 || !gateway.Enabled || !status.RealityPortControl || !status.XrayReady ||
+		status.AppliedVersion < gateway.RealityPortPendingRevision || status.AppliedVersion > gateway.DesiredVersion {
+		return
+	}
+	previous := gateway.PreviousRealityLinkPort
+	gateway.PreviousRealityLinkPort, gateway.RealityPortPendingRevision = 0, 0
+	if previous == gateway.RealityLinkPort() {
+		return
+	}
+	agents := map[string]bool{}
+	for _, link := range state.Links {
+		attachment := state.Attachments[link.AttachmentID]
+		if link.AutoURL && attachment.GatewayID == gateway.ID {
+			agents[attachment.AgentID] = true
+		}
+	}
+	for id := range agents {
+		bumpAgent(state, id)
+	}
+}
+
+func validateGatewayRealityPort(previous, next model.Gateway) error {
+	// Let existing configurations with a locally managed listener remain editable.
+	// If VMess is being enabled or either port is changing, prevent a TCP collision.
+	if next.VMessEnabled() && next.RealityLinkPort() == next.VMessPort &&
+		(next.RealityPort != 0 || previous.VMessPort != next.VMessPort || !previous.VMessEnabled() || previous.RealityPort != next.RealityPort) {
+		return errors.New("REALITY and VMess cannot use the same TCP port")
+	}
+	return nil
 }
 
 // provisionReality keeps one REALITY identity per Gateway and one VLESS identity per Link.

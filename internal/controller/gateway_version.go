@@ -10,6 +10,15 @@ import (
 
 const gatewayAutoIPMinimum = "v0.4.6"
 const gatewayIPv6Minimum = "v0.4.7"
+const gatewayRealityPortMinimum = "v0.4.8"
+
+func gatewayRealityPortReleaseSupported(version string) bool {
+	return gatewayVersionAtLeast(version, [3]uint64{0, 4, 8})
+}
+
+func (s *Server) gatewayRealityPortReleaseCompatible(gateway model.Gateway) bool {
+	return (gateway.RealityPort == 0 && gateway.RealityPortPendingRevision == 0) || gatewayRealityPortReleaseSupported(s.cfg.ReleaseVersion)
+}
 
 // Accept stable release versions only. Unknown, development and prerelease
 // builds must not be assumed to implement a released feature.

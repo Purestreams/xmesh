@@ -14,6 +14,8 @@ rotate_credential=false
 vmess_port='8080'
 vmess_enabled=true
 hy2_port='0'
+reality_port='8443'
+reality_port_set=false
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -29,6 +31,7 @@ while [ "$#" -gt 0 ]; do
     --vmess-port) vmess_port=$2; shift 2 ;;
     --disable-vmess) vmess_enabled=false; shift ;;
     --hy2-port) hy2_port=$2; shift 2 ;;
+    --reality-port) reality_port=$2; reality_port_set=true; shift 2 ;;
     --rotate-credential) rotate_credential=true; shift ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
@@ -44,6 +47,9 @@ if [ "$role" = gateway ]; then
   if [ "$hy2_port" -gt 65535 ]; then echo '--hy2-port must be between 0 and 65535' >&2; exit 2; fi
   case "$vmess_port" in ''|*[!0-9]*) echo '--vmess-port must be a TCP port from 1 to 65535' >&2; exit 2;; esac
   if [ "$vmess_port" -lt 1 ] || [ "$vmess_port" -gt 65535 ]; then echo '--vmess-port must be a TCP port from 1 to 65535' >&2; exit 2; fi
+  case "$reality_port" in ''|*[!0-9]*) echo '--reality-port must be a TCP port from 1 to 65535' >&2; exit 2;; esac
+  if [ "$reality_port" -lt 1 ] || [ "$reality_port" -gt 65535 ]; then echo '--reality-port must be a TCP port from 1 to 65535' >&2; exit 2; fi
+  if [ "$reality_port_set" = true ] && [ "$vmess_enabled" = true ] && [ "$vmess_port" -eq "$reality_port" ]; then echo 'REALITY and VMess cannot use the same TCP port' >&2; exit 2; fi
 fi
 case "$release_base_url" in https://*) ;; *) echo '--release-base-url must use HTTPS' >&2; exit 2;; esac
 for tool in curl sha256sum tar mktemp; do
@@ -65,7 +71,7 @@ if [ "$role" != controller ]; then
   }
 fi
 if [ ! -f "$install_dir/compose.yaml" ] && command -v ss >/dev/null 2>&1; then
-  if [ "$role" = controller ]; then ports=${listen##*:}; elif [ "$role" = gateway ]; then ports=8443; if [ "$vmess_enabled" = true ]; then ports="$vmess_port $ports"; fi; else ports=''; fi
+  if [ "$role" = controller ]; then ports=${listen##*:}; elif [ "$role" = gateway ]; then ports=$reality_port; if [ "$vmess_enabled" = true ]; then ports="$vmess_port $ports"; fi; else ports=''; fi
   for port in $ports; do
     if ss -ltnH | awk '{print $4}' | grep -Eq ":$port\$"; then
       echo "TCP port $port is already in use; resolve the conflict before installing $role" >&2

@@ -1,12 +1,85 @@
 package controller
 
 import (
+	"encoding/base64"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
+	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/Purestreams/xmesh/internal/model"
 )
+
+func TestSetGrantStateScopesAccessAndIsRetrySafe(t *testing.T) {
+	server, state := testServer(t, securityState)
+	before := state.Snapshot()
+	response := postNodeForm("/admin/grants/grant/state", url.Values{"enabled": {"false"}}, server.setGrantState)
+	if response.Code != http.StatusSeeOther {
+		t.Fatalf("disable: %d %s", response.Code, response.Body.String())
+	}
+	after := state.Snapshot()
+	want := before.Grants["grant"]
+	want.Enabled, want.Published = false, false
+	want.AccessVersion = after.Gateways["g"].DesiredVersion
+	if after.Grants["grant"] != want || after.Grants["other"] != before.Grants["other"] || after.Attachments["route"] != before.Attachments["route"] || after.Links["link"] != before.Links["link"] {
+		t.Fatal("disabling access changed credentials, another user's grant or the shared route")
+	}
+	if after.Gateways["g"].DesiredVersion != before.Gateways["g"].DesiredVersion+1 {
+		t.Fatal("Gateway was not notified")
+	}
+	payload, err := BuildSubscription(after, "u")
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain, err := base64.StdEncoding.DecodeString(payload)
+	if err != nil || len(plain) != 0 {
+		t.Fatal("disabled access still appears in subscription", payload, err)
+	}
+	response = postNodeForm("/admin/grants/grant/state", url.Values{"enabled": {"false"}}, server.setGrantState)
+	if response.Code != http.StatusSeeOther || state.Snapshot().Gateways["g"].DesiredVersion != after.Gateways["g"].DesiredVersion || state.Snapshot().Grants["grant"].Enabled {
+		t.Fatal("retry inverted access or triggered another config update")
+	}
+	location, err := url.Parse(response.Header().Get("Location"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if notice := location.Query().Get("notice"); !strings.Contains(notice, "already disabled") || strings.Contains(notice, "waiting for Gateway configuration") {
+		t.Fatalf("no-op retry reported a new configuration change: %q", notice)
+	}
+	response = postNodeForm("/admin/grants/grant/state", url.Values{"enabled": {"true"}}, server.setGrantState)
+	if response.Code != http.StatusSeeOther || !state.Snapshot().Grants["grant"].Enabled || state.Snapshot().Grants["grant"].Published {
+		t.Fatal("restored access must await Gateway acknowledgement")
+	}
+}
+
+func TestSetGrantStateBatchValidatesBeforeChangingAccess(t *testing.T) {
+	server, state := testServer(t, securityState)
+	post := func(values url.Values) *httptest.ResponseRecorder {
+		request := httptest.NewRequest(http.MethodPost, "/admin/grants/state", strings.NewReader(values.Encode()))
+		request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		response := httptest.NewRecorder()
+		server.setGrantState(response, request)
+		return response
+	}
+	before := state.Snapshot()
+	for _, values := range []url.Values{
+		{"enabled": {"false"}},
+		{"enabled": {"invalid"}, "grant_id": {"grant"}},
+		{"enabled": {"false"}, "grant_id": {"grant", "missing"}},
+	} {
+		response := post(values)
+		if response.Code != http.StatusBadRequest || !reflect.DeepEqual(state.Snapshot(), before) {
+			t.Fatal("invalid selection partially changed access", response.Code, response.Body.String())
+		}
+	}
+	response := post(url.Values{"enabled": {"false"}, "grant_id": {"grant", "other", "grant"}})
+	after := state.Snapshot()
+	if response.Code != http.StatusSeeOther || after.Grants["grant"].Enabled || after.Grants["other"].Enabled || after.Gateways["g"].DesiredVersion != before.Gateways["g"].DesiredVersion+1 {
+		t.Fatal("batch did not apply once per affected Gateway", response.Code, response.Body.String())
+	}
+}
 
 func TestEditAndDeleteLink(t *testing.T) {
 	server, state := testServer(t, func(s *model.State) error {

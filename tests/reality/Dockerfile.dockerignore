@@ -1,0 +1,5 @@
+**
+!build/
+!build/gateway-xray/
+!build/gateway-xray/go.mod
+!build/gateway-xray/go.sum

@@ -153,6 +153,10 @@ func (s *Server) upgradeOptions(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "release source is not configured", http.StatusConflict)
 		return
 	}
+	if role == model.RoleGateway && !s.gatewayRealityPortReleaseCompatible(state.Gateways[id]) {
+		http.Error(w, "a custom REALITY port requires Gateway "+gatewayRealityPortMinimum+" or newer", http.StatusConflict)
+		return
+	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	_, _ = fmt.Fprintf(w, "Upgrade %s %s to %s on its existing host. The installer preserves node identity and checks the reported version; a failed upgrade restores the previous image or binaries.\n", role, id, s.cfg.ReleaseVersion)

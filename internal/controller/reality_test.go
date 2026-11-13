@@ -15,7 +15,7 @@ import (
 
 func TestQuickSetupRealityDistributesOnlyPublicKeyToAgent(t *testing.T) {
 	server, store := testServer(t, nil)
-	form := url.Values{"gateway_name": {"Gateway"}, "agent_name": {"Agent"}, "public_host": {"203.0.113.10"}, "vmess_port": {"8080"}, "vmess_path": {"/proxy"}, "allowed_cidrs": {"127.0.0.0/8"}, "link_url": {"reality://203.0.113.10:8443/tunnel"}, "reality_target": {"www.example.com:443"}}
+	form := url.Values{"gateway_name": {"Gateway"}, "agent_name": {"Agent"}, "public_host": {"203.0.113.10"}, "vmess_port": {"8080"}, "reality_port": {"9443"}, "vmess_path": {"/proxy"}, "allowed_cidrs": {"127.0.0.0/8"}, "reality_target": {"www.example.com:443"}}
 	request := httptest.NewRequest(http.MethodPost, "/admin/quick-setup", strings.NewReader(form.Encode()))
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	response := httptest.NewRecorder()
@@ -29,6 +29,9 @@ func TestQuickSetupRealityDistributesOnlyPublicKeyToAgent(t *testing.T) {
 		agentID = id
 	}
 	for _, gateway := range snapshot.Gateways {
+		if gateway.RealityPort != 9443 {
+			t.Fatal("quick setup lost the configured REALITY port")
+		}
 		privateKey, publicKey = gateway.RealityPrivateKey, gateway.RealityPublicKey
 	}
 	if privateKey == "" || publicKey == "" {
@@ -56,7 +59,8 @@ func TestQuickSetupRealityDistributesOnlyPublicKeyToAgent(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &config); err != nil {
 		t.Fatal(err)
 	}
-	if len(config.Links) != 1 || config.Links[0].RealityPublicKey != publicKey || config.Links[0].RealityUUID == "" || config.Links[0].RealityShortID == "" {
+	if len(config.Links) != 1 || !config.Links[0].AutoURL || config.Links[0].URL != "reality://203.0.113.10:9443/tunnel" ||
+		config.Links[0].RealityPublicKey != publicKey || config.Links[0].RealityUUID == "" || config.Links[0].RealityShortID == "" {
 		t.Fatalf("incomplete Agent REALITY config: %#v", config.Links)
 	}
 }

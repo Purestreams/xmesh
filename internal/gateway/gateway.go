@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"reflect"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -52,6 +53,7 @@ type Runtime struct {
 	tcpConnections      atomic.Int64
 	udpAssociations     atomic.Int64
 	lastError           atomic.Value
+	applyError          atomic.Value
 	xrayApply           chan struct{}
 	xrayReady           atomic.Bool
 	xrayError           atomic.Value
@@ -145,7 +147,7 @@ func (r *Runtime) controlLoop(ctx context.Context) error {
 			return nil
 		case <-poll.C:
 			if err := r.refresh(ctx); err != nil {
-				r.setError("config: " + err.Error())
+				r.applyError.Store(err.Error())
 			}
 		case <-status.C:
 			if err := r.report(ctx); err != nil {
@@ -176,7 +178,9 @@ func (r *Runtime) refresh(ctx context.Context) error {
 	}
 	changed := r.config.Revision != config.Revision || r.config.Gateway.ID == "" || r.config.Gateway.Enabled != config.Gateway.Enabled
 	previous := r.config
+	runningPayload := r.xrayRunningPayload
 	r.mu.Unlock()
+	portChanged := previous.Gateway.RealityPort != config.Gateway.RealityPort
 	reload := changed
 	var nextPayload []byte
 	// Capabilities reported to Controller can change the returned users/routes
@@ -184,6 +188,9 @@ func (r *Runtime) refresh(ctx context.Context) error {
 	if config.Gateway.Enabled {
 		nextPayload, err = r.xrayPayload(config)
 		if err != nil {
+			if portChanged {
+				r.keepAuthorizationOnRealityPortFailure(epoch, previous, config)
+			}
 			return err
 		}
 		if previous.Gateway.ID != "" && previous.Gateway.Enabled {
@@ -192,7 +199,16 @@ func (r *Runtime) refresh(ctx context.Context) error {
 		}
 	}
 	if reload && config.Gateway.Enabled {
+		if portChanged {
+			if err := checkNewRealityListener([]byte(runningPayload), nextPayload); err != nil {
+				r.keepAuthorizationOnRealityPortFailure(epoch, previous, config)
+				return err
+			}
+		}
 		if err := r.validateXrayCandidate(ctx, config); err != nil {
+			if portChanged {
+				r.keepAuthorizationOnRealityPortFailure(epoch, previous, config)
+			}
 			return err
 		}
 	}
@@ -247,7 +263,24 @@ func (r *Runtime) refresh(ctx context.Context) error {
 		}
 	}
 	r.setError("")
+	r.applyError.Store("")
 	return nil
+}
+
+func (r *Runtime) keepAuthorizationOnRealityPortFailure(epoch uint64, previous, candidate controller.GatewayConfig) {
+	// Controller still serves the old dial port until Xray confirms the new
+	// one. Keep serving only if none of the authorization or routes changed.
+	candidate.Revision = previous.Revision
+	candidate.Gateway.DesiredVersion = previous.Gateway.DesiredVersion
+	candidate.Gateway.RealityPort = previous.Gateway.RealityPort
+	if !previous.Gateway.Enabled || !reflect.DeepEqual(previous, candidate) {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if epoch == r.authorizationEpoch {
+		r.authorizationUntil = time.Now().Add(nodeclient.ConfigLease)
+	}
 }
 
 func (r *Runtime) retireConnectionsLocked(config controller.GatewayConfig) {
@@ -397,8 +430,9 @@ func (r *Runtime) report(ctx context.Context) error {
 		tunnelCount += status.Connections
 	}
 	lastError, _ := r.lastError.Load().(string)
+	applyError, _ := r.applyError.Load().(string)
 	xrayError, _ := r.xrayError.Load().(string)
-	ready := lastError == "" && r.xrayReady.Load()
+	ready := lastError == "" && applyError == "" && r.xrayReady.Load()
 	grantList, linkUsage, upload, download := r.trafficSnapshot()
 	activeGrants := map[string]bool{}
 	for _, grant := range config.Grants {
@@ -441,6 +475,8 @@ func (r *Runtime) report(ctx context.Context) error {
 	}
 	nodeStatus := model.NodeStatus{NodeID: r.local.NodeID, Role: model.RoleGateway, BinaryVersion: r.local.BinaryVersion, InstanceID: r.local.InstanceID, Online: true, Ready: ready, DesiredVersion: config.Revision, AppliedVersion: r.xrayAppliedRevision.Load(), XrayReady: r.xrayReady.Load(), XrayError: xrayError, ExternalUpstreams: true, LastSeen: time.Now().UTC(), TunnelConnections: tunnelCount, TCPConnections: int(r.tcpConnections.Load()), UDPAssociations: int(r.udpAssociations.Load()), UploadBytes: upload, DownloadBytes: download, LastError: lastError, FailureCounters: map[string]uint64{"udp_queue_drops": r.udpQueueDrops.Load()}}
 	nodeStatus.IngressControls = true
+	nodeStatus.ApplyError = applyError
+	nodeStatus.RealityPortControl = true
 	nodeStatus.EmbeddedAgent = true
 	nodeStatus.UpstreamProbes = true
 	nodeStatus.UpstreamProbeIntervalSeconds = int64(r.local.Gateway.UpstreamProbeInterval.Value(time.Minute) / time.Second)

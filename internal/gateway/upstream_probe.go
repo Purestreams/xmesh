@@ -58,6 +58,13 @@ func addUpstreamProbeInbound(payload []byte, config controller.GatewayConfig, ad
 	if err := json.Unmarshal(payload, &rendered); err != nil {
 		return nil, err
 	}
+	if config.Gateway.RealityPort == port {
+		for _, inbound := range rendered.Inbounds {
+			if inbound.Tag == "xmesh-reality" {
+				return nil, fmt.Errorf("REALITY TCP port %d conflicts with the upstream probe listener", port)
+			}
+		}
+	}
 	inbound := xrayInbound{Listen: host, Port: port, Protocol: "socks", Tag: "xmesh-upstream-probe", Settings: xrayInboundSettings{Auth: "password"}}
 	upstreams := append([]controller.GatewayUpstreamConfig(nil), config.Upstreams...)
 	sort.Slice(upstreams, func(i, j int) bool { return upstreams[i].AttachmentID < upstreams[j].AttachmentID })

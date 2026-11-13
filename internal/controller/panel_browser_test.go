@@ -12,9 +12,17 @@ import (
 
 // Opt-in local fixture for tests/panel.browser.cjs. It never opens production state.
 func TestPanelBrowserFixture(t *testing.T) {
-	address := os.Getenv("XMESH_PANEL_TEST_ADDR")
+	servePanelBrowserFixture(t, os.Getenv("XMESH_PANEL_TEST_ADDR"), false)
+}
+
+func TestFirstUserBrowserFixture(t *testing.T) {
+	servePanelBrowserFixture(t, os.Getenv("XMESH_FIRST_USER_TEST_ADDR"), true)
+}
+
+func servePanelBrowserFixture(t *testing.T, address string, emptyUsers bool) {
+	t.Helper()
 	if address == "" {
-		t.Skip("set XMESH_PANEL_TEST_ADDR for browser tests")
+		t.Skip("set the fixture address for browser tests")
 	}
 	now := time.Now().UTC()
 	server, _ := testServer(t, func(s *model.State) error {
@@ -40,10 +48,12 @@ func TestPanelBrowserFixture(t *testing.T) {
 				s.LinkStatus[reporter+"/"+link] = model.LinkStatus{LinkID: link, ReporterNodeID: reporter, Online: i == 0, Ready: i == 0, LastSeen: now, RTTMillis: float64(35 + i*20), Connections: 2, ActiveStreams: 6, UploadBytes: 23450000, DownloadBytes: 64320000}
 			}
 		}
-		s.Users["u1"] = model.User{ID: "u1", Name: "Personal", Enabled: true, SubscriptionToken: "fixture-subscription"}
-		s.Users["u2"] = model.User{ID: "u2", Name: "Team", Enabled: true, SubscriptionToken: "fixture-team"}
-		s.Grants["grant1"] = model.Grant{ID: "grant1", UserID: "u1", AttachmentID: "r1", Enabled: true, Published: true}
-		s.UsageHistory = map[string][]model.UsageBucket{"u1/l1": {{At: now.Truncate(5 * time.Minute), UploadBytes: 1024, DownloadBytes: 2048}}}
+		if !emptyUsers {
+			s.Users["u1"] = model.User{ID: "u1", Name: "Personal", Enabled: true, SubscriptionToken: "fixture-subscription"}
+			s.Users["u2"] = model.User{ID: "u2", Name: "Team", Enabled: true, SubscriptionToken: "fixture-team"}
+			s.Grants["grant1"] = model.Grant{ID: "grant1", UserID: "u1", AttachmentID: "r1", Enabled: true, Published: true}
+			s.UsageHistory = map[string][]model.UsageBucket{"u1/l1": {{At: now.Truncate(5 * time.Minute), UploadBytes: 1024, DownloadBytes: 2048}}}
+		}
 		s.LinkHistory = map[string][]model.LinkSample{}
 		for i := range 60 {
 			s.LinkHistory["l1"] = append(s.LinkHistory["l1"], model.LinkSample{At: now.Add(time.Duration(i-59) * 5 * time.Minute), Generation: 1, Ready: true, RTTMillis: float64(25 + i%9*4), UploadBytes: uint64(i * i * 240000), DownloadBytes: uint64(i * i * 740000)})

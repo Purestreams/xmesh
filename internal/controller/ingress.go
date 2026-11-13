@@ -31,6 +31,9 @@ func (s *Server) saveGatewayIngress(w http.ResponseWriter, r *http.Request) {
 		}
 		previous := gateway
 		applyIngressSwitches(r, &gateway)
+		if err := validateGatewayRealityPort(previous, gateway); err != nil {
+			return err
+		}
 		port := gateway.HY2Port
 		if !gateway.HY2Disabled && port == 0 {
 			port = gateway.VMessPort

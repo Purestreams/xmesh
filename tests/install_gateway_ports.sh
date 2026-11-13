@@ -36,6 +36,7 @@ check_case() {
   expected=$4
 	selected_hy2=${5:-0}
 	vmess_off=${6:-false}
+  selected_reality=${7:-}
   FAKE_LISTEN_PORT=$busy; export FAKE_LISTEN_PORT
   if [ "$script" = scripts/install-docker.sh ]; then
     set -- --install-dir "$test_dir/install"
@@ -43,6 +44,7 @@ check_case() {
     set --
   fi
 	if [ "$vmess_off" = true ]; then set -- "$@" --disable-vmess; fi
+  if [ -n "$selected_reality" ]; then set -- "$@" --reality-port "$selected_reality"; fi
   if sh "$script" --controller https://panel.example.test --role gateway --version v-test \
       --release-base-url https://releases.example.test --vmess-port "$selected" --hy2-port "$selected_hy2" \
       "$@" >"$test_dir/output" 2>&1; then
@@ -68,5 +70,9 @@ for script in scripts/install-docker.sh scripts/install.sh; do
   check_case "$script" 8080 8086 DOWNLOAD_REACHED 8080
   check_case "$script" 9999 8086 '--hy2-port must be between 0 and 65535' 65536
   check_case "$script" 8086 8086 DOWNLOAD_REACHED 0 true
+  check_case "$script" 8443 8086 DOWNLOAD_REACHED 0 false 9443
+  check_case "$script" 9443 8086 'TCP port 9443 is already in use' 0 false 9443
+  check_case "$script" 9999 9443 'REALITY and VMess cannot use the same TCP port' 0 false 9443
+  check_case "$script" 9999 8086 '--reality-port must be a TCP port from 1 to 65535' 0 false 65536
 done
 echo 'Gateway configured port preflight: PASS'

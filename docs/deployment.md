@@ -34,11 +34,11 @@ Five failed logins block that address for 15 minutes; configure additional per-c
 and access controls at the proxy and allow only trusted administrators to reach the login page.
 The Controller does not terminate TLS and business traffic never passes through it.
 
-For CVE-2026-111943 (compromised eMudhra intermediate certificates), rebuild XMesh and
-`xmesh-updater` with the pinned Go 1.27.3 toolchain and deploy the rebuilt executables.
-Gateway packages must also use the Xray 26.10.21 security release pinned in `versions.env`,
-which was built with Go 1.27.3. Update host CA certificates as well. Changing source pins
-or the host Go installation alone does not patch previously built executables.
+Rebuild XMesh, `xmesh-updater` and the bundled Gateway Xray using the Go version pinned in
+`versions.env`. Go 1.27.4 includes the HTTP server fix and retains the eMudhra certificate
+update. The Gateway Xray build uses the source and patched dependency versions locked in
+`build/gateway-xray/go.mod` and verified by `go.sum`. Update host CA certificates as well.
+Changing source pins or the host Go installation does not patch previously built executables.
 
 Set `release_base_url` to the HTTPS GitHub Release download base, `release_version` to an exact
 tag, and `release_dir` to a writable cache directory (for example,
@@ -64,8 +64,8 @@ must add `release_dir` to their preserved configuration and restart; the install
 for a new configuration. Hosts running the install commands need `curl`, `sha256sum` and `tar`;
 Docker mode additionally needs Docker Engine with the Compose plugin.
 
-Pushing a `v*` tag runs the release workflow: it tests the code, fetches the Xray version pinned
-in `versions.env`, checks the upstream SHA-256 digest, builds Linux amd64/arm64 and Windows amd64,
+Pushing a `v*` tag runs the release workflow: it tests the code, builds the pinned Xray source
+with the patched toolchain, verifies the embedded source version, builds Linux amd64/arm64 and Windows amd64,
 and publishes the archives, installers and `SHA256SUMS` to the matching GitHub Release. Set the
 Controller's `release_version` to that published tag. Do not reuse an old tag whose manifest does
 not cover the installer scripts.
@@ -125,15 +125,23 @@ The generator intentionally uses the schema accepted by that pinned stable relea
 "ws"`, VMess `settings.clients`, and SOCKS `settings.servers`). Do not update those fields from
 newer online examples without advancing `XRAY_VERSION` and rerunning the full real-Xray test.
 
-For a REALITY Agent Link, enter `reality://<gateway-public-host-or-IP>:8443/tunnel` and a reachable
+For a manual REALITY Agent Link, enter `reality://<gateway-public-host-or-IP>:<port>/tunnel` and a reachable
 TLS 1.3 target such as `<target-host>:443` in the Controller. The Controller generates a Gateway
 X25519 key pair and a per-Link VLESS UUID and short ID, then sends only the public key and Link
 identity to the Agent. The Gateway's existing Xray process listens on
-`gateway.reality_listen` (`0.0.0.0:8443` by default), forwards authenticated connections to
+the port set in **Network → Gateway nodes → Edit and delete → REALITY tunnel port (TCP)**,
+keeping the bind address from `gateway.reality_listen`. Leaving the field blank uses the
+node's local setting (`0.0.0.0:8443` by default). Xray forwards authenticated connections to
 the loopback tunnel handler, and forwards unauthenticated connections to the target. The Agent
 embeds the pinned Xray-core implementation for REALITY; it does not spawn a helper process.
-The public port in the Link URL must reach `gateway.reality_listen`. Port 443 requires a
-privileged listener or external port mapping with the default unprivileged service account.
+Upgrade the Gateway to a build that supports port control before changing an installed node.
+Open the new TCP port in the host firewall and cloud security group before saving. The change
+restarts Xray when REALITY is in use, so existing connections can briefly disconnect.
+Automatic Links switch after the Gateway reports the new configuration applied.
+If the new port is occupied, Gateway reports the bind error and keeps the old port
+for a port-only change. For manual Links or NAT mappings, verify that the
+public port reaches the effective listener. Port 443 requires bind privileges or external
+port mapping with the default unprivileged service account.
 Use a target whose TLS certificate matches the configured name, and check its reachability
 from the Gateway. A chosen target can change behavior over time, so monitor Link readiness.
 

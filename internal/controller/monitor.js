@@ -43,6 +43,7 @@
   }
 
   function renderMatrix() {
+    const focusedPair = document.activeElement?.closest('#matrix button')?.dataset.pair;
     const query = $("search").value.trim().toLocaleLowerCase();
     const names = new Map(data.nodes.map((n) => [n.key, n.name]));
     const links = data.links.filter((l) => !query || [l.name, names.get(l.gateway), names.get(l.exit)].some((v) => v?.toLocaleLowerCase().includes(query)));
@@ -69,6 +70,7 @@
           const healthy = pair.filter((l) => l.state === "ready");
           const representative = healthy.find((l) => l.rtt_ms !== null) || healthy[0] || pair[0];
           const button = el("button", undefined, representative.state);
+          button.dataset.pair = JSON.stringify([gateway.name, exit.name]);
           button.type = "button";
           button.setAttribute("aria-label", t("{0} → {1}，{2} 条链路，查看详情", gateway.name, exit.name, pair.length));
           button.append(stateLabel(representative.state), el("span", rtt(representative), "cell-value"));
@@ -87,6 +89,7 @@
     });
     table.append(thead, body);
     $("matrix").replaceChildren(table);
+    if (focusedPair) [...table.querySelectorAll('button')].find(button=>button.dataset.pair===focusedPair)?.focus({preventScroll:true});
   }
 
   function renderDetail() {
@@ -96,6 +99,10 @@
     const links = gateway && exit ? data.links.filter((l) => l.gateway === gateway.key && l.exit === exit.key) : [];
     if (!links.length) { selection = null; $("detail").hidden = true; return; }
     $("detail").hidden = false;
+    const pair = JSON.stringify([gateway.name, exit.name]), samePair = $("detail").dataset.pair === pair;
+    const expanded = new Set(samePair ? [...$("detail-body").querySelectorAll('details[open]')].map(details=>details.dataset.linkName) : []);
+    const focusedLink = samePair && document.activeElement?.matches('#detail summary') ? document.activeElement.parentElement.dataset.linkName : null;
+    $("detail").dataset.pair = pair;
     $("detail-title").textContent = `${gateway.name} → ${exit.name}`;
     $("detail-body").replaceChildren(...links.map((link) => {
       const card = el("article", undefined, "link-detail"), heading = el("div", undefined, "link-heading");
@@ -109,6 +116,8 @@
         card.append(canvas);
         requestAnimationFrame(() => { if (canvas.isConnected) drawHistory(canvas, link.history); });
         const details = el("details", undefined, "history-data"), summary = el("summary", t("采样数据（{0} 点，约 5 分钟间隔）", link.history.length));
+        details.dataset.linkName = link.name;
+        details.open = expanded.has(link.name);
         const table = el("table"), head = el("tr");
         head.append(el("th", t("时间")), el("th", "RTT"));
         const thead = el("thead"); thead.append(head); table.append(thead);
@@ -122,6 +131,7 @@
       } else card.append(el("p", t("暂无延迟历史。"), "muted"));
       return card;
     }));
+    if (focusedLink) [...$("detail-body").querySelectorAll('details')].find(details=>details.dataset.linkName===focusedLink)?.querySelector('summary').focus({preventScroll:true});
   }
 
   function drawHistory(canvas, samples) {

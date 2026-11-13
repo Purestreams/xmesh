@@ -20,7 +20,7 @@ func TestUpstreamProbeBrowserFixture(t *testing.T) {
 	}
 	now := time.Now().UTC()
 	server, store := testServer(t, func(s *model.State) error {
-		s.Gateways["gateway"] = model.Gateway{ID: "gateway", Name: "Test Gateway", Enabled: true, DesiredVersion: 1, VMessPort: 8080, CredentialHash: auth.SecretHash("probe-fixture-secret")}
+		s.Gateways["gateway"] = model.Gateway{ID: "gateway", Name: "Test Gateway", Enabled: true, PublicHost: "edge.example", DesiredVersion: 1, VMessPort: 8080, CredentialHash: auth.SecretHash("probe-fixture-secret")}
 		s.NodeStatus["gateway"] = model.NodeStatus{Online: true, Ready: true, XrayReady: true, AppliedVersion: 1, UpstreamProbes: true, ExternalUpstreams: true, UpstreamProbeIntervalSeconds: 300, LastSeen: now}
 		s.Upstreams["upstream"] = model.VMessUpstream{ID: "upstream", Name: "Test external exit", Enabled: true, Endpoint: model.VMessEndpoint{UUID: "fixture-only", Address: "exit.example", Name: "Synthetic test node"}}
 		s.Attachments["route"] = model.Attachment{ID: "route", GatewayID: "gateway", UpstreamID: "upstream", Enabled: true}

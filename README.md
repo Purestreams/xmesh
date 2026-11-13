@@ -134,11 +134,11 @@ sudo dnf install -y ca-certificates curl tar coreutils iproute shadow-utils
 
 Gateway 如启用 firewalld，需在实际网卡所在 zone 放行 VMess 端口和 REALITY 端口。例如使用 `--vmess-port 8086` 时，放行 TCP 8086 和 8443；Agent 无需开放入站端口。下文 Nginx/Certbot 的包安装和配置路径以 Debian/Ubuntu 为例，CentOS Controller 按本机的软件源、Nginx 布局和 SELinux 策略配置 HTTPS 反向代理。
 
-仅在 Controller 主机安装以下工具并取得源码。本文说明当前代码行为，安装示例固定使用 `v0.4.7`；选择其他已发布版本时，将 `VERSION` 改为对应的精确 tag，源码与安装包使用同一版本。可用版本见 [Releases](https://github.com/Purestreams/xmesh/releases)。
+仅在 Controller 主机安装以下工具并取得源码。本文说明当前代码行为，安装示例固定使用 `v0.4.8`；选择其他已发布版本时，将 `VERSION` 改为对应的精确 tag，源码与安装包使用同一版本。可用版本见 [Releases](https://github.com/Purestreams/xmesh/releases)。
 
 ```sh
 sudo apt install -y git nginx certbot
-VERSION=v0.4.7
+VERSION=v0.4.8
 git clone --depth 1 --branch "$VERSION" https://github.com/Purestreams/xmesh.git
 cd xmesh
 ```
@@ -262,6 +262,8 @@ curl -fsS https://panel.example.com/healthz
 
 在“用户与订阅”创建 User，然后在订阅授权表单选择用户及允许使用的线路。操作会新增或重新启用 Grant；清除勾选只清空当前选择，撤销访问需单独停用或删除 Grant。
 
+停用线路可点击用户旁的 **管理线路**，按用户、线路名称和授权状态筛选。授权表直接显示 Gateway、出口与自定义 Link 名称，支持单条或批量停用、恢复。停用只影响所选用户的授权，订阅立即撤下对应线路，Gateway 应用配置后撤销访问。
+
 Gateway 报告对应配置已应用且相应接入就绪后，授权才会发布。复制面板中的订阅 URL，导入支持对应协议的客户端。订阅是 Base64 编码的 `vmess://` 和 `hysteria2://` 列表，仅包含已开启且就绪的接入；VMess 客户端连接 `edge.example.com:8080/proxy`，HY2 使用 UDP 8080，Agent 隧道使用 TCP 8443。官方 Hysteria 客户端需从授权管理下载严格验证客户端包，配置公开证书与 pin，详见 [HY2 接入](docs/hy2.md)。
 
 **订阅发布不等于线路健康检查通过。** Agent 线路验收需确认两端在线、配置已应用、Gateway Xray 就绪，且同一个已启用 Link 在 Gateway 和 Agent 两端均报告 ready，最后实际测试目标访问。外部出口需确认 Gateway 配置已应用，并实际测试上游与目标连通性。
@@ -318,7 +320,7 @@ sudo sh scripts/backup-controller.sh \
 
 ## 开发与验证
 
-项目使用 Go，`mise.toml` 固定 Go **1.27.3**；Gateway 外部 Xray 版本由 `versions.env` 固定，Agent 内嵌 Xray-core 依赖在 `go.mod` 中管理。
+项目使用 Go，`mise.toml` 固定 Go **1.27.4**；Gateway 外部 Xray 版本由 `versions.env` 固定，Agent 内嵌 Xray-core 依赖在 `go.mod` 中管理。
 
 ```sh
 mise install

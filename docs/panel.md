@@ -1,10 +1,135 @@
-# Control center (v0.4.7)
+# Control center (v0.4.8)
 
 The Controller embeds its HTML, CSS and JavaScript; no frontend service, CDN or
 production Node.js runtime is required. Existing management POST endpoints and
 CSRF checks remain in use. JavaScript enables five navigation sections, drawers
 for details, collapsed creation and advanced forms, search, topology and matrix
 views. Basic forms remain usable with JavaScript disabled.
+
+The workspace shows one subsection at a time by default. Use the section links
+below the page title, or **展开所有区域** to keep the full page visible for the
+current browser session. Direct links to existing section IDs still work.
+
+On the users page, **当前用户** keeps route grants, subscription delivery, usage
+and audit navigation in the same user context. Only that user's subscription
+link is shown. Switching users clears pending route selections; search and state
+filters retain selections and report how many selected items are hidden.
+Pressing Enter in a search field only filters; it never submits the selected
+grants or connections.
+Completing a subscription or connection batch clears its submitted choices and
+connection target while retaining edits made during the request. Changing the owner
+while a request is pending keeps the new owner's choices as a separate draft,
+even when they use the same route or Gateway as the completed batch.
+
+Network enable/disable forms also submit an explicit `enabled=true/false` target,
+so an older page or retried request cannot reverse the intended action. Repeating
+the same target does not issue another node configuration version. Existing
+clients that omit `enabled` on toggle endpoints retain their previous behavior.
+Action labels and clean Gateway ingress controls follow live updates; unsaved
+local switch edits stay intact. Embedded Agents retain their own configured
+state when their physical Gateway is unavailable.
+
+In **网络 → Gateway 节点 → 编辑与删除**, set **REALITY 隧道端口（TCP）**
+to change the Gateway listener. Automatic Links switch after Gateway confirms
+the new configuration. Open the new port before saving and check any manually
+configured Links or port mappings.
+An installed Gateway must report support before this field can be changed.
+
+Both connection tabs identify selected Gateways that need a manual REALITY
+target before submission, including selections hidden by filters. Existing Links
+can be restored without supplying a new target. Connection searches ignore
+surrounding whitespace. If clipboard access fails in the installation dialog,
+the copy action selects the displayed token or selected command for manual copying.
+
+Network management lists follow configuration changes from other windows,
+including new/deleted nodes, routes, Links, external exits and clean configuration
+fields. Open forms, keyboard focus, searches and local drafts are retained.
+Deleting an object with an unfinished local draft preserves the text and disables
+its actions. Ordinary heartbeats and traffic counters do not fetch the management
+HTML again. Saving a form advances its baseline so subsequent edits remain protected.
+If a remote update arrives during editing or submission, its latest snapshot is
+retained. Reverting the local draft resumes live fields on the next refresh,
+even when the remote configuration has not changed again.
+Background synchronization retains the latest operation result in its section;
+the next submission clears that feedback.
+The public monitor retains expanded historical samples and keyboard focus through
+refreshes and screen-size changes.
+The Link reporter table also refreshes connection counts, stream counts, last
+report times and errors. It shows Link and node names with IDs in technical details.
+
+Maintenance upgrade choices and updater pairing rows follow node creation and
+deletion without reloading the page, while retaining version drafts and existing
+selections. Embedded Agents upgrade with their Gateway and are excluded from
+independent upgrade choices. Link and affected-user counts follow current route
+grants. Upgrade history shows node names with IDs in technical details, keeps
+equal-time records in a stable order, and retains search filters during refresh.
+
+Route badges, availability reasons and overview counts share the same readiness
+decision, including ingress protocols, public addresses and transport availability.
+Open node and route dialogs follow live state changes without replacing name
+drafts. Deleting a route in another window disables its save action and preserves
+the draft. The deployment node selector retains focus and selection during polling.
+
+After successful user, Gateway, Agent or external-exit creation, submitted fields
+return to the blank/default creation form. Edits made while the request is pending
+stay as an unsaved draft for the next item.
+
+Users support editable names and notes, and reversible archiving. Archiving
+disables access but retains route choices and credentials. Restoring an archived
+user keeps access disabled until explicitly enabled. Grant rows distinguish a
+submitted disable from Gateway configuration acknowledgement; acknowledgement
+does not separately prove that every previously open client session has ended.
+
+Refreshing retains open user technical details, profile inputs and usage details,
+including keyboard focus and unsaved profile edits. Clean profile fields follow
+changes from other windows. Usage links with equal names retain a stable order.
+Older cumulative traffic snapshots from the same Gateway process do not lower
+the accepted counter baseline or count previously recorded traffic again;
+restarting a Gateway process still starts a new cumulative counter.
+
+Route names are shared by route cards, grant selection and client subscriptions.
+An explicit route name takes precedence, followed by Link names, then the node
+names. Edit it in a route's status dialog. Renaming changes display metadata
+without rotating credentials or restarting nodes. Grant deletion confirms the
+visible user and route names; legacy API clients may still use `confirm_id`.
+
+Installation dialogs show one selected method/source command at a time and keep
+the enrollment token visible separately with its own copy button. They identify
+the target node by name and distinguish interactive enrollment from updater
+pairing, whose token is already included in its command. Visible one-time tokens
+are protected against accidental reload and language changes. Installation buttons
+follow live node creation and deletion; embedded Agents share Gateway installation.
+Deployment progress follows one selected
+node. Unsaved form changes trigger a warning before a reload, closing the page or
+changing language; credentials and drafts are not saved in browser storage.
+Route-name drafts also prompt before closing their detail window with the close
+button, Escape or a navigation link. Pending saves keep the window open until the
+result arrives; edits made during a save stay available for a subsequent save.
+Delayed installation responses wait for the current detail window to close,
+preserving both its draft and each generated token. Unviewed installation options
+also warn before reloading or changing language.
+Reverting fields to their initial values removes the unsaved-changes warning
+and lets clean profiles resume following external updates.
+User audit rows follow newly created users, profile names and audit settings on
+refresh; their search combines with the current user selection. Newly generated
+enrollment tokens appear in the token list without reloading, with the node name,
+current lifecycle state and a revoke action for unused tokens.
+Pages with an active installation token remain usable after reloading. Pending
+management requests warn before leaving the page and defer language changes until
+the result arrives, so one-time installation responses are not silently lost.
+
+If a login expires, the refresh banner and failed form offer a sign-in link in a
+new window. Return to the original page and refresh its state to continue with
+the preserved draft. Authenticated responses renew the session's CSRF token;
+older responses cannot replace a token already renewed by that page. A request
+rejected during a session change stays available for an explicit retry and is
+never automatically replayed.
+
+Run `tests/workspace.browser.cjs` against a fresh `TestPanelBrowserFixture` for
+user context, names, archiving, draft protection, install options and mobile layout
+checks. Set `XMESH_PANEL_TEST_URL` to the fixture URL (default port 18096).
+Run `tests/recovery.browser.cjs` against the same fixture for active-token reloads,
+pending-request navigation, expired sessions and CSRF renewal checks.
 
 ## Interface language
 
@@ -105,7 +230,12 @@ hidden ones. Disabled nodes and Gateways without public addresses cannot be
 selected. **开启所选连接** creates or re-enables the selected pairs in one atomic
 transaction, preserving existing targets and Link settings. Missing targets
 require manual entry. Refresh preserves pending selections; submission leaves
-the tab open and removes enabled pairs from the list. User grants are separate.
+the tab open and removes enabled pairs from the list. Both connection tabs update
+node choices and filter names when another session adds, renames, or deletes a
+node, while preserving existing selections, searches, filters, and manual target
+drafts. Deleting the selected Agent clears its choices and requires selecting
+another Agent before submission. Successful submissions also preserve the
+selected Agent, searches, and filters on both connection tabs. User grants are separate.
 
 For an external exit, use **外部出口** on the network page.
 Paste a single `vmess://` or `vless://` link, or a subscription URL. A subscription with several
@@ -131,8 +261,50 @@ enabled candidates, keeping any previously selected hidden candidates. The
 counter includes all selected candidates. **清除选择** clears all selections in
 that form; it never revokes existing assignments or grants. The preview shows
 new, re-enabled and already-active items. Submission is additive, and publication
-continues to wait for Gateway configuration acknowledgement. Use the separate
-grant controls to disable or delete access.
+continues to wait for Gateway configuration acknowledgement. Successful
+submissions retain the selected user, search, state filter, and Gateway group.
+
+Use **管理线路** beside a user or subscription to open **用户线路授权** for that
+user. The table is always expanded and shows Gateway / exit names and custom Link
+names; IDs and UUIDs are under **技术详情**. Filter by user, route name, or access
+state, then disable an individual grant or select visible rows for a bulk enable
+or disable. Changing filters clears selections that become hidden. The selection
+summary lists affected users, and filters remain in place after submission.
+Live refresh reconciles added, deleted, and renamed grants without replacing
+unfinished deletion forms or selections. Older responses cannot overwrite a
+newer operation. Changing the user in the route chooser clears the previous
+user's pending selections; the add-more-routes link carries the current user.
+These actions set an explicit state, so retries cannot invert access. A disable
+removes only the selected grants from subscriptions immediately; the Gateway
+revokes proxy access when it applies configuration. Other users and the shared
+route remain active. Re-enabling retains credentials and waits for Gateway
+acknowledgement before publication. Basic named rows and actions also work
+without JavaScript.
+
+While an access change is pending, bulk, individual, deletion, subscription
+opening, user state and subscription reset controls wait for it to finish,
+including after navigating to another page within the panel. Failed requests
+release these controls and preserve pending choices. The user-wide enable/disable
+buttons also set an explicit state, so repeating a disable keeps the user
+disabled. Grant rows show **用户已停用** when the user-wide switch blocks access,
+rather than implying that publication is still in progress. Live user status updates
+preserve unfinished forms. Resetting a subscription updates its copy button,
+full URL and displayed credentials even with pending route choices or open
+details, including resets performed in another admin session.
+
+Users created in another session appear in the user table during refresh,
+without clearing the create-user draft, search filter or open reset controls.
+Creating the first user also selects that user in the initially empty route
+chooser, including on live refresh in another session. Adding later users keeps
+the current owner and pending route selections.
+Subscription links and their containing section share one revision check, so
+an older operation response cannot restore an invalid URL after a reset.
+
+The route chooser also reconciles newly created, renamed and deleted routes
+during refresh. Existing choices, the selected user and filters are preserved;
+deleted routes are removed from pending selections. Gateway group names update
+when a Gateway is renamed. If clipboard access is unavailable, copying a
+subscription opens and selects its full URL for manual copying.
 
 Resetting a user's subscription also rotates that user's VMess and SOCKS access
 credentials for every assigned route, including disabled grants. The old URL is
@@ -267,3 +439,7 @@ to use a locally installed Edge, or install Playwright Chromium. Screenshots go
 to ignored `tmp/panel-screenshots/`. The test covers navigation, topology, matrix
 binding, selection scope, clearing, preserved inputs, idempotent grants, failed
 validation, operation history and mobile overflow.
+Run `node tests/grants.browser.cjs` against the same fixture for grant filters,
+user state retries, subscription rotation and copying, live users and route
+candidates, draft preservation, concurrent writes and stale-response regression
+checks.

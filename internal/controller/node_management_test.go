@@ -1,14 +1,136 @@
 package controller
 
 import (
+	"bytes"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"reflect"
 	"strings"
 	"testing"
 
+	"github.com/Purestreams/xmesh/internal/auth"
 	"github.com/Purestreams/xmesh/internal/model"
 )
+
+func TestEditGatewayRealityPortUpdatesOnlyAutomaticLinks(t *testing.T) {
+	server, db := testServer(t, func(s *model.State) error {
+		s.Gateways["g"] = model.Gateway{ID: "g", Name: "Edge", PublicHost: "edge.example", VMessPort: 8080, VMessPath: "/proxy", Enabled: true, CredentialHash: auth.SecretHash("gateway-secret"), DesiredVersion: 3}
+		s.Agents["a"] = model.Agent{ID: "a", Enabled: true, CredentialHash: auth.SecretHash("agent-secret"), DesiredVersion: 7}
+		s.Attachments["route"] = model.Attachment{ID: "route", GatewayID: "g", AgentID: "a", Enabled: true}
+		s.Links["auto"] = model.Link{ID: "auto", AttachmentID: "route", URL: "reality://edge.example:8443/tunnel", AutoURL: true, Enabled: true}
+		s.Links["legacy"] = model.Link{ID: "legacy", AttachmentID: "route", URL: "reality://edge.example:8443/tunnel"}
+		s.Links["manual"] = model.Link{ID: "manual", AttachmentID: "route", URL: "reality://edge.example:8443/tunnel", URLOverride: true}
+		s.Links["wss"] = model.Link{ID: "wss", AttachmentID: "route", URL: "wss://edge.example/tunnel"}
+		s.Grants["grant"] = model.Grant{ID: "grant", AttachmentID: "route", Published: true}
+		return nil
+	})
+	values := url.Values{"name": {"Edge"}, "public_host": {"edge.example"}, "vmess_port": {"8080"}, "vmess_path": {"/proxy"}, "reality_port": {"9443"}}
+	edit := func() *httptest.ResponseRecorder {
+		return postNodeForm("/admin/gateways/g/edit", values, server.editGateway)
+	}
+	before := db.Snapshot()
+	if got := edit(); got.Code != http.StatusBadRequest || !reflect.DeepEqual(db.Snapshot(), before) {
+		t.Fatalf("older Gateway changed unexpectedly: %d %s", got.Code, got.Body)
+	}
+	if err := db.Update(func(s *model.State) error { s.NodeStatus["g"] = model.NodeStatus{RealityPortControl: true}; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	before = db.Snapshot()
+	for _, invalid := range []string{"0", "65536", "8080"} {
+		values.Set("reality_port", invalid)
+		if got := edit(); got.Code != http.StatusBadRequest || !reflect.DeepEqual(db.Snapshot(), before) {
+			t.Fatalf("invalid port %s changed configuration: %d %s", invalid, got.Code, got.Body)
+		}
+	}
+	values.Set("reality_port", "9443")
+	if got := edit(); got.Code != http.StatusSeeOther {
+		t.Fatalf("edit: %d %s", got.Code, got.Body)
+	}
+	after := db.Snapshot()
+	if after.Gateways["g"].RealityPort != 9443 || after.Gateways["g"].DesiredVersion != 4 || after.Agents["a"].DesiredVersion != 7 || !after.Grants["grant"].Published {
+		t.Fatal("port change did not stay pending until Gateway confirmation, or changed user publication")
+	}
+	for _, id := range []string{"auto", "legacy"} {
+		if after.Links[id].URL != "reality://edge.example:9443/tunnel" || !after.Links[id].AutoURL {
+			t.Fatalf("%s did not follow the Gateway: %+v", id, after.Links[id])
+		}
+	}
+	for _, id := range []string{"manual", "wss"} {
+		if after.Links[id] != before.Links[id] {
+			t.Fatalf("manual Link %s changed", id)
+		}
+	}
+	if got := edit(); got.Code != http.StatusSeeOther || db.Snapshot().Gateways["g"].DesiredVersion != 4 || db.Snapshot().Agents["a"].DesiredVersion != 7 {
+		t.Fatal("saving the same port advanced node versions")
+	}
+	getConfig := func(secret string, config any) {
+		t.Helper()
+		request := httptest.NewRequest(http.MethodGet, "/api/v1/config", nil)
+		request.Header.Set("Authorization", "Bearer "+secret)
+		response := httptest.NewRecorder()
+		server.nodeConfig(response, request)
+		if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), config) != nil {
+			t.Fatalf("cannot fetch node config: %d %s", response.Code, response.Body)
+		}
+	}
+	report := func(applied uint64, ready bool) {
+		t.Helper()
+		payload, _ := json.Marshal(StatusReport{Status: model.NodeStatus{AppliedVersion: applied, XrayReady: ready, RealityPortControl: true}})
+		request := httptest.NewRequest(http.MethodPost, "/api/v1/status", bytes.NewReader(payload))
+		request.Header.Set("Authorization", "Bearer gateway-secret")
+		response := httptest.NewRecorder()
+		server.nodeStatus(response, request)
+		if response.Code != http.StatusNoContent {
+			t.Fatalf("cannot report node status: %d %s", response.Code, response.Body)
+		}
+	}
+	var gatewayConfig GatewayConfig
+	getConfig("gateway-secret", &gatewayConfig)
+	if gatewayConfig.Gateway.RealityPort != 9443 || gatewayConfig.Links[0].URL != "reality://edge.example:8443/tunnel" {
+		t.Fatal("Gateway did not receive new listener port with the old dial URL")
+	}
+	report(3, true)
+	report(4, false)
+	var agentConfig AgentConfig
+	getConfig("agent-secret", &agentConfig)
+	if agentConfig.Revision != 7 || len(agentConfig.Links) != 1 || agentConfig.Links[0].URL != "reality://edge.example:8443/tunnel" {
+		t.Fatal("Agent switched before Gateway was ready")
+	}
+	report(4, true)
+	report(4, true)
+	getConfig("agent-secret", &agentConfig)
+	if agentConfig.Revision != 8 || agentConfig.Links[0].URL != "reality://edge.example:9443/tunnel" {
+		t.Fatal("confirmed port did not propagate once to Agent")
+	}
+	values.Set("reality_port", "")
+	if got := edit(); got.Code != http.StatusSeeOther || db.Snapshot().Gateways["g"].RealityPort != 0 || db.Snapshot().Links["auto"].URL != "reality://edge.example:8443/tunnel" {
+		t.Fatal("clearing the port did not restore local/default behavior")
+	}
+	pending := db.Snapshot().Gateways["g"].DesiredVersion
+	for _, enabled := range []string{"false", "true"} {
+		if got := postNodeForm("/admin/gateways/g/toggle", url.Values{"enabled": {enabled}}, server.toggleGateway); got.Code != http.StatusSeeOther {
+			t.Fatalf("set Gateway enabled=%s: %d %s", enabled, got.Code, got.Body)
+		}
+		if enabled == "false" {
+			values.Set("reality_port", "10443")
+			if got := edit(); got.Code != http.StatusSeeOther {
+				t.Fatalf("edit disabled Gateway: %d %s", got.Code, got.Body)
+			}
+		}
+	}
+	report(pending, true)
+	getConfig("agent-secret", &agentConfig)
+	if agentConfig.Revision != 8 || agentConfig.Links[0].URL != "reality://edge.example:9443/tunnel" {
+		t.Fatal("old acknowledgement released an unconfirmed replacement port")
+	}
+	report(db.Snapshot().Gateways["g"].DesiredVersion, true)
+	getConfig("agent-secret", &agentConfig)
+	if agentConfig.Revision != 9 || agentConfig.Links[0].URL != "reality://edge.example:10443/tunnel" {
+		t.Fatal("latest acknowledgement did not release the replacement port")
+	}
+}
 
 func postNodeForm(path string, values url.Values, handler http.HandlerFunc) *httptest.ResponseRecorder {
 	request := httptest.NewRequest(http.MethodPost, path, strings.NewReader(values.Encode()))

@@ -80,16 +80,18 @@ func sampleGrantUsageFor(state *model.State, instanceID, grantID, userID string,
 		counterKey := grantID + "/" + link.LinkID
 		usageKey := userID + "/" + link.LinkID
 		previous, known := state.UsageCounters[counterKey]
-		state.UsageCounters[counterKey] = model.UsageCounter{InstanceID: instanceID, UploadBytes: link.UploadBytes, DownloadBytes: link.DownloadBytes}
 		var up, down uint64
 		switch {
 		case !known || previous.InstanceID != instanceID:
 			up, down = link.UploadBytes, link.DownloadBytes
 		case link.UploadBytes < previous.UploadBytes || link.DownloadBytes < previous.DownloadBytes:
+			// An older snapshot of the same process must not lower the baseline,
+			// or the next fresh report would count already recorded bytes again.
 			continue
 		default:
 			up, down = link.UploadBytes-previous.UploadBytes, link.DownloadBytes-previous.DownloadBytes
 		}
+		state.UsageCounters[counterKey] = model.UsageCounter{InstanceID: instanceID, UploadBytes: link.UploadBytes, DownloadBytes: link.DownloadBytes}
 		if up == 0 && down == 0 {
 			continue
 		}
@@ -183,7 +185,12 @@ func usageViews(state model.State, now time.Time) []usageUserView {
 	}
 	result := make([]usageUserView, 0, len(users))
 	for _, user := range users {
-		sort.Slice(user.Links, func(i, j int) bool { return user.Links[i].Name < user.Links[j].Name })
+		sort.Slice(user.Links, func(i, j int) bool {
+			if user.Links[i].Name == user.Links[j].Name {
+				return user.Links[i].ID < user.Links[j].ID
+			}
+			return user.Links[i].Name < user.Links[j].Name
+		})
 		result = append(result, *user)
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].UserID < result[j].UserID })

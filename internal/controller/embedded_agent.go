@@ -51,10 +51,19 @@ func embeddedAgentChanged(state *model.State, agent model.Agent) {
 }
 
 func (s *Server) toggleEmbeddedAgent(w http.ResponseWriter, r *http.Request) {
-	err := s.store.Update(func(state *model.State) error {
+	requested, err := optionalEnabledState(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	err = s.store.Update(func(state *model.State) error {
 		gateway, ok := state.Gateways[r.PathValue("id")]
 		if !ok {
 			return fmt.Errorf("gateway not found")
+		}
+		desired := desiredEnabledState(gateway.AgentEnabled, requested)
+		if gateway.AgentEnabled == desired {
+			return nil
 		}
 		id := model.GatewayAgentID(gateway.ID)
 		agent, exists := state.Agents[id]
@@ -64,7 +73,7 @@ func (s *Server) toggleEmbeddedAgent(w http.ResponseWriter, r *http.Request) {
 		if !exists {
 			agent = model.Agent{ID: id, GatewayID: gateway.ID, Name: gateway.Name + " (Gateway)", AllowedCIDRs: []string{"0.0.0.0/0", "::/0"}, CreatedAt: s.now().UTC()}
 		}
-		gateway.AgentEnabled = !gateway.AgentEnabled
+		gateway.AgentEnabled = desired
 		gateway.DesiredVersion++
 		agent.Enabled = gateway.AgentEnabled
 		agent.DesiredVersion++

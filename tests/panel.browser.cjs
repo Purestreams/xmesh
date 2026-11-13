@@ -25,6 +25,8 @@ const fs = require("node:fs");
         errors.push(m.text());
     });
     const base = process.env.XMESH_PANEL_TEST_URL || "http://127.0.0.1:18088";
+    await page.context().addInitScript(() => sessionStorage.setItem('xmesh_expand_sections', 'true'));
+    page.on('dialog', dialog => dialog.accept());
     await page.goto(base + "/login");
     await page.getByLabel("用户名").fill("admin");
     await page.getByLabel("密码").fill("a-strong-test-password");
@@ -53,7 +55,7 @@ const fs = require("node:fs");
     await page.waitForFunction(() => document.querySelector('#gateways form[action="/admin/gateways/g1/edit"] [name="ipv6_ingress_enabled"]').disabled);
     assert.equal(await page.locator('#gateways form[action="/admin/gateways/g1/edit"] [name="public_host_auto"]').isDisabled(), true);
     assert.equal(await page.locator("section[data-page]:visible").count(), 4);
-    assert.equal(await page.locator("#topology svg .node").count(), 4);
+    assert.equal(await page.locator("#topology svg .node").count(), 5);
     assert.equal(await page.locator("#topology svg .route-label").count(), 0);
     assert.equal(await page.locator("#topology .topology-routes tbody tr").count(), 2);
     assert.match(await page.locator("#topology .topology-routes tbody tr").first().textContent(), /35\.0 ms/);
@@ -63,7 +65,7 @@ const fs = require("node:fs");
     await page.getByRole("button", { name: "矩阵", exact: true }).click();
     await page.locator("#matrix").waitFor({ state: "visible" });
     await page.locator("#matrix button.ready").first().click();
-    assert.match(await page.locator("#detail-title").textContent(), /节点组合：Hong Kong Edge \/ Home Network/);
+    assert.match(await page.locator("#detail-title").textContent(), /节点组合：Route 1/);
     assert.match(await page.locator("#detail-body").textContent(), /Link：Route 1/);
     await page.locator("#close-detail").click();
     await page.locator("#matrix button.unassigned").first().click();
@@ -113,6 +115,47 @@ const fs = require("node:fs");
       document.querySelector("#notice").textContent.includes("新增 2"),
     );
     assert.equal(await page.locator("#grants tbody tr").count(), 3);
+    // Manage access by user and visible names, without touching the shared route.
+    await page.locator('#subscribe [data-manage-selected-user]').click();
+    assert.equal(await page.locator('#grant-user').inputValue(), 'u2');
+    assert.equal(await page.locator('#grant-table tr[data-grant-id]:visible').count(), 2);
+    assert.match(await page.locator('#grant-table tr[data-grant-id]:visible').first().innerText(), /Hong Kong Edge \/ Home Network/);
+    await page.locator('#grant-search').fill('Route 1');
+    assert.equal(await page.locator('#grant-table tr[data-grant-id]:visible').count(), 1);
+    await page.locator('[data-grant-select]').click();
+    assert.match(await page.locator('#grant-selection-summary').textContent(), /已选 1 项授权，涉及 1 位用户：Team/);
+    await page.locator('#refresh-status').click();
+    await page.waitForTimeout(400);
+    assert.equal(await page.locator('#grant-table input:checked').count(), 1);
+    const selectedGrant = await page.locator('#grant-table tr[data-grant-id]:visible').getAttribute('data-grant-id');
+    await page.locator('#grant-bulk button[type=submit]').click();
+    await page.waitForFunction(() => document.querySelector('#notice').textContent.includes('用户线路授权已停用：变更 1'));
+    await page.waitForFunction(() => !document.querySelector('#grant-bulk').hasAttribute('aria-busy'));
+    assert.equal(await page.locator('#grant-user').inputValue(), 'u2');
+    assert.equal(await page.locator('#grant-search').inputValue(), 'Route 1');
+    assert.equal(await page.locator('#grant-table input:checked').count(), 0);
+    assert.match(await page.locator('#grant-table tr[data-grant-id]:visible').innerText(), /已从订阅撤下/);
+    let grantData = await page.evaluate(() => fetch('/admin/dashboard').then((r) => r.json()));
+    assert.equal(grantData.grants.find((g) => g.id === selectedGrant).enabled, false);
+    assert.equal(grantData.grants.find((g) => g.id === 'grant1').enabled, true);
+    assert.equal(grantData.routes.find((r) => r.id === 'r1').assignment_enabled, true);
+    assert.equal(grantData.links.find((l) => l.id === 'l1').enabled, true);
+    await page.locator('#grant-table tr[data-grant-id]:visible .grant-state-form button').click();
+    await page.waitForFunction(() => document.querySelector('#notice').textContent.includes('用户线路授权已启用：变更 1'));
+    await page.waitForFunction(() => !document.querySelector('#grant-bulk').hasAttribute('aria-busy'));
+    // Hidden selections are cleared when the scope changes.
+    await page.locator('[data-grant-select]').click();
+    await page.locator('#grant-user').selectOption('u1');
+    assert.equal(await page.locator('#grant-table input:checked').count(), 0);
+    assert.ok(await page.locator('#grant-bulk button[type=submit]').isDisabled());
+    await page.locator('#grant-search').fill('no matching route');
+    assert.ok(await page.locator('#grant-empty').isVisible());
+    await page.locator('#users a[data-manage-user="u2"]').click();
+    assert.equal(await page.locator('#grant-search').inputValue(), '');
+    assert.equal(await page.locator('#grant-table tr[data-grant-id]:visible').count(), 2);
+    await page.screenshot({ path: out + '/user-route-access.png', fullPage: true });
+    await page.goto(base + '/#subscribe');
+    await page.locator('#subscribe select[name=user_id]').selectOption('u2');
     await page
       .locator("#subscribe")
       .getByRole("button", { name: "全选筛选结果" })
@@ -123,14 +166,14 @@ const fs = require("node:fs");
     );
     assert.equal(await page.locator("#grants tbody tr").count(), 3);
     await page.goto(base + "/#users");
-    await page.locator("#usage-table tbody tr").first().waitFor();
+    await page.locator("#usage-table tbody tr:visible").first().waitFor();
     assert.match(await page.locator("#usage-table tbody tr").first().textContent(), /1.0 KiB/);
     await page.locator("#users details.create-details summary").click();
-    await page.locator("#users input[name=name]").fill("Browser QA user");
+    await page.locator('#users form[action="/admin/users"] input[name=name]').fill("Browser QA user");
     await page.locator("#refresh-status").click();
     await page.waitForTimeout(400);
     assert.equal(
-      await page.locator("#users input[name=name]").inputValue(),
+      await page.locator('#users form[action="/admin/users"] input[name=name]').inputValue(),
       "Browser QA user",
     );
     await page.locator('#users form[action="/admin/users"] button').click();
@@ -161,9 +204,12 @@ const fs = require("node:fs");
       .locator("#create-route input[name=public_host]")
       .fill("203.0.113.7");
     assert.equal(
-      await page.locator("#create-route input[name=link_url]").inputValue(),
+      await page.locator("#quick-reality-url").textContent(),
       "reality://203.0.113.7:8443/tunnel",
     );
+    await page.locator("#create-route input[name=reality_port]").fill("9443");
+    assert.equal(await page.locator("#quick-reality-url").textContent(), "reality://203.0.113.7:9443/tunnel");
+    assert.equal(await page.locator("#create-route input[name=link_url]").inputValue(), "");
     expectedInvalid = true;
     await page
       .locator("#create-route input[name=reality_target]")
@@ -261,16 +307,20 @@ const fs = require("node:fs");
       const otherSave = page.locator('#gateways form[action="/admin/gateways/g1/toggle"]');
       await otherSave.locator("button").click();
       await page.locator("#gateways .form-success").waitFor({ timeout: 5000 });
+      await page.waitForFunction(() => document.querySelector('#gateways form[action="/admin/gateways/g1/toggle"] [name="enabled"]').value === "true");
       assert.equal(agentSubmissions, 1, "duplicate submission escaped the form lock");
       assert.equal(await page.locator('#agents form[action="/admin/agents/a1/toggle"]').getAttribute("aria-busy"), "true");
-      await page.locator('#gateways form[action="/admin/gateways/g1/toggle"]').evaluate((form) => {
-        form.closest("tr").dataset.keepLatest = "true";
+      const latest = await otherSave.evaluate((form) => {
+        const row = form.closest("tr");
+        window.latestGatewayRow = row;
+        return form.elements.enabled.value;
       });
       const completed = page.waitForResponse((response) => response.url().endsWith("/admin/agents/a1/toggle"));
       releaseSave();
       await completed;
       await page.waitForFunction(() => !document.querySelector('#agents form[action="/admin/agents/a1/toggle"]')?.hasAttribute("aria-busy"));
-      assert.equal(await page.locator('#gateways form[action="/admin/gateways/g1/toggle"]').evaluate((form) => form.closest("tr").dataset.keepLatest), "true", "an older save response replaced newer controls");
+      assert.equal(await otherSave.evaluate((form) => form.closest("tr") === window.latestGatewayRow), true, "an older save response replaced newer controls");
+      assert.equal(await otherSave.locator('[name="enabled"]').inputValue(), latest, "an older save response restored the previous Gateway action");
     } finally {
       clearTimeout(holdTimer);
       releaseSave();
@@ -296,8 +346,8 @@ const fs = require("node:fs");
     const enrollment = await page.request.post(base + '/api/v1/enroll', { data: { token, role: 'gateway', node_id: autoID } });
     assert.equal(enrollment.status(), 201);
     const credential = (await enrollment.json()).credential;
-    const announce = async (ip, id = autoID, key = credential) => {
-      const status = await page.request.post(base + '/api/v1/status', { headers: { Authorization: 'Bearer ' + key }, data: { status: { node_id: id, role: 'gateway', binary_version: 'v0.4.7' } } });
+    const announce = async (ip, id = autoID, key = credential, extraStatus = {}) => {
+      const status = await page.request.post(base + '/api/v1/status', { headers: { Authorization: 'Bearer ' + key }, data: { status: { node_id: id, role: 'gateway', binary_version: 'v0.4.7', ...extraStatus } } });
       assert.equal(status.status(), 204);
       const response = await page.request.post(base + '/api/v1/gateway/address', { headers: { Authorization: 'Bearer ' + key }, data: { ip, sources: ['ip.sb', 'ipify'], ipv6: '2606:4700:4700::1111', ipv6_sources: ['ip.sb', 'ifconfig.co'] } });
       assert.equal(response.status(), 204);
@@ -343,11 +393,29 @@ const fs = require("node:fs");
     await announce('8.8.8.8', pendingID, pendingCredential);
     assert.equal(await linkInput.inputValue(), 'reality://8.8.8.8:8443/tunnel');
     assert.equal(await pendingLink.locator('td').nth(1).locator('code').textContent(), 'reality://8.8.8.8:8443/tunnel');
+    const portRow = page.locator('#gateways tbody tr').filter({ hasText: 'Pending IP Gateway' });
+    await portRow.locator('details summary').click();
+    const portForm = portRow.locator('form[action$="/edit"]');
+    const realityPort = portForm.locator('[name="reality_port"]');
+    assert.ok(!(await realityPort.isEditable()));
+    await announce('8.8.8.8', pendingID, pendingCredential, { binary_version: 'v0.4.8', reality_port_control: true });
+    await realityPort.fill('9443');
+    await portForm.getByRole('button', { name: '保存', exact: true }).click();
+    await page.locator('#gateways .form-success').waitFor();
+    await portRow.getByText('REALITY 等待 Gateway 应用；自动 Link 暂用 TCP 8443', { exact: true }).waitFor();
+    const configResponse = await page.request.get(base + '/api/v1/config', { headers: { Authorization: 'Bearer ' + pendingCredential } });
+    const applied = await configResponse.json();
+    assert.equal(applied.gateway.reality_port, 9443);
+    await announce('8.8.8.8', pendingID, pendingCredential, { binary_version: 'v0.4.8', reality_port_control: true, apply_error: 'cannot bind REALITY TCP port 9443' });
+    await portRow.getByText('应用失败', { exact: true }).waitFor();
+    await portRow.getByText('cannot bind REALITY TCP port 9443', { exact: true }).waitFor();
+    await announce('8.8.8.8', pendingID, pendingCredential, { binary_version: 'v0.4.8', reality_port_control: true, applied_version: applied.revision, xray_ready: true });
+    await portRow.getByText('REALITY 等待 Gateway 应用；自动 Link 暂用 TCP 8443', { exact: true }).waitFor({ state: 'hidden' });
     await pendingLink.locator('details summary').click();
     await linkInput.fill('reality://manual-link.example:8443/tunnel');
     await announce('9.9.9.9', pendingID, pendingCredential);
     assert.equal(await linkInput.inputValue(), 'reality://manual-link.example:8443/tunnel', 'refresh discarded an edited URL');
-    assert.equal(await pendingLink.locator('td').nth(1).locator('code').textContent(), 'reality://9.9.9.9:8443/tunnel');
+    assert.equal(await pendingLink.locator('td').nth(1).locator('code').textContent(), 'reality://9.9.9.9:9443/tunnel');
     await page.setViewportSize({ width: 390, height: 844 });
     await page.goto(base + "/");
     await page.waitForFunction(() =>
@@ -362,6 +430,21 @@ const fs = require("node:fs");
       ),
       "page overflows mobile viewport",
     );
+    await page.goto(base + '/#grants');
+    await page.locator('#grant-user').selectOption('u2');
+    await page.screenshot({ path: out + '/user-route-access-mobile.png', fullPage: true });
+    assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), 'grant management overflows mobile viewport');
+    // The same named routes and explicit state actions work without JavaScript.
+    const plainContext = await browser.newContext({ javaScriptEnabled: false, storageState: await page.context().storageState() });
+    const plain = await plainContext.newPage();
+    await plain.goto(base + '/#grants');
+    const plainGrant = plain.locator('#grant-table tr[data-grant-id="grant1"]');
+    assert.match(await plainGrant.innerText(), /Hong Kong Edge \/ Home Network/);
+    await plainGrant.locator('.grant-state-form button').click();
+    assert.equal(await plainGrant.getAttribute('data-enabled'), 'false');
+    await plainGrant.locator('.grant-state-form button').click();
+    assert.equal(await plainGrant.getAttribute('data-enabled'), 'true');
+    await plainContext.close();
     assert.deepEqual(errors, []);
     console.log(
       "Panel browser checks passed: navigation, topology, matrix, selection, refresh, grants, validation, audit, node wizard, ingress defaults and all switch combinations, external exit, mobile.",

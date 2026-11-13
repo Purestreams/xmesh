@@ -1,10 +1,9 @@
-FROM ghcr.io/xtls/xray-core:26.10.21 AS xray
-
-FROM golang:1.27.3-bookworm AS build
+FROM golang:1.27.4-bookworm AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
+RUN CGO_ENABLED=0 go -C build/gateway-xray build -mod=readonly -trimpath -o /out/xray github.com/xtls/xray-core/main
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/xmesh ./cmd/xmesh
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/deploycheck ./tests/reality/deploycheck
 RUN curl --fail --location --retry 3 https://github.com/HyNetworks/hysteria/releases/download/app/v2.13.0/hysteria-linux-amd64 -o /out/hysteria \
@@ -15,7 +14,7 @@ FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
     && mkdir -p /etc/xmesh /var/lib/xmesh
-COPY --from=xray /usr/local/bin/xray /usr/local/lib/xmesh/xray
+COPY --from=build /out/xray /usr/local/lib/xmesh/xray
 COPY --from=build /out/xmesh /usr/local/bin/xmesh
 COPY --from=build /out/deploycheck /usr/local/bin/deploycheck
 COPY --from=build /out/hysteria /usr/local/bin/hysteria

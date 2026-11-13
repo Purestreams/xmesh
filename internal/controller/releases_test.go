@@ -252,18 +252,24 @@ func TestEnrollmentOffersBothSourcesAndBothInstallModes(t *testing.T) {
 }
 
 func TestGatewayInstallAndUpgradeCommandsUseConfiguredPort(t *testing.T) {
-	server, _ := testServer(t, func(s *model.State) error {
-		s.Gateways["g"] = model.Gateway{ID: "g", Name: "Gateway", VMessPort: 8086, Enabled: true, CredentialHash: "existing-credential-hash"}
+	server, state := testServer(t, func(s *model.State) error {
+		s.Gateways["g"] = model.Gateway{ID: "g", Name: "Gateway", VMessPort: 8086, RealityPort: 9443, Enabled: true, CredentialHash: "existing-credential-hash"}
 		return nil
 	})
 	server.cfg.ReleaseBaseURL = "https://github.com/example/xmesh/releases/download"
-	server.cfg.ReleaseVersion = "v0.2.5"
+	server.cfg.ReleaseVersion = "v0.4.7"
 	server.cfg.ReleaseDir = t.TempDir()
 	request := httptest.NewRequest(http.MethodPost, "/admin/enrollments", strings.NewReader("role=gateway&node_id=g"))
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	response := httptest.NewRecorder()
 	server.createEnrollment(response, request)
-	if response.Code != http.StatusOK || strings.Count(response.Body.String(), "'--vmess-port' '8086'") != 8 {
+	if response.Code != http.StatusConflict || len(state.Snapshot().Enrollments) != 0 {
+		t.Fatalf("created enrollment for an incompatible release: %d %s", response.Code, response.Body)
+	}
+	server.cfg.ReleaseVersion = "v0.4.8"
+	response = httptest.NewRecorder()
+	server.createEnrollment(response, request)
+	if response.Code != http.StatusOK || strings.Count(response.Body.String(), "'--vmess-port' '8086'") != 8 || strings.Count(response.Body.String(), "'--reality-port' '9443'") != 8 {
 		t.Fatalf("Gateway install/rotation commands lost configured port: %d %s", response.Code, response.Body.String())
 	}
 	request = httptest.NewRequest(http.MethodGet, "/admin/upgrade/gateway/g", nil)
@@ -271,7 +277,7 @@ func TestGatewayInstallAndUpgradeCommandsUseConfiguredPort(t *testing.T) {
 	request.SetPathValue("id", "g")
 	response = httptest.NewRecorder()
 	server.upgradeOptions(response, request)
-	if response.Code != http.StatusOK || strings.Count(response.Body.String(), "'--vmess-port' '8086'") != 4 {
+	if response.Code != http.StatusOK || strings.Count(response.Body.String(), "'--vmess-port' '8086'") != 4 || strings.Count(response.Body.String(), "'--reality-port' '9443'") != 4 {
 		t.Fatalf("Gateway upgrade commands lost configured port: %d %s", response.Code, response.Body.String())
 	}
 }

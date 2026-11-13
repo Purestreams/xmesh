@@ -78,13 +78,22 @@ func hy2Share(gateway model.Gateway, grant model.Grant, name string) string {
 	return (&url.URL{Scheme: "hysteria2", User: url.User(grant.HY2Auth), Host: net.JoinHostPort(strings.Trim(gateway.PublicHost, "[]"), strconv.Itoa(gateway.HY2Port)), Path: "/", RawQuery: query.Encode(), Fragment: name + " / HY2"}).String()
 }
 
+func grantHY2Available(state model.State, grant model.Grant, now time.Time) bool {
+	attachment, exists := state.Attachments[grant.AttachmentID]
+	gateway := state.Gateways[attachment.GatewayID]
+	user := state.Users[grant.UserID]
+	return exists && user.Enabled && !user.Archived && grant.Enabled && grant.Published &&
+		subscriptionRouteAvailable(&state, attachment, now) && gateway.Enabled && gateway.HY2Enabled() &&
+		state.NodeStatus[gateway.ID].HY2Ready && grant.HY2Auth != ""
+}
+
 // The official client requires both CA trust and pin verification when
 // insecure is false. Include only the public certificate, never the key.
 func (s *Server) hy2ClientBundle(w http.ResponseWriter, r *http.Request, state model.State, userID string) {
 	grant, ok := state.Grants[r.URL.Query().Get("grant")]
 	attachment := state.Attachments[grant.AttachmentID]
 	gateway := state.Gateways[attachment.GatewayID]
-	if !ok || grant.UserID != userID || !state.Users[userID].Enabled || !grant.Enabled || !grant.Published || !subscriptionRouteAvailable(&state, attachment, s.now()) || !gateway.Enabled || !gateway.HY2Enabled() || !state.NodeStatus[gateway.ID].HY2Ready || grant.HY2Auth == "" {
+	if !ok || grant.UserID != userID || !grantHY2Available(state, grant, s.now()) {
 		http.Error(w, "HY2 authorization unavailable", http.StatusForbidden)
 		return
 	}

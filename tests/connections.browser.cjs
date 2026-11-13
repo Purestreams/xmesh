@@ -12,8 +12,11 @@ const fs = require("node:fs");
   try {
     const page = await browser.newPage({ locale: "zh-CN", viewport: { width: 1440, height: 1100 } });
     const errors = [];
+    const accessRecords = grants => grants.map(({access, ...record}) => record);
     page.on("pageerror", (error) => errors.push(error.message));
     const base = process.env.XMESH_PANEL_TEST_URL || "http://127.0.0.1:18088";
+    await page.context().addInitScript(() => sessionStorage.setItem('xmesh_expand_sections', 'true'));
+    page.on('dialog', dialog => dialog.accept());
     await page.goto(base + "/login");
     await page.getByLabel("用户名").fill("admin");
     await page.getByLabel("密码").fill("a-strong-test-password");
@@ -46,6 +49,30 @@ const fs = require("node:fs");
       await route.fulfill({ response, json: body });
     });
     await page.locator("#refresh-status").click();
+    // Both connection tabs must explain a missing target before submitting.
+    await page.getByRole('tab', {name:'按 Agent 连接',exact:true}).click();
+    const agentForm=page.locator('#assign-agent-panel form'),agentTarget=agentForm.locator('[name=reality_target]');
+    await agentForm.locator('[name=agent_id]').selectOption('a2');
+    await agentForm.locator('[name=gateway_id][value=g1]').check();
+    assert.equal(await agentTarget.evaluate(input=>input.required),true,'per-Agent assignment falsely presents a missing target as optional');
+    assert.equal(await agentTarget.evaluate(input=>input.checkValidity()),false);
+    assert.match(await agentTarget.evaluate(input=>input.validationMessage),/Hong Kong Edge/);
+    const agentHint=agentForm.locator('.connection-target-hint');
+    assert.match(await agentHint.textContent(),/Hong Kong Edge/);
+    await agentForm.locator('.selection-search').fill('  Singapore  ');
+    assert.equal(await agentForm.locator('fieldset > label:not([hidden])').count(),1,'connection search did not trim surrounding spaces');
+    assert.ok(await agentHint.isVisible(),'a hidden selection lost its target requirement');
+    await agentTarget.fill('manual.example:443');assert.equal(await agentTarget.evaluate(input=>input.checkValidity()),true);
+    await agentTarget.fill('   ');assert.equal(await agentTarget.evaluate(input=>input.checkValidity()),false);
+    await agentForm.getByRole('button',{name:'清除选择',exact:true}).click();
+    assert.equal(await agentTarget.evaluate(input=>input.required),false);assert.ok(await agentHint.isHidden());
+    await agentTarget.fill('');await agentForm.locator('.selection-search').fill('');
+    await agentForm.locator('[name=agent_id]').selectOption('a1');
+    await agentForm.locator('[name=gateway_id][value=g1]').check();
+    assert.equal(await agentTarget.evaluate(input=>input.required),false,'existing Links must not require a new target');
+    assert.match(await agentForm.locator('[name=gateway_id][value=g1]').evaluate(input=>input.parentElement.textContent),/保留已有 Link 配置/);
+    await agentForm.getByRole('button',{name:'清除选择',exact:true}).click();
+    await pendingTab.click();
     await form.locator('[data-agent-id="a2"][data-gateway-id="g1"] input').check();
     await page.waitForFunction(() => document.querySelector('#assign-pending-panel input[name="reality_target"]').required);
     assert.match(await target.getAttribute("placeholder"), /必填/);
@@ -75,6 +102,13 @@ const fs = require("node:fs");
       assert.ok(await hint.isHidden());
       assert.match(await target.getAttribute("placeholder"), /留空/);
       await clear.click();
+      await page.getByRole('tab',{name:'按 Agent 连接',exact:true}).click();
+      await agentForm.locator('[name=agent_id]').selectOption('a2');
+      await agentForm.locator('[name=gateway_id][value=g1]').check();
+      assert.equal(await agentTarget.evaluate(input=>input.required),false);
+      assert.equal(await agentTarget.evaluate(input=>input.checkValidity()),true);
+      assert.ok(await agentHint.isHidden());
+      await agentForm.getByRole('button',{name:'清除选择',exact:true}).click();await pendingTab.click();
     }
     await page.unroute(dashboardURL);
     await page.locator("#refresh-status").click();
@@ -109,6 +143,12 @@ const fs = require("node:fs");
     await page.locator("#refresh-status").click();
     await page.waitForTimeout(400);
     assert.equal(await checked.count(), 3, "refresh must preserve selection");
+    const nextPending = form.locator('[data-agent-id="a2"][data-gateway-id="g2"] input');
+    await nextPending.uncheck();
+    await form.locator('.pending-agent').selectOption('a2');
+    await form.locator('.pending-gateway').selectOption('g1');
+    await form.locator('.pending-search').fill('Hong Kong');
+    assert.equal(await checked.count(), 2, 'filtering must preserve hidden selections');
     const out = process.env.XMESH_PANEL_SCREENSHOTS || "tmp/panel-screenshots";
     fs.mkdirSync(out, { recursive: true });
     await page.locator("#assign").screenshot({ path: out + "/pending-connections-desktop.png" });
@@ -116,22 +156,106 @@ const fs = require("node:fs");
     await page.locator("#assign").screenshot({ path: out + "/pending-connections-mobile.png" });
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), "mobile layout overflows");
     await page.setViewportSize({ width: 1440, height: 1100 });
+    // Keep the completed response pending while preparing a new selection.
+    // The request's target belongs to its own batch and should return to blank.
+    await target.fill('completed-batch.example:443');
+    let releasePending, capturedPending;
+    const pendingGate = new Promise(resolve => { releasePending = resolve; });
+    const pendingCaptured = new Promise(resolve => { capturedPending = resolve; });
+    await page.route('**/admin/assign-connections', async route => {
+      const response = await route.fetch();
+      capturedPending();
+      await pendingGate;
+      await route.fulfill({ response });
+    });
     await submit.click();
-    await page.waitForFunction(() => document.querySelector("#notice").textContent.includes("新增 2，重新启用 1"));
+    try {
+      await pendingCaptured;
+      await form.locator('.pending-gateway').selectOption('');
+      await form.locator('.pending-search').fill('');
+      await nextPending.check();
+      await form.locator('.pending-gateway').selectOption('g1');
+      await form.locator('.pending-search').fill('Hong Kong');
+    } finally { releasePending(); }
+    await page.waitForFunction(() => !document.querySelector('#assign-pending-panel form').hasAttribute('aria-busy') &&
+      !document.querySelector('#refresh-status').disabled);
+    await page.unroute('**/admin/assign-connections');
+    assert.equal(await target.inputValue(), '', 'the last connection batch carried its target into the new draft');
+    assert.equal(await target.evaluate(input => input.defaultValue), '', 'the saved target became the next draft baseline');
+    assert.equal(await nextPending.isChecked(), true, 'successful connection dropped a pending selection');
+    assert.equal(await checked.count(), 1, 'submitted choices remained selected');
+    assert.equal(await form.getAttribute('data-dirty'), 'true');
+    const partial = await (await page.request.get(base + '/admin/dashboard')).json();
+    assert.equal(partial.routes.some(route => route.gateway_id === 'g2' && route.agent_id === 'a2'), false,
+      'the next connection was created before the second request');
+    await submit.click();
+    await page.waitForFunction(() => document.querySelector("#notice").textContent.includes("新增 1，重新启用 0"));
     await page.waitForFunction(() => document.querySelectorAll(".pending-choice").length === 2);
     assert.equal(await pendingTab.getAttribute("aria-selected"), "true", "tab must survive successful submit");
     assert.equal(await checked.count(), 0);
     assert.ok(await submit.isDisabled());
+    assert.equal(await form.locator('.pending-agent').inputValue(), 'a2', 'successful connection reset the Agent filter');
+    assert.equal(await form.locator('.pending-gateway').inputValue(), 'g1', 'successful connection reset the Gateway filter');
+    assert.equal(await form.locator('.pending-search').inputValue(), 'Hong Kong', 'successful connection cleared the search');
     const after = await (await page.request.get(base + "/admin/dashboard")).json();
     assert.equal(after.routes.length, 4);
     assert.equal(after.links.length, 4);
     assert.ok(after.links.find((link) => link.id === "l2").enabled);
-    assert.deepEqual(after.grants, before.grants, "bulk connection must not grant access");
+    assert.deepEqual(accessRecords(after.grants), accessRecords(before.grants), "bulk connection must not grant access");
     assert.deepEqual(after.nodes.filter((n) => n.role === "Gateway").map((n) => n.target), before.nodes.filter((n) => n.role === "Gateway").map((n) => n.target));
     await form.locator(".pending-agent").selectOption("a2");
     await form.locator(".pending-gateway").selectOption("g1");
     assert.ok(await form.locator(".pending-empty").isVisible());
     assert.ok(await selectAll.isDisabled());
+    // A successful per-Agent submission must retain its owner and filters,
+    // including filters on the other tab in the same section.
+    await page.getByRole('tab', { name: '按 Agent 连接', exact: true }).click();
+    const assignment = page.locator('#assign-agent-panel form');
+    await assignment.locator('[name="agent_id"]').selectOption('a2');
+    await assignment.locator('.selection-search').fill('Hong Kong');
+    await assignment.locator('.selection-filter').selectOption('active');
+    await assignment.locator('input[name="gateway_id"][value="g1"]').check();
+    await assignment.locator('button[type="submit"]').click();
+    await page.waitForFunction(() => document.querySelector('#notice').textContent.includes('Gateway 连接：新增 0，重新启用 0，已开启 1'));
+    await page.waitForFunction(() => !document.querySelector('#refresh-status').disabled);
+    assert.equal(await assignment.locator('[name="agent_id"]').inputValue(), 'a2', 'successful assignment switched to another Agent');
+    assert.equal(await assignment.locator('.selection-search').inputValue(), 'Hong Kong');
+    assert.equal(await assignment.locator('.selection-filter').inputValue(), 'active');
+    assert.equal(await form.locator('.pending-agent').inputValue(), 'a2');
+    assert.equal(await form.locator('.pending-gateway').inputValue(), 'g1');
+    assert.equal(await form.locator('.pending-search').inputValue(), 'Hong Kong');
+    assert.deepEqual(accessRecords((await (await page.request.get(base + '/admin/dashboard')).json()).grants), accessRecords(before.grants));
+    await assignment.locator('.selection-search').fill('');
+    const firstGateway=assignment.locator('input[name="gateway_id"][value="g1"]');
+    const nextGateway=assignment.locator('input[name="gateway_id"][value="g2"]');
+    const delayAssignment=async editPending=>{
+      let release,captured;
+      const gate=new Promise(resolve=>{release=resolve;}),started=new Promise(resolve=>{captured=resolve;});
+      await page.route('**/admin/assign-gateways',async route=>{
+        const response=await route.fetch();captured();await gate;await route.fulfill({response});
+      });
+      await assignment.locator('button[type="submit"]').click();
+      try {await started;await editPending();} finally {release();}
+      await page.waitForFunction(()=>!document.querySelector('#assign-agent-panel form').hasAttribute('aria-busy') &&
+        !document.querySelector('#refresh-status').disabled);
+      await page.unroute('**/admin/assign-gateways');
+    };
+    await firstGateway.check();
+    await delayAssignment(async()=>{await nextGateway.check();});
+    assert.equal(await firstGateway.isChecked(),false,'completed Gateway choices remained in the next batch');
+    assert.equal(await nextGateway.isChecked(),true,'next Gateway selection was lost during save');
+    await nextGateway.uncheck();
+    assert.equal(await assignment.getAttribute('data-dirty'),null);
+    await firstGateway.check();
+    await delayAssignment(async()=>{
+      await assignment.locator('[name="agent_id"]').selectOption('a1');
+      await firstGateway.check();
+    });
+    assert.equal(await assignment.locator('[name="agent_id"]').inputValue(),'a1');
+    assert.equal(await firstGateway.isChecked(),true,'completion for one Agent cleared another Agent\'s connection draft');
+    await firstGateway.uncheck();
+    assert.equal(await assignment.getAttribute('data-dirty'),null);
+    assert.deepEqual(accessRecords((await (await page.request.get(base + '/admin/dashboard')).json()).grants),accessRecords(before.grants));
     assert.deepEqual(errors, []);
     console.log("Connection tab browser checks passed: all agents, missing/disabled pairs, filters, select/clear, keyboard, refresh, bulk enable, targets, grants and mobile layout.");
   } finally {

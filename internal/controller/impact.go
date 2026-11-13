@@ -3,10 +3,10 @@ package controller
 import "github.com/Purestreams/xmesh/internal/model"
 
 type deletionImpact struct {
-	Assignments int
-	Links       int
-	Grants      int
-	Users       int
+	Assignments int `json:"assignments"`
+	Links       int `json:"links"`
+	Grants      int `json:"grants"`
+	Users       int `json:"users"`
 }
 
 func routeImpacts(state model.State) map[string]deletionImpact {

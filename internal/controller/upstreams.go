@@ -280,12 +280,21 @@ func (s *Server) RefreshUpstreamSubscriptions(ctx context.Context) {
 }
 
 func (s *Server) toggleUpstream(w http.ResponseWriter, r *http.Request) {
-	err := s.store.Update(func(state *model.State) error {
+	requested, err := optionalEnabledState(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	err = s.store.Update(func(state *model.State) error {
 		upstream, ok := state.Upstreams[r.PathValue("id")]
 		if !ok {
 			return errors.New("upstream not found")
 		}
-		upstream.Enabled = !upstream.Enabled
+		desired := desiredEnabledState(upstream.Enabled, requested)
+		if upstream.Enabled == desired {
+			return nil
+		}
+		upstream.Enabled = desired
 		state.Upstreams[upstream.ID] = upstream
 		bumpUpstreamRoutes(state, upstream.ID)
 		return nil

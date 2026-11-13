@@ -11,6 +11,43 @@
 [hidden] {
   display: none !important;
 }
+.grant-filters {
+  display: flex;
+  align-items: end;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.grant-filters label {
+  flex: 1 1 180px;
+  min-width: 0;
+}
+.grant-bulk {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 12px;
+  padding: 14px;
+  margin: 14px 0;
+  background: #f3f6fa;
+  border-radius: 9px;
+}
+.grant-bulk label {
+  margin: 0;
+}
+#grant-selection-summary {
+  flex: 1 1 240px;
+  overflow-wrap: anywhere;
+}
+#grant-table .grant-route-name {
+  min-width: 160px;
+  overflow-wrap: anywhere;
+}
+#grant-table td:first-child {
+  min-width: 80px;
+}
+#grant-table .grant-route-name small {
+  display: block;
+}
 header {
   height: 72px;
   box-sizing: border-box;
@@ -927,4 +964,26 @@ dialog pre {
   .detail-grid {
     grid-template-columns: 100px 1fr;
   }
+}
+.section-nav { display:flex; flex-wrap:wrap; gap:8px; margin:0 0 16px; }
+.section-nav a { padding:8px 12px; border:1px solid #dbe3ed; border-radius:8px; text-decoration:none; background:#fff; }
+.section-nav a[aria-current] { background:#e9f1ff; border-color:#5888cd; font-weight:600; }
+.section-nav button { margin-left:auto; }
+.user-workbench { padding:16px; background:#f1f6ff; }
+.user-workbench label { display:flex; gap:12px; align-items:center; }
+.user-workbench select { max-width:380px; }
+.context-summary { font-weight:600; margin-bottom:4px; }
+.subscription-guide { margin:16px 0; padding:16px; border:1px solid #dbe3ed; border-radius:10px; }
+.route-reason { font-size:13px; color:#586577; margin:8px 0; }
+.user-profile form { margin:12px 0; display:grid; gap:10px; }
+.user-profile textarea { min-height:70px; max-width:100%; }
+.install-token { white-space:pre-wrap; overflow-wrap:anywhere; }
+[hidden] { display:none !important; }
+@media (max-width:640px) {
+  .section-nav { flex-wrap:nowrap; overflow-x:auto; padding-bottom:8px; max-width:100%; }
+  .section-nav a,.section-nav button { white-space:nowrap; flex-shrink:0; }
+  .user-workbench label { display:block; }
+  .user-workbench select { max-width:100%; width:100%; }
+  .wizard-choices { grid-template-columns:1fr; }
+  .subscription-row { flex-wrap:wrap; }
 }

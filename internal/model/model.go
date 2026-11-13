@@ -10,6 +10,8 @@ const (
 )
 
 type User struct {
+	Notes                   string    `json:"notes,omitempty"`
+	Archived                bool      `json:"archived,omitempty"`
 	AuditEnabled            bool      `json:"audit_enabled,omitempty"`
 	AuditGeneration         uint64    `json:"audit_generation,omitempty"`
 	AuditLimitMB            int       `json:"audit_limit_mb,omitempty"`
@@ -47,6 +49,9 @@ type Gateway struct {
 	HY2Certificate              string    `json:"hy2_certificate,omitempty"`
 	HY2PrivateKey               string    `json:"hy2_private_key,omitempty"`
 	HY2PinSHA256                string    `json:"hy2_pin_sha256,omitempty"`
+	RealityPort                 int       `json:"reality_port,omitempty"`
+	PreviousRealityLinkPort     int       `json:"previous_reality_link_port,omitempty"`
+	RealityPortPendingRevision  uint64    `json:"reality_port_pending_revision,omitempty"`
 	RealityTarget               string    `json:"reality_target,omitempty"`
 	RealityName                 string    `json:"reality_name,omitempty"`
 	RealityPrivateKey           string    `json:"reality_private_key,omitempty"`
@@ -62,6 +67,17 @@ type Gateway struct {
 // Disabled flags keep old VMess configurations enabled by default.
 func (g Gateway) VMessEnabled() bool { return !g.VMessDisabled }
 func (g Gateway) HY2Enabled() bool   { return !g.HY2Disabled && g.HY2Port > 0 }
+
+const DefaultRealityPort = 8443
+
+// RealityLinkPort is the port for automatic Link URLs. An unset listener
+// override keeps the Gateway's local bind configuration in charge.
+func (g Gateway) RealityLinkPort() int {
+	if g.RealityPort != 0 {
+		return g.RealityPort
+	}
+	return DefaultRealityPort
+}
 
 type Agent struct {
 	GatewayID                   string    `json:"gateway_id,omitempty"`
@@ -83,6 +99,7 @@ type Agent struct {
 func GatewayAgentID(gatewayID string) string { return "embedded-" + gatewayID }
 
 type Attachment struct {
+	Name                        string               `json:"name,omitempty"`
 	ProbeRequestID              string               `json:"probe_request_id,omitempty"`
 	ProbeRequestedAt            time.Time            `json:"probe_requested_at,omitempty"`
 	UpstreamProbe               *UpstreamProbeStatus `json:"upstream_probe,omitempty"`
@@ -184,6 +201,7 @@ type Link struct {
 }
 
 type Grant struct {
+	AccessVersion uint64    `json:"access_version,omitempty"`
 	ID            string    `json:"id"`
 	UserID        string    `json:"user_id"`
 	AttachmentID  string    `json:"attachment_id"`
@@ -234,6 +252,7 @@ type NodeStatus struct {
 	IngressControls              bool              `json:"ingress_controls,omitempty"`
 	HY2Ready                     bool              `json:"hy2_ready,omitempty"`
 	IPv6IngressReady             bool              `json:"ipv6_ingress_ready,omitempty"`
+	RealityPortControl           bool              `json:"reality_port_control,omitempty"`
 	NodeID                       string            `json:"node_id"`
 	Role                         Role              `json:"role"`
 	BinaryVersion                string            `json:"binary_version,omitempty"`

@@ -22,7 +22,7 @@ func completedProbe(now time.Time, request string) model.UpstreamProbeStatus {
 func TestUpstreamProbeLifecycleThroughGatewayConfigAndReports(t *testing.T) {
 	now := time.Now().UTC()
 	server, store := testServer(t, func(s *model.State) error {
-		s.Gateways["gw"] = model.Gateway{ID: "gw", Enabled: true, DesiredVersion: 4, CredentialHash: auth.SecretHash("gateway-secret")}
+		s.Gateways["gw"] = model.Gateway{ID: "gw", Enabled: true, PublicHost: "edge.example", DesiredVersion: 4, CredentialHash: auth.SecretHash("gateway-secret")}
 		s.Upstreams["up"] = model.VMessUpstream{ID: "up", Enabled: true, Endpoint: model.VMessEndpoint{UUID: "selected-node", Address: "exit.invalid"}}
 		s.Attachments["route"] = model.Attachment{ID: "route", GatewayID: "gw", UpstreamID: "up", Enabled: true}
 		s.NodeStatus["gw"] = model.NodeStatus{Online: true, Ready: true, XrayReady: true, ExternalUpstreams: true, UpstreamProbes: true, UpstreamProbeIntervalSeconds: 300, LastSeen: now, AppliedVersion: 4}

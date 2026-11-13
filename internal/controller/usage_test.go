@@ -1,6 +1,10 @@
 package controller
 
 import (
+	"bytes"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -43,5 +47,73 @@ func TestGrantUsageWindowsAndRestart(t *testing.T) {
 	removeLink(&s, "l1")
 	if got := usageViews(s, now)[0].Windows["1d"].Upload; got != 600 {
 		t.Fatalf("deleting authorization erased history: %d", got)
+	}
+}
+
+func TestUsageIgnoresOlderCountersWithoutMovingBaseline(t *testing.T) {
+	for _, retired := range []bool{false, true} {
+		for _, older := range []model.GrantLinkUsage{
+			{LinkID: "link", UploadBytes: 50, DownloadBytes: 100},
+			{LinkID: "link", UploadBytes: 90, DownloadBytes: 230},
+		} {
+			s, state := testServer(t, securityState)
+			now := time.Now().UTC()
+			s.now = func() time.Time { return now }
+			report := func(instance string, up, down uint64) {
+				t.Helper()
+				payload, _ := json.Marshal(StatusReport{Status: model.NodeStatus{InstanceID: instance}, Grants: []model.GrantStatus{{GrantID: "grant", Links: []model.GrantLinkUsage{{LinkID: "link", UploadBytes: up, DownloadBytes: down}}}}})
+				r := httptest.NewRequest(http.MethodPost, "/api/v1/status", bytes.NewReader(payload))
+				r.Header.Set("Authorization", "Bearer gateway-secret")
+				w := httptest.NewRecorder()
+				s.Handler().ServeHTTP(w, r)
+				if w.Code != 204 {
+					t.Fatalf("status report: %d %s", w.Code, w.Body.String())
+				}
+			}
+			check := func(up, down uint64) {
+				t.Helper()
+				for _, user := range usageViews(state.Snapshot(), now) {
+					if user.UserID == "u" {
+						if got := user.Windows["5h"]; got.Upload != up || got.Download != down {
+							t.Fatalf("retired=%v older=%+v usage=%+v want=%d/%d", retired, older, got, up, down)
+						}
+						return
+					}
+				}
+				t.Fatal("user usage missing")
+			}
+			report("process-1", 100, 200)
+			if retired {
+				if err := state.Update(func(st *model.State) error { removeGrant(st, "grant"); return nil }); err != nil {
+					t.Fatal(err)
+				}
+			}
+			report("process-1", older.UploadBytes, older.DownloadBytes)
+			check(100, 200)
+			report("process-1", 150, 300)
+			report("process-1", 150, 300)
+			check(150, 300)
+			report("process-2", 10, 20)
+			report("process-2", 10, 20)
+			check(160, 320)
+			report("process-2", 5, 10)
+			report("process-2", 20, 40)
+			check(170, 340)
+		}
+	}
+}
+
+func TestUsageLinksWithSameNameHaveStableOrder(t *testing.T) {
+	st := model.NewState()
+	st.Users["u"] = model.User{ID: "u"}
+	st.Grants["grant"] = model.Grant{ID: "grant", UserID: "u", AttachmentID: "route"}
+	for _, id := range []string{"z", "a"} {
+		st.Links[id] = model.Link{ID: id, Name: "相同名称", AttachmentID: "route"}
+	}
+	for range 30 {
+		links := usageViews(st, time.Now())[0].Links
+		if len(links) != 2 || links[0].ID != "a" || links[1].ID != "z" {
+			t.Fatalf("same-name links jump between refreshes: %+v", links)
+		}
 	}
 }

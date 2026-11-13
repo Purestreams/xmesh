@@ -157,6 +157,7 @@ func (s *Server) nodeConfig(w http.ResponseWriter, r *http.Request) {
 			gateway.HY2Port = 0
 		}
 		response := GatewayConfig{Revision: gateway.DesiredVersion, Gateway: gateway}
+		response.Gateway.PreviousRealityLinkPort, response.Gateway.RealityPortPendingRevision = 0, 0
 		for _, attachment := range state.Attachments {
 			if attachment.GatewayID != nodeID || !attachment.Enabled {
 				continue
@@ -172,7 +173,7 @@ func (s *Server) nodeConfig(w http.ResponseWriter, r *http.Request) {
 						continue
 					}
 					link.TunnelTokenHash = ""
-					response.Links = append(response.Links, GatewayLinkConfig{Link: link, AgentID: attachment.AgentID, TunnelToken: auth.Derive(s.cfg.sessionKey(), "tunnel", link.ID)})
+					response.Links = append(response.Links, GatewayLinkConfig{Link: realityLinkForNode(gateway, link), AgentID: attachment.AgentID, TunnelToken: auth.Derive(s.cfg.sessionKey(), "tunnel", link.ID)})
 				}
 			}
 			for _, grant := range state.Grants {
@@ -213,7 +214,7 @@ func (s *Server) nodeConfig(w http.ResponseWriter, r *http.Request) {
 				}
 				link.TunnelTokenHash = ""
 				gateway := state.Gateways[attachment.GatewayID]
-				response.Links = append(response.Links, AgentLinkConfig{Link: link, GrantIDs: grantIDs, GatewayID: attachment.GatewayID, TunnelToken: auth.Derive(s.cfg.sessionKey(), "tunnel", link.ID), RealityPublicKey: gateway.RealityPublicKey, RealityName: gateway.RealityName})
+				response.Links = append(response.Links, AgentLinkConfig{Link: realityLinkForNode(gateway, link), GrantIDs: grantIDs, GatewayID: attachment.GatewayID, TunnelToken: auth.Derive(s.cfg.sessionKey(), "tunnel", link.ID), RealityPublicKey: gateway.RealityPublicKey, RealityName: gateway.RealityName})
 			}
 			for _, grant := range state.Grants {
 				user := state.Users[grant.UserID]
@@ -284,11 +285,12 @@ func (s *Server) nodeStatus(w http.ResponseWriter, r *http.Request) {
 		credential := strings.TrimSpace(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "))
 		if role == model.RoleGateway {
 			gateway := state.Gateways[nodeID]
+			confirmGatewayRealityPort(state, &gateway, report.Status)
 			if auth.EqualSecretHash(gateway.CredentialHash, credential) {
 				gateway.PreviousCredentialHash = ""
 				gateway.PreviousCredentialExpiresAt = time.Time{}
-				state.Gateways[nodeID] = gateway
 			}
+			state.Gateways[nodeID] = gateway
 		} else {
 			agent := state.Agents[nodeID]
 			if auth.EqualSecretHash(agent.CredentialHash, credential) {

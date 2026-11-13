@@ -132,24 +132,38 @@ func (s *Server) observedPublicIP(r *http.Request) string {
 // PublicHost remains the effective address for older nodes and subscriptions.
 // The new flag preserves all existing addresses as explicit manual overrides.
 func changeGatewayHost(state *model.State, gateway *model.Gateway, host string) {
-	if gateway.PublicHost == host {
+	changeGatewayEndpoint(state, gateway, host, gateway.RealityPort)
+}
+
+func changeGatewayEndpoint(state *model.State, gateway *model.Gateway, host string, realityPort int) {
+	if gateway.PublicHost == host && gateway.RealityPort == realityPort {
 		return
 	}
-	oldURL := "reality://" + net.JoinHostPort(gateway.PublicHost, "8443") + "/tunnel"
-	newURL := ""
-	if host != "" {
-		newURL = "reality://" + net.JoinHostPort(host, "8443") + "/tunnel"
+	oldURL := gatewayRealityURL(gateway.PublicHost, gateway.RealityLinkPort())
+	hostChanged := gateway.PublicHost != host
+	if hostChanged {
+		gateway.PublicHost = host
+		gateway.HY2Certificate, gateway.HY2PrivateKey, gateway.HY2PinSHA256 = "", "", ""
 	}
+	gateway.RealityPort = realityPort
+	newURL := gatewayRealityURL(host, gateway.RealityLinkPort())
+	if oldURL == newURL {
+		return
+	}
+	agents := map[string]bool{}
 	for id, link := range state.Links {
 		attachment := state.Attachments[link.AttachmentID]
-		if attachment.GatewayID == gateway.ID && (link.AutoURL || (!link.URLOverride && link.URL == oldURL)) {
+		if attachment.GatewayID == gateway.ID && (link.AutoURL || (!link.URLOverride && oldURL != "" && link.URL == oldURL)) {
 			link.URL, link.AutoURL = newURL, true
 			state.Links[id] = link
-			bumpAgent(state, attachment.AgentID)
+			agents[attachment.AgentID] = true
 		}
 	}
-	gateway.PublicHost = host
-	gateway.HY2Certificate, gateway.HY2PrivateKey, gateway.HY2PinSHA256 = "", "", ""
+	if hostChanged || gateway.PreviousRealityLinkPort == 0 {
+		for id := range agents {
+			bumpAgent(state, id)
+		}
+	}
 }
 
 func unpublishGatewayGrants(state *model.State, gatewayID string) {

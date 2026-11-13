@@ -13,6 +13,17 @@ import (
 
 const upstreamSubscriptionFailureGrace = 5 * time.Minute
 
+// Match the conditions that actually emit at least one URI in BuildSubscription.
+func grantImportable(state model.State, grant model.Grant, now time.Time) bool {
+	user, exists := state.Users[grant.UserID]
+	route, routeExists := state.Attachments[grant.AttachmentID]
+	gateway, gatewayExists := state.Gateways[route.GatewayID]
+	if !exists || !user.Enabled || user.Archived || !grant.Enabled || !grant.Published || !routeExists || !gatewayExists || !subscriptionRouteAvailable(&state, route, now) {
+		return false
+	}
+	return gateway.VMessEnabled() || (gateway.HY2Enabled() && state.NodeStatus[gateway.ID].HY2Ready && grant.HY2Auth != "" && gateway.HY2PinSHA256 != "")
+}
+
 func subscriptionRouteAvailable(state *model.State, attachment model.Attachment, now time.Time) bool {
 	if state.Gateways[attachment.GatewayID].PublicHost == "" || !routeAvailable(state, attachment) {
 		return false
@@ -27,6 +38,12 @@ func subscriptionRouteAvailable(state *model.State, attachment model.Attachment,
 }
 
 func routeDisplayName(state model.State, route model.Attachment) string {
+	if route.Name != "" {
+		return route.Name
+	}
+	if names := routeLinkNames(state, route.ID); len(names) > 0 {
+		return strings.Join(names, " / ")
+	}
 	if route.UpstreamID != "" {
 		return state.Gateways[route.GatewayID].Name + " / " + state.Upstreams[route.UpstreamID].Name
 	}
@@ -67,7 +84,7 @@ func BuildSubscription(state model.State, userID string) (string, error) {
 
 func buildSubscriptionAt(state model.State, userID string, now time.Time) (string, error) {
 	user, ok := state.Users[userID]
-	if !ok || !user.Enabled {
+	if !ok || !user.Enabled || user.Archived {
 		return "", fmt.Errorf("user unavailable")
 	}
 	type item struct {

@@ -3,7 +3,6 @@ package controller
 import (
 	"encoding/json"
 	"fmt"
-	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -161,7 +160,7 @@ func (s *Server) enableConnections(state *model.State, pairs []connectionPair, t
 			if err != nil {
 				return counts, err
 			}
-			linkURL := "reality://" + net.JoinHostPort(gateway.PublicHost, "8443") + "/tunnel"
+			linkURL := gatewayRealityURL(gateway.PublicHost, gateway.RealityLinkPort())
 			linkTarget := target
 			if gateway.RealityTarget != "" {
 				linkTarget = gateway.RealityTarget

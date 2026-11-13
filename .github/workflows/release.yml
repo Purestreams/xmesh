@@ -22,29 +22,20 @@ jobs:
         with:
           node-version: '22'
       - run: node --test tests/panel.test.cjs tests/i18n.test.cjs
-      - name: Download and verify pinned Xray builds
+      - name: Build pinned Gateway Xray with the patched toolchain and dependencies
         shell: bash
         run: |
           set -euo pipefail
-          source versions.env
-          mkdir -p xray-download/amd64 xray-download/arm64
+          mkdir -p xray-build/amd64 xray-build/arm64
           for arch in amd64 arm64; do
-            if [[ "$arch" == amd64 ]]; then upstream=64; else upstream=arm64-v8a; fi
-            base="https://github.com/XTLS/Xray-core/releases/download/v${XRAY_VERSION}/Xray-linux-${upstream}.zip"
-            curl --fail --location --retry 3 --output "xray-download/$arch/xray.zip" "$base"
-            curl --fail --location --retry 3 --output "xray-download/$arch/xray.zip.dgst" "$base.dgst"
-            digest=$(sed -n 's/^SHA2-256= *\([[:xdigit:]]\{64\}\).*/\1/p' "xray-download/$arch/xray.zip.dgst")
-            test "${#digest}" -eq 64
-            printf '%s  %s\n' "$digest" "xray-download/$arch/xray.zip" | sha256sum -c -
-            unzip -j "xray-download/$arch/xray.zip" xray -d "xray-download/$arch"
-            chmod +x "xray-download/$arch/xray"
+            CGO_ENABLED=0 GOOS=linux GOARCH="$arch" mise exec -- go -C build/gateway-xray build -mod=readonly -trimpath -ldflags '-s -w' -o "$PWD/xray-build/$arch/xray" github.com/xtls/xray-core/main
           done
       - name: Package Linux amd64/arm64 and Windows amd64
         shell: bash
         run: |
           set -euo pipefail
           version="$GITHUB_REF_NAME"
-          XRAY_AMD64="$PWD/xray-download/amd64/xray" XRAY_ARM64="$PWD/xray-download/arm64/xray" mise exec -- sh scripts/package.sh "$version"
+          XRAY_AMD64="$PWD/xray-build/amd64/xray" XRAY_ARM64="$PWD/xray-build/arm64/xray" mise exec -- sh scripts/package.sh "$version"
           for arch in amd64 arm64; do
             tar -tzf "dist/xmesh-${version}-linux-${arch}.tar.gz" | grep -Fx controller-updater.sh
             tar -tzf "dist/xmesh-${version}-linux-${arch}.tar.gz" | grep -Fx xmesh-updater

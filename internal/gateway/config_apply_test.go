@@ -15,6 +15,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -353,6 +354,43 @@ func testHotConfigTraffic(t *testing.T, useReality, useHY2 bool, dualStack ...bo
 	conn = dialSOCKSNoAuth(t, clientSOCKS, 1, target.Addr().String())
 	defer conn.Close()
 	echo()
+	if !useReality {
+		return
+	}
+	// An occupied port must not interrupt the existing listener and traffic.
+	busy, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer busy.Close()
+	busyAddress := busy.Addr().String()
+	configMu.Lock()
+	gatewayConfig.Revision = 6
+	gatewayConfig.Gateway.RealityPort = testPort(t, busyAddress)
+	configMu.Unlock()
+	if err := r.refresh(ctx); err == nil || !strings.Contains(err.Error(), "cannot bind REALITY TCP port") {
+		t.Fatalf("expected a busy REALITY port error, got %v", err)
+	}
+	if r.xrayAppliedRevision.Load() != 5 || !r.xrayReady.Load() {
+		t.Fatal("failed port change disrupted the running Gateway")
+	}
+	echo()
+	if err := busy.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.refresh(ctx); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, 8*time.Second, func() bool { return r.xrayReady.Load() && r.xrayAppliedRevision.Load() == 6 })
+	waitTCP(t, busyAddress, 5*time.Second)
+	configMu.Lock()
+	agentConfig.Revision = 6
+	agentConfig.Links[0].URL = "reality://" + busyAddress + "/tunnel"
+	configMu.Unlock()
+	waitFor(t, 12*time.Second, func() bool { return agentApplied.Load() == 6 && len(r.pool.Snapshot()) == 1 })
+	reconnected := dialSOCKSNoAuth(t, clientSOCKS, 1, target.Addr().String())
+	defer reconnected.Close()
+	assertLiveEcho(t, reconnected)
 }
 
 func assertLiveEcho(t *testing.T, conn net.Conn) {

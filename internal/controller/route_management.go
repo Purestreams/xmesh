@@ -5,11 +5,93 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 
 	"github.com/Purestreams/xmesh/internal/model"
 )
+
+func routeLinkNames(state model.State, routeID string) []string {
+	names := []string{}
+	seen := map[string]bool{}
+	for _, link := range state.Links {
+		if link.AttachmentID == routeID && link.Name != "" && !seen[link.Name] {
+			names = append(names, link.Name)
+			seen[link.Name] = true
+		}
+	}
+	sort.Strings(names)
+	return names
+}
+
+// Explicit desired state makes retries safe and changes only selected grants.
+func (s *Server) setGrantState(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "invalid form", http.StatusBadRequest)
+		return
+	}
+	value := r.PostForm.Get("enabled")
+	if value != "true" && value != "false" {
+		http.Error(w, "choose enable or disable", http.StatusBadRequest)
+		return
+	}
+	ids := r.PostForm["grant_id"]
+	if id := r.PathValue("id"); id != "" {
+		ids = []string{id}
+	}
+	if len(ids) == 0 {
+		http.Error(w, "select at least one grant", http.StatusBadRequest)
+		return
+	}
+	enabled, changed := value == "true", 0
+	err := s.store.Update(func(state *model.State) error {
+		selected := map[string]bool{}
+		for _, id := range ids {
+			if _, ok := state.Grants[id]; !ok {
+				return fmt.Errorf("grant not found")
+			}
+			selected[id] = true
+		}
+		gateways := map[string]bool{}
+		changedIDs := map[string]bool{}
+		for id := range selected {
+			grant := state.Grants[id]
+			if grant.Enabled == enabled {
+				continue
+			}
+			grant.Enabled, grant.Published = enabled, false
+			state.Grants[id] = grant
+			gateways[state.Attachments[grant.AttachmentID].GatewayID] = true
+			changed++
+			changedIDs[id] = true
+		}
+		for id := range gateways {
+			bumpGateway(state, id)
+		}
+		for id := range changedIDs {
+			grant := state.Grants[id]
+			if gateways[state.Attachments[grant.AttachmentID].GatewayID] {
+				grant.AccessVersion = state.Gateways[state.Attachments[grant.AttachmentID].GatewayID].DesiredVersion
+				state.Grants[id] = grant
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	action := "disabled"
+	if enabled {
+		action = "enabled"
+	}
+	message := fmt.Sprintf("User route access %s: %d changed; waiting for Gateway configuration", action, changed)
+	if changed == 0 {
+		message = "Selected route access is already " + action + ". Check each route for Gateway confirmation."
+	}
+	http.Redirect(w, r, "/?notice="+url.QueryEscape(message)+"#grants", http.StatusSeeOther)
+}
 
 func (s *Server) editLink(w http.ResponseWriter, r *http.Request) {
 	name := strings.TrimSpace(r.FormValue("name"))
@@ -147,8 +229,9 @@ func (s *Server) deleteGrant(w http.ResponseWriter, r *http.Request) {
 		if !ok {
 			return fmt.Errorf("grant not found")
 		}
-		if r.FormValue("confirm_id") != id {
-			return fmt.Errorf("confirmation ID does not match")
+		confirmation := state.Users[grant.UserID].Name + " / " + routeDisplayName(*state, state.Attachments[grant.AttachmentID])
+		if r.FormValue("confirm_name") != confirmation && r.FormValue("confirm_id") != id {
+			return fmt.Errorf("confirmation name does not match")
 		}
 		removeGrant(state, id)
 		bumpGatewayForAttachment(state, grant.AttachmentID)

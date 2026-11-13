@@ -43,7 +43,7 @@ test("interpolation preserves user content, including placeholders and replaceme
 test("static and generated interface messages have English translations", () => {
   const { t } = translations("en-US");
   const directory = path.join(__dirname, "../internal/controller");
-  for (const file of ["templates.go", "upstream_panel.go", "monitor.go", "server.go", "monitor.html", "monitor_admin.html", "panel.js", "monitor.js"]) {
+  for (const file of ["templates.go", "grant_panel.go", "user_panel.go", "upstream_panel.go", "monitor.go", "server.go", "monitor.html", "monitor_admin.html", "panel.js", "monitor.js"]) {
     const content = fs.readFileSync(path.join(directory, file), "utf8");
     const messages = [...content.matchAll(/ data-i18n>([^<{]+)<\/[^>]+>|<title data-i18n>([^<{]+)<\/title>|t\(("(?:[^"\\]|\\.)*")/g)];
     for (const match of messages) {
@@ -51,4 +51,12 @@ test("static and generated interface messages have English translations", () => 
       assert.ok(!/\p{Script=Han}/u.test(t(message)), `${file}: ${message}`);
     }
   }
+});
+
+test("route readiness and access acknowledgement reasons have English translations", () => {
+  const { t } = translations("en-US");
+  const content = fs.readFileSync(path.join(__dirname, "../internal/controller/user_experience.go"), "utf8");
+  const reasons = [...content.matchAll(/accessView\{"[^"]+", "([^"]+)"/g)].map(match => match[1]);
+  assert.ok(reasons.length >= 15);
+  for (const reason of reasons) assert.ok(!/\p{Script=Han}/u.test(t(reason)), reason);
 });

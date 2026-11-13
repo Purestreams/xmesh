@@ -312,6 +312,9 @@ func buildXrayConfigWithStats(config controller.GatewayConfig, socksAddress, rea
 			return nil, fmt.Errorf("REALITY listen: %w", err)
 		}
 		realityPort, err := strconv.Atoi(realityPortText)
+		if config.Gateway.RealityPort != 0 {
+			realityPort, err = config.Gateway.RealityPort, nil
+		}
 		if err != nil || realityPort <= 0 || realityPort > 65535 {
 			return nil, errors.New("invalid REALITY listen port")
 		}
@@ -332,6 +335,19 @@ func buildXrayConfigWithStats(config controller.GatewayConfig, socksAddress, rea
 			settings.ShortIDs = append(settings.ShortIDs, link.RealityShortID)
 		}
 		if len(realityInbound.Settings.Clients) > 0 {
+			if config.Gateway.RealityPort != 0 {
+				for _, other := range result.Inbounds {
+					if other.Tag != "xmesh-hy2" && other.Port == realityPort {
+						return nil, fmt.Errorf("REALITY TCP port %d conflicts with %s", realityPort, other.Tag)
+					}
+				}
+				for _, address := range []string{socksAddress, tunnelAddress} {
+					_, text, _ := net.SplitHostPort(address)
+					if port, _ := strconv.Atoi(text); port == realityPort {
+						return nil, fmt.Errorf("REALITY TCP port %d conflicts with a local Gateway listener", realityPort)
+					}
+				}
+			}
 			result.Inbounds = append(result.Inbounds, realityInbound)
 			// New Xray defaults block private destinations on VLESS inbounds.
 			// Redirect fixes both the backend host and port before finalRules run.
@@ -362,7 +378,11 @@ func buildXrayConfigWithStats(config controller.GatewayConfig, socksAddress, rea
 var errXrayReload = errors.New("xray reload requested")
 
 func (r *Runtime) xrayPayload(config controller.GatewayConfig) ([]byte, error) {
-	payload, err := buildXrayConfigWithStats(config, r.local.Gateway.SOCKSListen, r.local.Gateway.RealityListen, r.local.Gateway.TunnelListen, r.local.Gateway.StatsListen)
+	realityAddress := r.local.Gateway.RealityListen
+	if realityAddress == "" {
+		realityAddress = net.JoinHostPort("0.0.0.0", strconv.Itoa(model.DefaultRealityPort))
+	}
+	payload, err := buildXrayConfigWithStats(config, r.local.Gateway.SOCKSListen, realityAddress, r.local.Gateway.TunnelListen, r.local.Gateway.StatsListen)
 	if err != nil {
 		return nil, err
 	}
@@ -375,6 +395,37 @@ func (r *Runtime) writeXrayConfig(config controller.GatewayConfig) error {
 		return err
 	}
 	return writeProtectedAtomic(r.local.Gateway.XrayConfigPath, payload)
+}
+
+// Xray's config check does not bind sockets. Try a newly selected port before
+// restarting a working Xray process, to catch occupied or restricted ports.
+func checkNewRealityListener(previous, next []byte) error {
+	var old, candidate xrayConfig
+	_ = json.Unmarshal(previous, &old)
+	if err := json.Unmarshal(next, &candidate); err != nil {
+		return err
+	}
+	for _, inbound := range candidate.Inbounds {
+		if inbound.Tag != "xmesh-reality" {
+			continue
+		}
+		for _, running := range old.Inbounds {
+			// Xray already owns the TCP port, and the restart will release it.
+			if running.Port == inbound.Port && running.Tag != "xmesh-hy2" {
+				return nil
+			}
+		}
+		network := "tcp"
+		if ip := net.ParseIP(inbound.Listen); ip != nil && ip.To4() != nil {
+			network = "tcp4"
+		}
+		listener, err := net.Listen(network, net.JoinHostPort(inbound.Listen, strconv.Itoa(inbound.Port)))
+		if err != nil {
+			return fmt.Errorf("cannot bind REALITY TCP port %d: %w", inbound.Port, err)
+		}
+		return listener.Close()
+	}
+	return nil
 }
 
 // Validate the next config while the current Xray process is still serving.

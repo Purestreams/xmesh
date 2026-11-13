@@ -2,7 +2,6 @@ package controller
 
 import (
 	"fmt"
-	"net"
 	"net/http"
 	"net/netip"
 	"strconv"
@@ -16,7 +15,7 @@ import (
 
 func (s *Server) createUser(w http.ResponseWriter, r *http.Request) {
 	name := strings.TrimSpace(r.FormValue("name"))
-	if name == "" {
+	if !validDisplayName(name) {
 		http.Error(w, "name is required", http.StatusBadRequest)
 		return
 	}
@@ -42,25 +41,63 @@ func (s *Server) createUser(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) toggleUser(w http.ResponseWriter, r *http.Request) {
+	s.updateUserEnabled(w, r, nil)
+}
+
+func (s *Server) setUserState(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "invalid form", http.StatusBadRequest)
+		return
+	}
+	value := r.PostForm.Get("enabled")
+	if value != "true" && value != "false" {
+		http.Error(w, "choose enable or disable", http.StatusBadRequest)
+		return
+	}
+	enabled := value == "true"
+	s.updateUserEnabled(w, r, &enabled)
+}
+
+// A nil desired state keeps the legacy toggle endpoint compatible.
+func (s *Server) updateUserEnabled(w http.ResponseWriter, r *http.Request, enabled *bool) {
 	id := r.PathValue("id")
+	errorStatus := http.StatusNotFound
 	err := s.store.Update(func(state *model.State) error {
 		user, ok := state.Users[id]
 		if !ok {
 			return fmt.Errorf("user not found")
 		}
-		user.Enabled = !user.Enabled
+		desired := !user.Enabled
+		if enabled != nil {
+			desired = *enabled
+		}
+		if desired && user.Archived {
+			errorStatus = http.StatusBadRequest
+			return fmt.Errorf("restore the archived user before enabling")
+		}
+		if user.Enabled == desired {
+			return nil
+		}
+		user.Enabled = desired
 		state.Users[id] = user
+		gateways := map[string]bool{}
 		for grantID, grant := range state.Grants {
 			if grant.UserID == id {
 				grant.Published = false
 				state.Grants[grantID] = grant
-				bumpGatewayForAttachment(state, grant.AttachmentID)
+				gateways[state.Attachments[grant.AttachmentID].GatewayID] = true
 			}
 		}
+		for gatewayID := range gateways {
+			if _, exists := state.Gateways[gatewayID]; exists {
+				bumpGateway(state, gatewayID)
+			}
+		}
+		stampUserAccess(state, id)
 		return nil
 	})
 	if err != nil {
-		http.Error(w, err.Error(), 404)
+		http.Error(w, err.Error(), errorStatus)
 		return
 	}
 	http.Redirect(w, r, "/", http.StatusSeeOther)
@@ -105,6 +142,7 @@ func (s *Server) resetSubscription(w http.ResponseWriter, r *http.Request) {
 				bumpGateway(state, gatewayID)
 			}
 		}
+		stampUserAccess(state, user.ID)
 		return nil
 	})
 	if err != nil {
@@ -129,6 +167,17 @@ func (s *Server) createGateway(w http.ResponseWriter, r *http.Request) {
 	}
 	path := strings.TrimSpace(r.FormValue("vmess_path"))
 	port, err := parsePositive(r.FormValue("vmess_port"), 8080)
+	realityPort, realityErr := parseRealityPort(r, 0)
+	if realityErr != nil {
+		http.Error(w, realityErr.Error(), http.StatusBadRequest)
+		return
+	}
+	address.RealityPort, address.VMessPort = realityPort, port
+	applyIngressSwitches(r, &address)
+	if err := validateGatewayRealityPort(model.Gateway{}, address); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	hy2Port, hy2Err := parseHY2Port(r, port)
 	if hy2Err != nil {
 		http.Error(w, hy2Err.Error(), http.StatusBadRequest)
@@ -151,9 +200,10 @@ func (s *Server) createGateway(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	err = s.store.Update(func(state *model.State) error {
-		state.Gateways[id] = model.Gateway{ID: id, Name: name, PublicHost: host, PublicHostAuto: address.PublicHostAuto, ManualPublicHost: address.ManualPublicHost, IPv6IngressEnabled: address.IPv6IngressEnabled, Region: region, VMessPort: port, VMessPath: path, VMessHost: strings.TrimSpace(r.FormValue("vmess_host")), Enabled: true, DesiredVersion: 1, CreatedAt: s.now().UTC()}
-		gateway := state.Gateways[id]
-		applyIngressSwitches(r, &gateway)
+		gateway := address
+		gateway.ID, gateway.Name, gateway.PublicHost, gateway.Region = id, name, host, region
+		gateway.VMessPath, gateway.VMessHost = path, strings.TrimSpace(r.FormValue("vmess_host"))
+		gateway.Enabled, gateway.DesiredVersion, gateway.CreatedAt = true, 1, s.now().UTC()
 		if err := configureHY2(state, &gateway, hy2Port, s.now()); err != nil {
 			return err
 		}
@@ -217,15 +267,27 @@ func (s *Server) quickSetup(w http.ResponseWriter, r *http.Request) {
 	}
 	linkURL := strings.TrimSpace(r.FormValue("link_url"))
 	autoURL := linkURL == ""
+	realityPort, err := parseRealityPort(r, 0)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	address.RealityPort = realityPort
 	if autoURL {
 		host := publicHost
 		if host == "" {
 			host = "pending.invalid" // Only used to provision keys; never sent to nodes.
 		}
-		linkURL = "reality://" + net.JoinHostPort(host, "8443") + "/tunnel"
+		linkURL = gatewayRealityURL(host, address.RealityLinkPort())
 	}
 	vmessPath := strings.TrimSpace(r.FormValue("vmess_path"))
 	vmessPort, portErr := parsePositive(r.FormValue("vmess_port"), 8080)
+	address.VMessPort = vmessPort
+	applyIngressSwitches(r, &address)
+	if err := validateGatewayRealityPort(model.Gateway{}, address); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	hy2Port, hy2Err := parseHY2Port(r, vmessPort)
 	if hy2Err != nil {
 		http.Error(w, hy2Err.Error(), http.StatusBadRequest)
@@ -267,9 +329,10 @@ func (s *Server) quickSetup(w http.ResponseWriter, r *http.Request) {
 	}
 	now := s.now().UTC()
 	err = s.store.Update(func(state *model.State) error {
-		state.Gateways[gwID] = model.Gateway{ID: gwID, Name: gwName, PublicHost: publicHost, PublicHostAuto: address.PublicHostAuto, ManualPublicHost: address.ManualPublicHost, IPv6IngressEnabled: address.IPv6IngressEnabled, Region: region, VMessPort: vmessPort, VMessPath: vmessPath, VMessHost: strings.TrimSpace(r.FormValue("vmess_host")), Enabled: true, DesiredVersion: 1, CreatedAt: now}
-		gateway := state.Gateways[gwID]
-		applyIngressSwitches(r, &gateway)
+		gateway := address
+		gateway.ID, gateway.Name, gateway.PublicHost, gateway.Region = gwID, gwName, publicHost, region
+		gateway.VMessPath, gateway.VMessHost = vmessPath, strings.TrimSpace(r.FormValue("vmess_host"))
+		gateway.Enabled, gateway.DesiredVersion, gateway.CreatedAt = true, 1, now
 		if err := configureHY2(state, &gateway, hy2Port, now); err != nil {
 			return err
 		}
@@ -300,12 +363,21 @@ func (s *Server) quickSetup(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) toggleGateway(w http.ResponseWriter, r *http.Request) {
-	err := s.store.Update(func(state *model.State) error {
+	requested, err := optionalEnabledState(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	err = s.store.Update(func(state *model.State) error {
 		gateway, ok := state.Gateways[r.PathValue("id")]
 		if !ok {
 			return fmt.Errorf("gateway not found")
 		}
-		gateway.Enabled = !gateway.Enabled
+		desired := desiredEnabledState(gateway.Enabled, requested)
+		if gateway.Enabled == desired {
+			return nil
+		}
+		gateway.Enabled = desired
 		gateway.DesiredVersion++
 		state.Gateways[gateway.ID] = gateway
 		if agent, ok := state.Agents[model.GatewayAgentID(gateway.ID)]; ok && agent.GatewayID == gateway.ID {
@@ -331,12 +403,21 @@ func (s *Server) toggleGateway(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) toggleAgent(w http.ResponseWriter, r *http.Request) {
-	err := s.store.Update(func(state *model.State) error {
+	requested, err := optionalEnabledState(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	err = s.store.Update(func(state *model.State) error {
 		agent, ok := state.Agents[r.PathValue("id")]
 		if !ok {
 			return fmt.Errorf("agent not found")
 		}
-		agent.Enabled = !agent.Enabled
+		desired := desiredEnabledState(agent.Enabled, requested)
+		if agent.Enabled == desired {
+			return nil
+		}
+		agent.Enabled = desired
 		agent.DesiredVersion++
 		state.Agents[agent.ID] = agent
 		if agent.GatewayID != "" {
@@ -369,12 +450,21 @@ func (s *Server) toggleAgent(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) toggleAttachment(w http.ResponseWriter, r *http.Request) {
-	err := s.store.Update(func(state *model.State) error {
+	requested, err := optionalEnabledState(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	err = s.store.Update(func(state *model.State) error {
 		attachment, ok := state.Attachments[r.PathValue("id")]
 		if !ok {
 			return fmt.Errorf("attachment not found")
 		}
-		attachment.Enabled = !attachment.Enabled
+		desired := desiredEnabledState(attachment.Enabled, requested)
+		if attachment.Enabled == desired {
+			return nil
+		}
+		attachment.Enabled = desired
 		state.Attachments[attachment.ID] = attachment
 		bumpGateway(state, attachment.GatewayID)
 		if attachment.AgentID != "" {
@@ -398,12 +488,21 @@ func (s *Server) toggleAttachment(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) toggleLink(w http.ResponseWriter, r *http.Request) {
-	err := s.store.Update(func(state *model.State) error {
+	requested, err := optionalEnabledState(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	err = s.store.Update(func(state *model.State) error {
 		link, ok := state.Links[r.PathValue("id")]
 		if !ok {
 			return fmt.Errorf("link not found")
 		}
-		link.Enabled = !link.Enabled
+		desired := desiredEnabledState(link.Enabled, requested)
+		if link.Enabled == desired {
+			return nil
+		}
+		link.Enabled = desired
 		state.Links[link.ID] = link
 		attachment := state.Attachments[link.AttachmentID]
 		unpublishGrantsWithoutLink(state, link.AttachmentID)
@@ -615,6 +714,8 @@ func (s *Server) toggleGrant(w http.ResponseWriter, r *http.Request) {
 		grant.Published = false
 		state.Grants[grant.ID] = grant
 		bumpGatewayForAttachment(state, grant.AttachmentID)
+		grant.AccessVersion = state.Gateways[state.Attachments[grant.AttachmentID].GatewayID].DesiredVersion
+		state.Grants[grant.ID] = grant
 		return nil
 	})
 	if err != nil {
@@ -662,10 +763,17 @@ func (s *Server) createEnrollment(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 500)
 		return
 	}
+	var portArgs []string
+	errorStatus := http.StatusInternalServerError
 	err = s.store.Update(func(state *model.State) error {
 		if role == model.RoleGateway {
-			if _, ok := state.Gateways[nodeID]; !ok {
+			gateway, ok := state.Gateways[nodeID]
+			if !ok {
 				return fmt.Errorf("gateway no longer exists")
+			}
+			if !s.gatewayRealityPortReleaseCompatible(gateway) {
+				errorStatus = http.StatusConflict
+				return fmt.Errorf("a custom REALITY port requires Gateway %s or newer", gatewayRealityPortMinimum)
 			}
 		} else if _, ok := state.Agents[nodeID]; !ok {
 			return fmt.Errorf("agent no longer exists")
@@ -677,16 +785,16 @@ func (s *Server) createEnrollment(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		state.Enrollments[id] = model.Enrollment{ID: id, NodeID: nodeID, Role: role, TokenHash: auth.SecretHash(token), ExpiresAt: s.now().Add(30 * time.Minute).UTC(), CreatedAt: s.now().UTC()}
+		portArgs = nodeInstallPortArgs(*state, role, nodeID)
 		return nil
 	})
 	if err != nil {
-		http.Error(w, err.Error(), 500)
+		http.Error(w, err.Error(), errorStatus)
 		return
 	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	state = s.store.Snapshot()
-	portArgs := nodeInstallPortArgs(state, role, nodeID)
 	_, _ = fmt.Fprintf(w, "One-time enrollment token (expires in 30 minutes):\n%s\n\nPaste one command on the %s host. The installer prompts for the token; it is not embedded in the command.\n", token, role)
 	s.writeInstallOptions(w, "Controller on-demand cache", strings.TrimSuffix(s.cfg.PublicURL, "/")+"/releases", role, portArgs...)
 	s.writeInstallOptions(w, "GitHub release", strings.TrimSuffix(s.cfg.ReleaseBaseURL, "/"), role, portArgs...)
@@ -726,16 +834,20 @@ func nodeInstallPortArgs(state model.State, role model.Role, nodeID string) []st
 	if role != model.RoleGateway {
 		return nil
 	}
-	port := state.Gateways[nodeID].VMessPort
+	gateway := state.Gateways[nodeID]
+	port := gateway.VMessPort
 	if port == 0 {
 		port = 8080
 	}
 	args := []string{"--vmess-port", strconv.Itoa(port)}
-	if !state.Gateways[nodeID].VMessEnabled() {
+	if !gateway.VMessEnabled() {
 		args = append(args, "--disable-vmess")
 	}
-	if hy2Port := state.Gateways[nodeID].HY2Port; state.Gateways[nodeID].HY2Enabled() {
+	if hy2Port := gateway.HY2Port; gateway.HY2Enabled() {
 		args = append(args, "--hy2-port", strconv.Itoa(hy2Port))
+	}
+	if gateway.RealityPort != 0 {
+		args = append(args, "--reality-port", strconv.Itoa(gateway.RealityPort))
 	}
 	return args
 }

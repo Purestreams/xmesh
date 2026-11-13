@@ -41,6 +41,21 @@ func (s *Server) editGateway(w http.ResponseWriter, r *http.Request) {
 		}
 		previousVMessDisabled, previousHY2Disabled := gateway.VMessDisabled, gateway.HY2Disabled
 		applyIngressSwitches(r, &gateway)
+		realityPort, err := parseRealityPort(r, previous.RealityPort)
+		if err != nil {
+			return err
+		}
+		if realityPort != previous.RealityPort && gateway.CredentialHash != "" && !state.NodeStatus[gateway.ID].RealityPortControl {
+			return fmt.Errorf("upgrade the Gateway and wait for it to report support before changing the REALITY port")
+		}
+		if realityPort != previous.RealityPort && nodeHasActiveUpgrade(state, gateway.ID) {
+			return fmt.Errorf("wait for the Gateway upgrade to finish before changing the REALITY port")
+		}
+		next := gateway
+		next.RealityPort, next.VMessPort = realityPort, port
+		if err := validateGatewayRealityPort(previous, next); err != nil {
+			return err
+		}
 		hy2Port, err := parseHY2Port(r, gateway.HY2Port)
 		if err != nil {
 			return err
@@ -48,8 +63,17 @@ func (s *Server) editGateway(w http.ResponseWriter, r *http.Request) {
 		if r.Form.Has("ingress_controls") && !gateway.HY2Disabled && hy2Port == 0 {
 			hy2Port = port
 		}
-		connectionChanged := gateway.PublicHost != host || previousIPv6 != gateway.IPv6IngressHost() || gateway.VMessPort != port || gateway.VMessPath != path || gateway.VMessHost != vmessHost || gateway.HY2Port != hy2Port || previousVMessDisabled != gateway.VMessDisabled || previousHY2Disabled != gateway.HY2Disabled
-		changeGatewayHost(state, &gateway, host)
+		ingressChanged := gateway.PublicHost != host || previousIPv6 != gateway.IPv6IngressHost() || gateway.VMessPort != port || gateway.VMessPath != path || gateway.VMessHost != vmessHost || gateway.HY2Port != hy2Port || previousVMessDisabled != gateway.VMessDisabled || previousHY2Disabled != gateway.HY2Disabled
+		// Even while disabled, replacing an outstanding port change must
+		// invalidate reports for its older revision.
+		if realityPort != previous.RealityPort && gateway.CredentialHash != "" &&
+			(gateway.RealityPortPendingRevision != 0 || (gateway.Enabled && previous.RealityLinkPort() != next.RealityLinkPort())) {
+			if gateway.PreviousRealityLinkPort == 0 {
+				gateway.PreviousRealityLinkPort = previous.RealityLinkPort()
+			}
+			gateway.RealityPortPendingRevision = gateway.DesiredVersion + 1
+		}
+		changeGatewayEndpoint(state, &gateway, host, realityPort)
 		gateway.Name, gateway.PublicHost, gateway.VMessPort, gateway.VMessPath, gateway.VMessHost = name, host, port, path, vmessHost
 		if err := configureHY2(state, &gateway, hy2Port, s.now()); err != nil {
 			return err
@@ -57,17 +81,12 @@ func (s *Server) editGateway(w http.ResponseWriter, r *http.Request) {
 		if r.Form.Has("region") {
 			gateway.Region = region
 		}
-		if connectionChanged {
+		if ingressChanged || realityPort != previous.RealityPort {
 			gateway.DesiredVersion++
 		}
 		state.Gateways[gateway.ID] = gateway
-		if connectionChanged {
-			for id, grant := range state.Grants {
-				if state.Attachments[grant.AttachmentID].GatewayID == gateway.ID {
-					grant.Published = false
-					state.Grants[id] = grant
-				}
-			}
+		if ingressChanged {
+			unpublishGatewayGrants(state, gateway.ID)
 		}
 		return nil
 	})

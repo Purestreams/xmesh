@@ -14,6 +14,21 @@ import (
 	"github.com/Purestreams/xmesh/internal/store"
 )
 
+func TestDashboardIncludesLiveLinkReporterDetails(t *testing.T) {
+	s, state := testServer(t, securityState)
+	seen := time.Now().UTC().Truncate(time.Second)
+	if err := state.Update(func(st *model.State) error {
+		st.LinkStatus["g/link"] = model.LinkStatus{LinkID: "link", ReporterNodeID: "g", Connections: 9, ActiveStreams: 7, LastSeen: seen, LastError: "diagnostic update"}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	reports := dashboardRequest(t, s).LinkReports
+	if len(reports) != 1 || reports[0].ReporterNodeID != "g" || reports[0].Connections != 9 || reports[0].ActiveStreams != 7 || !reports[0].LastSeen.Equal(seen) || reports[0].LastError != "diagnostic update" {
+		t.Fatalf("live reports missing: %+v", reports)
+	}
+}
+
 func dashboardRequest(t *testing.T, server *Server) dashboardData {
 	t.Helper()
 	r := httptest.NewRequest(http.MethodGet, "/admin/dashboard", nil)
@@ -35,10 +50,100 @@ func dashboardRequest(t *testing.T, server *Server) dashboardData {
 	return data
 }
 
+func TestDashboardSubscriptionVersionChangesOnlyOnReset(t *testing.T) {
+	server, _ := testServer(t, securityState)
+	versions := func() map[string]string {
+		result := map[string]string{}
+		for _, user := range dashboardRequest(t, server).Users {
+			result[user.ID] = user.SubscriptionVersion
+		}
+		return result
+	}
+	before := versions()
+	if before["u"] == "" || versions()["u"] != before["u"] {
+		t.Fatal("subscription version is missing or changes between reads")
+	}
+	response := postNodeForm("/admin/users/u/reset-subscription", url.Values{}, server.resetSubscription)
+	if response.Code != http.StatusSeeOther {
+		t.Fatal(response.Code, response.Body.String())
+	}
+	after := versions()
+	if after["u"] == before["u"] || after["other"] != before["other"] {
+		t.Fatal("subscription reset did not produce a user-scoped revision")
+	}
+}
+
+func TestDashboardAuditAndEnrollmentViewsFollowChangesWithoutSecrets(t *testing.T) {
+	server, state := testServer(t, func(s *model.State) error {
+		if err := securityState(s); err != nil {
+			return err
+		}
+		gateway := s.Gateways["g"]
+		gateway.Name = "Named Gateway"
+		s.Gateways["g"] = gateway
+		agent := s.Agents["a"]
+		agent.Name = "Named Agent"
+		s.Agents["a"] = agent
+		now := time.Unix(1_800_000_000, 0)
+		s.Enrollments["active"] = model.Enrollment{ID: "active", NodeID: "g", Role: model.RoleGateway, TokenHash: "enrollment-secret", ExpiresAt: now.Add(time.Hour)}
+		s.Enrollments["used"] = model.Enrollment{ID: "used", NodeID: "a", Role: model.RoleAgent, TokenHash: "used-secret", ExpiresAt: now.Add(time.Hour), UsedAt: now}
+		s.Enrollments["expired"] = model.Enrollment{ID: "expired", NodeID: "g", Role: model.RoleGateway, ExpiresAt: now.Add(-time.Hour)}
+		return nil
+	})
+	data := dashboardRequest(t, server)
+	views := map[string]enrollmentStatus{}
+	for _, view := range data.Enrollments {
+		views[view.ID] = view
+	}
+	if len(views) != 3 || views["active"].State != "active" || views["active"].NodeName != "Named Gateway" || views["used"].State != "used" || views["used"].NodeName != "Named Agent" || views["expired"].State != "expired" {
+		t.Fatal("enrollment lifecycle or node names missing", views)
+	}
+	payload, err := json.Marshal(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, secret := range []string{"enrollment-secret", "used-secret", "token_hash"} {
+		if strings.Contains(string(payload), secret) {
+			t.Fatal("dashboard exposed enrollment credentials")
+		}
+	}
+	if err := state.Update(func(s *model.State) error {
+		user := s.Users["u"]
+		user.Name = "Renamed user"
+		user.AuditEnabled = true
+		user.AuditLimitMB = 45
+		s.Users["u"] = user
+		enrollment := s.Enrollments["active"]
+		enrollment.ExpiresAt = server.now().Add(-time.Second)
+		s.Enrollments["active"] = enrollment
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	data = dashboardRequest(t, server)
+	found := false
+	for _, user := range data.Users {
+		if user.ID == "u" {
+			found = true
+			if user.Name != "Renamed user" || !user.AuditEnabled || user.AuditLimitMB != 45 {
+				t.Fatal("audit view did not follow changes", user)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("user disappeared from audit view")
+	}
+	for _, view := range data.Enrollments {
+		if view.ID == "active" && view.State != "expired" {
+			t.Fatal("revoked token still active")
+		}
+	}
+}
+
 func TestDashboardAuthenticationExpiryAndReadiness(t *testing.T) {
 	now := time.Unix(1_800_000_000, 0)
 	server, state := testServer(t, func(s *model.State) error {
-		s.Gateways["g"] = model.Gateway{ID: "g", Enabled: true, DesiredVersion: 2, RealityPrivateKey: "private-secret", CredentialHash: "credential-secret"}
+		s.Gateways["g"] = model.Gateway{ID: "g", Enabled: true, PublicHost: "edge.example", DesiredVersion: 2, RealityPrivateKey: "private-secret", CredentialHash: "credential-secret"}
 		s.Agents["a"] = model.Agent{ID: "a", Enabled: true, DesiredVersion: 2}
 		s.Users["u"] = model.User{ID: "u", SubscriptionToken: "subscription-secret"}
 		s.Attachments["r"] = model.Attachment{ID: "r", GatewayID: "g", AgentID: "a", Enabled: true}

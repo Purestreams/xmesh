@@ -39,6 +39,9 @@ func updaterViews(state model.State, now time.Time) map[string]updaterView {
 				stage = "在线"
 			}
 		}
+		if pairingInProgress(up, now) {
+			stage = "配对中"
+		}
 		result[id] = updaterView{State: stage, Mode: up.Mode, Arch: up.Arch, Version: up.Version, LastSeen: up.LastSeen}
 	}
 	return result
@@ -48,8 +51,26 @@ func sortedUpgradeTasks(state model.State) []model.UpgradeTask {
 	for _, task := range state.UpgradeTasks {
 		tasks = append(tasks, task)
 	}
-	sort.Slice(tasks, func(i, j int) bool { return tasks[i].CreatedAt.After(tasks[j].CreatedAt) })
+	sort.Slice(tasks, func(i, j int) bool {
+		if tasks[i].CreatedAt.Equal(tasks[j].CreatedAt) {
+			return tasks[i].ID < tasks[j].ID
+		}
+		return tasks[i].CreatedAt.After(tasks[j].CreatedAt)
+	})
 	return tasks
+}
+
+func upgradeNodeName(state model.State, task model.UpgradeTask) string {
+	name := ""
+	if task.Role == model.RoleGateway {
+		name = state.Gateways[task.NodeID].Name
+	} else if task.Role == model.RoleAgent {
+		name = state.Agents[task.NodeID].Name
+	}
+	if name == "" {
+		return task.NodeID
+	}
+	return name
 }
 
 func nodeExists(state *model.State, role model.Role, id string) bool {
@@ -275,6 +296,10 @@ func (s *Server) createUpgrade(w http.ResponseWriter, r *http.Request) {
 			}
 			if !nodeExists(state, up.Role, t.NodeID) {
 				return fmt.Errorf("node %s not found", t.NodeID)
+			}
+			gateway := state.Gateways[t.NodeID]
+			if up.Role == model.RoleGateway && (gateway.RealityPort != 0 || gateway.RealityPortPendingRevision != 0) && !gatewayRealityPortReleaseSupported(version) {
+				return fmt.Errorf("a custom REALITY port requires Gateway %s or newer", gatewayRealityPortMinimum)
 			}
 			if up.Role == model.RoleGateway && !state.Gateways[t.NodeID].Enabled || up.Role == model.RoleAgent && !state.Agents[t.NodeID].Enabled {
 				return fmt.Errorf("node %s is disabled", t.NodeID)

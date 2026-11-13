@@ -94,13 +94,18 @@ func New(cfg Config, state *store.Store, logger *slog.Logger) (*Server, error) {
 			return "applied"
 		},
 		"join":                   func(values []string) string { return strings.Join(values, ", ") },
+		"routeName":              routeDisplayName,
+		"routeLinks":             routeLinkNames,
+		"grantHY2Available":      grantHY2Available,
+		"grantAccess":            grantAccess,
 		"canResumeUpgrade":       canResumeUpgrade,
+		"upgradeNodeName":        upgradeNodeName,
 		"gatewayAutoIPSupported": gatewayAutoIPSupported,
 		"gatewayIPv6Supported":   gatewayIPv6Supported,
 		"insecureWSS": func(link model.Link) bool {
 			return strings.HasPrefix(strings.ToLower(link.URL), "wss://") && !link.TLSVerify
 		},
-	}).Parse(strings.Replace(panelTemplate, "</div></main>", upstreamPanelSection+monitorPanelSection+auditPanelSection+"</div></main>", 1))
+	}).Parse(strings.Replace(panelTemplate, "</div></main>", upstreamPanelSection+monitorPanelSection+auditPanelSection+"</div></main>", 1) + grantTemplate + subscriptionLinksTemplate + userTableTemplate)
 	if err != nil {
 		return nil, fmt.Errorf("parse panel template: %w", err)
 	}
@@ -149,6 +154,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /admin/users/{id}/audit", s.requireAdmin(s.csrf(s.saveUserAudit)))
 	mux.HandleFunc("POST /admin/users/{id}/audit/clear", s.requireAdmin(s.csrf(s.clearUserAudit)))
 	mux.HandleFunc("POST /admin/users/{id}/toggle", s.requireAdmin(s.csrf(s.toggleUser)))
+	mux.HandleFunc("POST /admin/users/{id}/state", s.requireAdmin(s.csrf(s.setUserState)))
+	mux.HandleFunc("POST /admin/users/{id}/edit", s.requireAdmin(s.csrf(s.editUser)))
+	mux.HandleFunc("POST /admin/users/{id}/archive", s.requireAdmin(s.csrf(s.archiveUser)))
 	mux.HandleFunc("POST /admin/users/{id}/reset-subscription", s.requireAdmin(s.csrf(s.resetSubscription)))
 	mux.HandleFunc("POST /admin/gateways", s.requireAdmin(s.csrf(s.createGateway)))
 	mux.HandleFunc("POST /admin/quick-setup", s.requireAdmin(s.csrf(s.quickSetup)))
@@ -175,12 +183,16 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /admin/attachments", s.requireAdmin(s.csrf(s.createAttachment)))
 	mux.HandleFunc("POST /admin/attachments/{id}/toggle", s.requireAdmin(s.csrf(s.toggleAttachment)))
 	mux.HandleFunc("POST /admin/attachments/{id}/delete", s.requireAdmin(s.csrf(s.deleteAttachment)))
+	mux.HandleFunc("POST /admin/attachments/{id}/edit", s.requireAdmin(s.csrf(s.editRouteName)))
 	mux.HandleFunc("POST /admin/links", s.requireAdmin(s.csrf(s.createLink)))
 	mux.HandleFunc("POST /admin/links/{id}/toggle", s.requireAdmin(s.csrf(s.toggleLink)))
 	mux.HandleFunc("POST /admin/links/{id}/edit", s.requireAdmin(s.csrf(s.editLink)))
 	mux.HandleFunc("POST /admin/links/{id}/delete", s.requireAdmin(s.csrf(s.deleteLink)))
 	mux.HandleFunc("POST /admin/links/{id}/policy", s.requireAdmin(s.csrf(s.updateLinkPolicy)))
 	mux.HandleFunc("POST /admin/grants", s.requireAdmin(s.csrf(s.createGrant)))
+	mux.HandleFunc("GET /admin/grants", s.requireAdmin(s.grantFragment))
+	mux.HandleFunc("POST /admin/grants/state", s.requireAdmin(s.csrf(s.setGrantState)))
+	mux.HandleFunc("POST /admin/grants/{id}/state", s.requireAdmin(s.csrf(s.setGrantState)))
 	mux.HandleFunc("POST /admin/grants/{id}/toggle", s.requireAdmin(s.csrf(s.toggleGrant)))
 	mux.HandleFunc("POST /admin/grants/{id}/delete", s.requireAdmin(s.csrf(s.deleteGrant)))
 	mux.HandleFunc("POST /admin/users/{id}/subscribe", s.requireAdmin(s.csrf(s.openSubscription)))
@@ -361,6 +373,8 @@ func (s *Server) requireAdmin(next http.HandlerFunc) http.HandlerFunc {
 			http.Redirect(w, r, "/login", http.StatusSeeOther)
 			return
 		}
+		cookie, _ := r.Cookie(sessionCookie)
+		w.Header().Set("X-XMesh-CSRF-Token", auth.Derive(s.cfg.sessionKey(), "csrf", cookie.Value))
 		next(w, r)
 	}
 }
@@ -402,7 +416,7 @@ func (s *Server) panel(w http.ResponseWriter, r *http.Request) {
 	agentAttachments, externalAttachments := splitPanelAttachments(state)
 	cookie, _ := r.Cookie(sessionCookie)
 	data := panelData{
-		State: state, CSRF: auth.Derive(s.cfg.sessionKey(), "csrf", cookie.Value), Notice: r.URL.Query().Get("notice"), InsecurePublicURL: strings.HasPrefix(strings.ToLower(s.cfg.PublicURL), "http://"),
+		State: state, Now: s.now(), CSRF: auth.Derive(s.cfg.sessionKey(), "csrf", cookie.Value), Notice: r.URL.Query().Get("notice"), InsecurePublicURL: strings.HasPrefix(strings.ToLower(s.cfg.PublicURL), "http://"),
 		PublicURL: strings.TrimSuffix(s.cfg.PublicURL, "/"),
 		UserList:  sortedUsers(state), GatewayList: sortedGateways(state), AgentList: sortedAgents(state),
 		StandaloneAgentList: standaloneAgents(state),
@@ -543,6 +557,7 @@ func newID(prefix string) (string, error) {
 
 type panelData struct {
 	model.State
+	Now                    time.Time
 	CSRF                   string
 	Notice                 string
 	InsecurePublicURL      bool
@@ -578,12 +593,7 @@ func subscriptionCounts(state model.State, now time.Time) map[string]string {
 		for _, grant := range state.Grants {
 			if grant.UserID == user.ID && grant.Enabled {
 				total++
-				attachment, ok := state.Attachments[grant.AttachmentID]
-				if !ok {
-					continue
-				}
-				gateway, ok := state.Gateways[attachment.GatewayID]
-				if ok && grant.Published && subscriptionRouteAvailable(&state, attachment, now) && (gateway.VMessEnabled() || (gateway.HY2Enabled() && state.NodeStatus[gateway.ID].HY2Ready)) {
+				if grantImportable(state, grant, now) {
 					available++
 				}
 			}
@@ -594,8 +604,12 @@ func subscriptionCounts(state model.State, now time.Time) map[string]string {
 }
 
 type enrollmentStatus struct {
-	ID, NodeID, Role, State string
-	ExpiresAt               time.Time
+	ID        string    `json:"id"`
+	NodeID    string    `json:"node_id"`
+	NodeName  string    `json:"node_name"`
+	Role      string    `json:"role"`
+	State     string    `json:"state"`
+	ExpiresAt time.Time `json:"expires_at"`
 }
 
 func enrollmentStatuses(state model.State, now time.Time) []enrollmentStatus {
@@ -607,7 +621,14 @@ func enrollmentStatuses(state model.State, now time.Time) []enrollmentStatus {
 		} else if !now.Before(enrollment.ExpiresAt) {
 			status = "expired"
 		}
-		result = append(result, enrollmentStatus{ID: enrollment.ID, NodeID: enrollment.NodeID, Role: string(enrollment.Role), State: status, ExpiresAt: enrollment.ExpiresAt})
+		name := state.Gateways[enrollment.NodeID].Name
+		if enrollment.Role == model.RoleAgent {
+			name = state.Agents[enrollment.NodeID].Name
+		}
+		if name == "" {
+			name = enrollment.NodeID
+		}
+		result = append(result, enrollmentStatus{ID: enrollment.ID, NodeID: enrollment.NodeID, NodeName: name, Role: string(enrollment.Role), State: status, ExpiresAt: enrollment.ExpiresAt})
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].ExpiresAt.After(result[j].ExpiresAt) })
 	return result
@@ -697,7 +718,7 @@ func nextDeploymentAction(state model.State, id string, role model.Role) string 
 		if externalConfigured {
 			return "Gateway 配置已应用；请用实际流量验证外部上游"
 		}
-		return "检查 Link URL、8443 端口、REALITY target 和对端状态"
+		return "检查 Link URL、Gateway 的 REALITY 监听端口、target 和对端状态"
 	}
 	return "线路就绪；前往用户与订阅授权"
 }
@@ -763,7 +784,13 @@ func sortedGrants(s model.State) []model.Grant {
 	for _, v := range s.Grants {
 		result = append(result, v)
 	}
-	sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
+	sort.Slice(result, func(i, j int) bool {
+		left, right := result[i], result[j]
+		if left.UserID != right.UserID {
+			return routeNameLess(s.Users[left.UserID].Name, left.UserID, s.Users[right.UserID].Name, right.UserID)
+		}
+		return routeNameLess(routeDisplayName(s, s.Attachments[left.AttachmentID]), left.ID, routeDisplayName(s, s.Attachments[right.AttachmentID]), right.ID)
+	})
 	return result
 }
 

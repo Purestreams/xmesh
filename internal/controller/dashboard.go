@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Purestreams/xmesh/internal/auth"
 	"github.com/Purestreams/xmesh/internal/model"
 )
 
@@ -47,34 +48,43 @@ func pruneLinkHistory(state *model.State, now time.Time) {
 }
 
 type dashboardNode struct {
-	PublicIPSupported    bool             `json:"public_ip_supported"`
-	IPv6IngressSupported bool             `json:"ipv6_ingress_supported"`
-	IPv6IngressEnabled   bool             `json:"ipv6_ingress_enabled,omitempty"`
-	DetectedPublicIPv6   string           `json:"detected_public_ipv6,omitempty"`
-	PublicIPv6Sources    string           `json:"public_ipv6_sources,omitempty"`
-	VMessPort            int              `json:"vmess_port,omitempty"`
-	VMessPath            string           `json:"vmess_path,omitempty"`
-	PublicHostAuto       bool             `json:"public_host_auto,omitempty"`
-	DetectedPublicIP     string           `json:"detected_public_ip,omitempty"`
-	PublicIPSources      string           `json:"public_ip_sources,omitempty"`
-	ObservedPublicIP     string           `json:"observed_public_ip,omitempty"`
-	PublicIPCheckedAt    time.Time        `json:"public_ip_checked_at,omitempty"`
-	HY2Port              int              `json:"hy2_port,omitempty"`
-	VMessDisabled        bool             `json:"vmess_disabled,omitempty"`
-	HY2Disabled          bool             `json:"hy2_disabled,omitempty"`
-	ID                   string           `json:"id"`
-	Name                 string           `json:"name"`
-	Role                 string           `json:"role"`
-	Host                 string           `json:"host"`
-	Region               string           `json:"region"`
-	Target               string           `json:"target"`
-	Enabled              bool             `json:"enabled"`
-	Enrolled             bool             `json:"enrolled"`
-	Desired              uint64           `json:"desired"`
-	Status               model.NodeStatus `json:"status"`
-	Next                 string           `json:"next"`
+	PublicIPSupported       bool             `json:"public_ip_supported"`
+	IPv6IngressSupported    bool             `json:"ipv6_ingress_supported"`
+	IPv6IngressEnabled      bool             `json:"ipv6_ingress_enabled,omitempty"`
+	DetectedPublicIPv6      string           `json:"detected_public_ipv6,omitempty"`
+	PublicIPv6Sources       string           `json:"public_ipv6_sources,omitempty"`
+	VMessPort               int              `json:"vmess_port,omitempty"`
+	VMessPath               string           `json:"vmess_path,omitempty"`
+	PublicHostAuto          bool             `json:"public_host_auto,omitempty"`
+	DetectedPublicIP        string           `json:"detected_public_ip,omitempty"`
+	PublicIPSources         string           `json:"public_ip_sources,omitempty"`
+	ObservedPublicIP        string           `json:"observed_public_ip,omitempty"`
+	PublicIPCheckedAt       time.Time        `json:"public_ip_checked_at,omitempty"`
+	HY2Port                 int              `json:"hy2_port,omitempty"`
+	RealityPort             int              `json:"reality_port,omitempty"`
+	PreviousRealityLinkPort int              `json:"previous_reality_link_port,omitempty"`
+	VMessDisabled           bool             `json:"vmess_disabled,omitempty"`
+	HY2Disabled             bool             `json:"hy2_disabled,omitempty"`
+	ID                      string           `json:"id"`
+	GatewayID               string           `json:"gateway_id,omitempty"`
+	Impact                  deletionImpact   `json:"impact"`
+	Name                    string           `json:"name"`
+	Role                    string           `json:"role"`
+	Host                    string           `json:"host"`
+	Region                  string           `json:"region"`
+	Target                  string           `json:"target"`
+	Enabled                 bool             `json:"enabled"`
+	ConfiguredEnabled       bool             `json:"configured_enabled"`
+	AgentEnabled            bool             `json:"agent_enabled"`
+	Enrolled                bool             `json:"enrolled"`
+	Desired                 uint64           `json:"desired"`
+	Status                  model.NodeStatus `json:"status"`
+	Next                    string           `json:"next"`
 }
 type dashboardRoute struct {
+	DisplayName          string                     `json:"display_name"`
+	Name                 string                     `json:"name,omitempty"`
+	Issue                accessView                 `json:"issue"`
 	Probe                *model.UpstreamProbeStatus `json:"probe,omitempty"`
 	ProbeSupported       bool                       `json:"probe_supported,omitempty"`
 	CanProbe             bool                       `json:"can_probe,omitempty"`
@@ -97,34 +107,45 @@ type dashboardLink struct {
 	Status  model.LinkStatus `json:"status"`
 }
 type dashboardGrant struct {
-	ID        string            `json:"id"`
-	UserID    string            `json:"user_id"`
-	RouteID   string            `json:"route_id"`
-	Enabled   bool              `json:"enabled"`
-	Published bool              `json:"published"`
-	Status    model.GrantStatus `json:"status"`
+	Importable   bool              `json:"importable"`
+	Access       accessView        `json:"access"`
+	HY2Available bool              `json:"hy2_available"`
+	ID           string            `json:"id"`
+	UserID       string            `json:"user_id"`
+	RouteID      string            `json:"route_id"`
+	Enabled      bool              `json:"enabled"`
+	Published    bool              `json:"published"`
+	Status       model.GrantStatus `json:"status"`
 }
 type dashboardUser struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	Enabled     bool   `json:"enabled"`
-	Publication string `json:"publication"`
+	AuditEnabled        bool   `json:"audit_enabled"`
+	AuditLimitMB        int    `json:"audit_limit_mb"`
+	Notes               string `json:"notes,omitempty"`
+	Archived            bool   `json:"archived"`
+	SubscriptionVersion string `json:"subscription_version"`
+	ID                  string `json:"id"`
+	Name                string `json:"name"`
+	Enabled             bool   `json:"enabled"`
+	Publication         string `json:"publication"`
 }
 type dashboardData struct {
-	At             time.Time                     `json:"at"`
-	Revision       uint64                        `json:"revision"`
-	Nodes          []dashboardNode               `json:"nodes"`
-	Routes         []dashboardRoute              `json:"routes"`
-	Links          []dashboardLink               `json:"links"`
-	Users          []dashboardUser               `json:"users"`
-	Grants         []dashboardGrant              `json:"grants"`
-	History        map[string][]model.LinkSample `json:"history"`
-	Usage          []usageUserView               `json:"usage"`
-	Operations     []model.Operation             `json:"operations"`
-	Upgrade        controllerUpgradeView         `json:"upgrade"`
-	UpgradeTasks   []model.UpgradeTask           `json:"upgrade_tasks"`
-	Updaters       map[string]updaterView        `json:"updaters"`
-	UpgradeBatches map[string]model.UpgradeBatch `json:"upgrade_batches"`
+	ManagementRevision string                        `json:"management_revision"`
+	LinkReports        []model.LinkStatus            `json:"link_reports"`
+	Enrollments        []enrollmentStatus            `json:"enrollments"`
+	At                 time.Time                     `json:"at"`
+	Revision           uint64                        `json:"revision"`
+	Nodes              []dashboardNode               `json:"nodes"`
+	Routes             []dashboardRoute              `json:"routes"`
+	Links              []dashboardLink               `json:"links"`
+	Users              []dashboardUser               `json:"users"`
+	Grants             []dashboardGrant              `json:"grants"`
+	History            map[string][]model.LinkSample `json:"history"`
+	Usage              []usageUserView               `json:"usage"`
+	Operations         []model.Operation             `json:"operations"`
+	Upgrade            controllerUpgradeView         `json:"upgrade"`
+	UpgradeTasks       []model.UpgradeTask           `json:"upgrade_tasks"`
+	Updaters           map[string]updaterView        `json:"updaters"`
+	UpgradeBatches     map[string]model.UpgradeBatch `json:"upgrade_batches"`
 }
 
 // panelState is shared by HTML and JSON, including heartbeat expiry semantics.
@@ -147,9 +168,12 @@ func (s *Server) panelState() model.State {
 
 func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 	state := s.panelState()
-	data := dashboardData{At: s.now().UTC(), Revision: state.Revision, Nodes: []dashboardNode{}, Routes: []dashboardRoute{}, Links: []dashboardLink{}, Users: []dashboardUser{}, Grants: []dashboardGrant{}, History: map[string][]model.LinkSample{}, Usage: usageViews(state, s.now()), Operations: state.Operations, Upgrade: s.controllerUpgradeStatus(), UpgradeTasks: sortedUpgradeTasks(state), Updaters: updaterViews(state, s.now()), UpgradeBatches: state.UpgradeBatches}
+	impacts := nodeImpacts(state)
+	data := dashboardData{Enrollments: enrollmentStatuses(state, s.now()), At: s.now().UTC(), Revision: state.Revision, Nodes: []dashboardNode{}, Routes: []dashboardRoute{}, Links: []dashboardLink{}, Users: []dashboardUser{}, Grants: []dashboardGrant{}, History: map[string][]model.LinkSample{}, Usage: usageViews(state, s.now()), Operations: state.Operations, Upgrade: s.controllerUpgradeStatus(), UpgradeTasks: sortedUpgradeTasks(state), Updaters: updaterViews(state, s.now()), UpgradeBatches: state.UpgradeBatches}
+	data.ManagementRevision = managementRevision(state)
+	data.LinkReports = sortedLinkReports(state)
 	for _, node := range sortedGateways(state) {
-		data.Nodes = append(data.Nodes, dashboardNode{PublicIPSupported: node.CredentialHash == "" || gatewayAutoIPSupported(state.NodeStatus[node.ID].BinaryVersion), IPv6IngressSupported: node.CredentialHash == "" || gatewayIPv6Supported(state.NodeStatus[node.ID].BinaryVersion), ID: node.ID, Name: node.Name, Role: "Gateway", VMessPort: node.VMessPort, VMessPath: node.VMessPath, HY2Port: node.HY2Port, VMessDisabled: node.VMessDisabled, HY2Disabled: node.HY2Disabled, Host: node.PublicHost, PublicHostAuto: node.PublicHostAuto, IPv6IngressEnabled: node.IPv6IngressEnabled, DetectedPublicIPv6: node.DetectedPublicIPv6, PublicIPv6Sources: node.PublicIPv6Sources, DetectedPublicIP: node.DetectedPublicIP, PublicIPSources: node.PublicIPSources, PublicIPCheckedAt: node.PublicIPCheckedAt, ObservedPublicIP: node.ObservedPublicIP, Region: node.Region, Target: node.RealityTarget, Enabled: node.Enabled, Enrolled: node.CredentialHash != "", Desired: node.DesiredVersion, Status: state.NodeStatus[node.ID], Next: nextDeploymentAction(state, node.ID, model.RoleGateway)})
+		data.Nodes = append(data.Nodes, dashboardNode{PublicIPSupported: node.CredentialHash == "" || gatewayAutoIPSupported(state.NodeStatus[node.ID].BinaryVersion), IPv6IngressSupported: node.CredentialHash == "" || gatewayIPv6Supported(state.NodeStatus[node.ID].BinaryVersion), ID: node.ID, Impact: impacts[node.ID], Name: node.Name, Role: "Gateway", VMessPort: node.VMessPort, VMessPath: node.VMessPath, HY2Port: node.HY2Port, RealityPort: node.RealityPort, PreviousRealityLinkPort: node.PreviousRealityLinkPort, VMessDisabled: node.VMessDisabled, HY2Disabled: node.HY2Disabled, Host: node.PublicHost, PublicHostAuto: node.PublicHostAuto, IPv6IngressEnabled: node.IPv6IngressEnabled, DetectedPublicIPv6: node.DetectedPublicIPv6, PublicIPv6Sources: node.PublicIPv6Sources, DetectedPublicIP: node.DetectedPublicIP, PublicIPSources: node.PublicIPSources, PublicIPCheckedAt: node.PublicIPCheckedAt, ObservedPublicIP: node.ObservedPublicIP, Region: node.Region, Target: node.RealityTarget, Enabled: node.Enabled, ConfiguredEnabled: node.Enabled, AgentEnabled: node.AgentEnabled, Enrolled: node.CredentialHash != "", Desired: node.DesiredVersion, Status: state.NodeStatus[node.ID], Next: nextDeploymentAction(state, node.ID, model.RoleGateway)})
 	}
 	for _, node := range sortedAgents(state) {
 		enabled, enrolled := agentEnabled(&state, node), node.CredentialHash != ""
@@ -157,66 +181,22 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 			gateway := state.Gateways[node.GatewayID]
 			enrolled = gateway.CredentialHash != ""
 		}
-		data.Nodes = append(data.Nodes, dashboardNode{ID: node.ID, Name: node.Name, Role: "Agent", Enabled: enabled, Enrolled: enrolled, Desired: node.DesiredVersion, Status: state.NodeStatus[node.ID], Next: nextDeploymentAction(state, node.ID, model.RoleAgent)})
+		data.Nodes = append(data.Nodes, dashboardNode{ID: node.ID, GatewayID: node.GatewayID, Impact: impacts[node.ID], Name: node.Name, Role: "Agent", Enabled: enabled, ConfiguredEnabled: node.Enabled, Enrolled: enrolled, Desired: node.DesiredVersion, Status: state.NodeStatus[node.ID], Next: nextDeploymentAction(state, node.ID, model.RoleAgent)})
 	}
 	for _, upstream := range sortedUpstreams(state) {
-		data.Nodes = append(data.Nodes, dashboardNode{ID: upstream.ID, Name: upstream.Name, Role: "External exit", Host: upstream.Endpoint.Address, Enabled: upstream.Enabled, Status: model.NodeStatus{Online: upstream.Endpoint.UUID != ""}, Next: upstream.LastError})
+		data.Nodes = append(data.Nodes, dashboardNode{ID: upstream.ID, Name: upstream.Name, Role: "External exit", Host: upstream.Endpoint.Address, Enabled: upstream.Enabled, ConfiguredEnabled: upstream.Enabled, Status: model.NodeStatus{Online: upstream.Endpoint.UUID != ""}, Next: upstream.LastError})
 	}
 	for _, route := range sortedAttachments(state) {
+		issue := routeIssue(state, route, s.now())
 		if route.UpstreamID != "" {
 			upstream := state.Upstreams[route.UpstreamID]
 			gateway := state.Gateways[route.GatewayID]
 			status := state.NodeStatus[route.GatewayID]
-			stage := "pending"
-			switch {
-			case !route.Enabled || !gateway.Enabled || !upstream.Enabled:
-				stage = "disabled"
-			case !status.Online:
-				stage = "offline"
-			case !status.ExternalUpstreams:
-				stage = "pending"
-			case upstream.Endpoint.UUID != "" && status.AppliedVersion >= gateway.DesiredVersion && status.Ready && status.XrayReady && status.XrayError == "":
-				stage = "configured"
-				if probe := currentUpstreamProbe(&state, route); probe != nil {
-					switch {
-					case probe.CompletedAt.IsZero():
-						stage = "testing"
-					case s.now().Sub(probe.CompletedAt) > upstreamProbeFreshness(status):
-						stage = "configured"
-					case probe.Successful():
-						stage = "ready"
-					default:
-						stage = "probe_failed"
-					}
-				}
-			}
-			data.Routes = append(data.Routes, dashboardRoute{ID: route.ID, GatewayID: route.GatewayID, UpstreamID: route.UpstreamID, Enabled: route.Enabled && upstream.Enabled && gateway.Enabled, AssignmentEnabled: route.Enabled, Selectable: routeAvailable(&state, route), State: stage, Probe: currentUpstreamProbe(&state, route), ProbeSupported: status.UpstreamProbes, ProbeIntervalSeconds: status.UpstreamProbeIntervalSeconds, CanProbe: status.UpstreamProbes && status.Online && route.Enabled && gateway.Enabled && upstreamAvailable(&state, route)})
+			data.Routes = append(data.Routes, dashboardRoute{DisplayName: routeDisplayName(state, route), Name: route.Name, Issue: issue, ID: route.ID, GatewayID: route.GatewayID, UpstreamID: route.UpstreamID, Enabled: route.Enabled && upstream.Enabled && gateway.Enabled, AssignmentEnabled: route.Enabled, Selectable: routeAvailable(&state, route), State: issue.State, Probe: currentUpstreamProbe(&state, route), ProbeSupported: status.UpstreamProbes, ProbeIntervalSeconds: status.UpstreamProbeIntervalSeconds, CanProbe: status.UpstreamProbes && status.Online && route.Enabled && gateway.Enabled && upstreamAvailable(&state, route)})
 			continue
 		}
 		enabled := route.Enabled && state.Gateways[route.GatewayID].Enabled && agentEnabled(&state, state.Agents[route.AgentID])
-		selectable := routeAvailable(&state, route)
-		stage := "pending"
-		if !enabled {
-			stage = "disabled"
-		} else {
-			gateway, agent := state.NodeStatus[route.GatewayID], state.NodeStatus[route.AgentID]
-			applied := gateway.AppliedVersion >= state.Gateways[route.GatewayID].DesiredVersion && agent.AppliedVersion >= state.Agents[route.AgentID].DesiredVersion && gateway.ApplyError == "" && agent.ApplyError == "" && gateway.XrayError == ""
-			if !gateway.Online || !agent.Online {
-				stage = "offline"
-			} else if applied && gateway.Ready && gateway.XrayReady && agent.Ready {
-				for _, link := range state.Links {
-					if link.AttachmentID != route.ID || !link.Enabled {
-						continue
-					}
-					gs, as := state.LinkStatus[route.GatewayID+"/"+link.ID], state.LinkStatus[route.AgentID+"/"+link.ID]
-					if gs.Online && gs.Ready && as.Online && as.Ready {
-						stage = "ready"
-						break
-					}
-				}
-			}
-		}
-		data.Routes = append(data.Routes, dashboardRoute{ID: route.ID, GatewayID: route.GatewayID, AgentID: route.AgentID, Enabled: enabled, AssignmentEnabled: route.Enabled, Selectable: selectable, State: stage})
+		data.Routes = append(data.Routes, dashboardRoute{DisplayName: routeDisplayName(state, route), Name: route.Name, Issue: issue, ID: route.ID, GatewayID: route.GatewayID, AgentID: route.AgentID, Enabled: enabled, AssignmentEnabled: route.Enabled, Selectable: routeAvailable(&state, route), State: issue.State})
 	}
 	summaries := summarizeLinks(state)
 	for _, link := range sortedLinks(state) {
@@ -229,11 +209,11 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 	}
 	counts := subscriptionCounts(state, s.now())
 	for _, user := range sortedUsers(state) {
-		data.Users = append(data.Users, dashboardUser{ID: user.ID, Name: user.Name, Enabled: user.Enabled, Publication: counts[user.ID]})
+		data.Users = append(data.Users, dashboardUser{AuditEnabled: user.AuditEnabled, AuditLimitMB: user.AuditLimitMB, Notes: user.Notes, Archived: user.Archived, ID: user.ID, Name: user.Name, Enabled: user.Enabled, Publication: counts[user.ID], SubscriptionVersion: auth.Derive(s.cfg.sessionKey(), "subscription-version", user.ID+"/"+user.SubscriptionTokenHash)})
 	}
 	grantSummaries := summarizeGrants(state)
 	for _, grant := range sortedGrants(state) {
-		data.Grants = append(data.Grants, dashboardGrant{ID: grant.ID, UserID: grant.UserID, RouteID: grant.AttachmentID, Enabled: grant.Enabled, Published: grant.Published, Status: grantSummaries[grant.ID]})
+		data.Grants = append(data.Grants, dashboardGrant{Importable: grantImportable(state, grant, s.now()), Access: grantAccess(state, grant, s.now()), ID: grant.ID, UserID: grant.UserID, RouteID: grant.AttachmentID, Enabled: grant.Enabled, Published: grant.Published, HY2Available: grantHY2Available(state, grant, s.now()), Status: grantSummaries[grant.ID]})
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, data)
