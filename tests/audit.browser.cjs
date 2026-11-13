@@ -6,14 +6,16 @@ const zlib = require("node:zlib");
 (async()=>{
   const base=process.env.XMESH_AUDIT_BROWSER_URL||"http://127.0.0.1:18093";
   const out="tmp/audit-screenshots";fs.mkdirSync(out,{recursive:true});
-  const browser=await chromium.launch({headless:true,channel:process.env.XMESH_BROWSER_CHANNEL||"msedge"});
+  const browser=await chromium.launch({headless:true,channel:process.env.XMESH_BROWSER_CHANNEL||undefined,
+    executablePath:process.env.XMESH_BROWSER_EXECUTABLE||undefined});
   try{
     const context=await browser.newContext({viewport:{width:1440,height:1050},locale:"zh-CN"});
     const page=await context.newPage();const errors=[];page.on("pageerror",e=>errors.push(e.message));
     await page.goto(base+"/login");
     await page.locator('[name="username"]').fill("admin");await page.locator('[name="password"]').fill("a-strong-test-password");
     await Promise.all([page.waitForURL(base+"/"),page.locator('button[type="submit"], button').first().click()]);
-    await page.goto(base+"/#users");await page.locator("#user-audit").waitFor({state:"visible"});
+    await page.goto(base+"/#user-audit");await page.locator("#user-audit").waitFor({state:"visible"});
+    await page.locator("#workspace-user").selectOption("");
     assert.match(await page.locator("#user-audit").innerText(),/默认关闭用户/);
     await page.goto(base+"/admin/users/other/audit");assert.equal(await page.locator('[name="enabled"]').isChecked(),false);
     let data=await (await context.request.get(base+"/admin/users/other/audit/data")).json();assert.equal(data.view.events.length,0);
